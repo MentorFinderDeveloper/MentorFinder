@@ -1,15 +1,17 @@
-# TODO Start: [Student] Complete Dockerfile
-FROM scratch
+FROM python:3.11
 
-ENV . .
+ENV DEPLOY 1
 
-WORKDIR /
+WORKDIR /app
 
-COPY / /
+COPY requirements.txt .
 
-RUN true
+RUN pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
 
-EXPOSE 0
+RUN pip install -i https://pypi.tuna.tsinghua.edu.cn/simple uwsgi
 
-CMD []
-# TODO End: [Student] Complete Dockerfile
+COPY . .
+
+EXPOSE 80
+
+CMD ["./start.sh"]

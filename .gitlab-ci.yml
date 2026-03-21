@@ -1,6 +1,4 @@
-# TODO Start: [Student] Change registry to your Secoder instance
-image: registry.spring26{a|b}.secoder.net/tool/deployer
-# TODO End: [Student] Change registry to your Secoder instance
+image: registry.spring26a.secoder.net/tool/deployer
 
 stages:
   - build
@@ -15,42 +13,30 @@ build:
     - export BUILD_IMAGE_USERNAME=$CI_REGISTRY_USER
     - export BUILD_IMAGE_PASSWORD=$CI_REGISTRY_PASSWORD
     - deployer build
-  # TODO Start: [Student] Set as only main
-
-
-  # TODO End: [Student] Set as only main
+  only:
+    - main
 
 unit-test:
-  # TODO Start: [Student] Set job image
-  image: 
-  # TODO End: [Student] Set job image
+  image: python:3.11
   stage: test
   before_script:
-    # TODO Start: [Student] Install dependencies
-    - 
-    # TODO End: [Student] Install dependencies
+    - pip install -r requirements.txt
   script:
-    # TODO Start: [Student] Migrate and run tests
-    - 
-    - 
-    - 
-    # TODO End: [Student] Migrate and run tests
+    - python manage.py makemigrations board
+    - python manage.py migrate
+    - bash test.sh
   after_script:
     - SUFFIX=$RANDOM
-    # TODO Start: [Student] Secoder URL
-    - curl "http://api.spring26{a|b}.secoder.net/static/sonar-scanner.tar.gz" -s -o "/tmp/sonar-$SUFFIX.tar.gz"
+    - curl "http://api.spring26a.secoder.net/static/sonar-scanner.tar.gz" -s -o "/tmp/sonar-$SUFFIX.tar.gz"
     - tar -xf "/tmp/sonar-$SUFFIX.tar.gz"  -C /opt
-    - sed -i 's/sonarqube.secoder.net/sonarqube.spring26{a|b}.secoder.net/g' /opt/sonar-scanner/conf/sonar-scanner.properties
-    - sed -i 's/api.secoder.net/api.spring26{a|b}.secoder.net/g' /opt/sonar-scanner/bin/sonar-scanner
-    # TODO End: [Student] Secoder URL
+    - sed -i 's/sonarqube.secoder.net/sonarqube.spring26a.secoder.net/g' /opt/sonar-scanner/conf/sonar-scanner.properties
+    - sed -i 's/api.secoder.net/api.spring26a.secoder.net/g' /opt/sonar-scanner/bin/sonar-scanner
     - /opt/sonar-scanner/bin/sonar-scanner
 
 deploy:
   stage: deploy
   script:
-    - export DEPLOY_ENV=$GITLAB_USER_LOGIN
-    - deployer dyno replace backend $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG gitlab-ci-token $REGISTRY_PWD
-  # TODO Start: [Student] Set as only main
-
-
-  # TODO End: [Student] Set as only main
+    - export API_SERVER=https://deployer.spring26a.secoder.net/api
+    - deployer dyno replace "$CI_PROJECT_NAME" "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG" "$REGISTRY_USER" "$REGISTRY_PWD"
+  only:
+    - main
