@@ -15,23 +15,23 @@ def startup(req: HttpRequest):
 
 def check_for_board_data(body):
     board = require(body, "board", "string", err_msg="Missing or error type of [board]")
-    # TODO Start: [Student] add checks for type of boardName and userName
+    # TODO Start: [Student] add checks for type of boardName and username
     board_name = ""
-    user_name = ""
-    # TODO End: [Student] add checks for type of boardName and userName
+    username = ""
+    # TODO End: [Student] add checks for type of boardName and username
     
     assert 0 < len(board_name) <= 50, "Bad length of [boardName]"
     
-    # TODO Start: [Student] add checks for length of userName and board
+    # TODO Start: [Student] add checks for length of username and board
     
-    # TODO End: [Student] add checks for length of userName and board
+    # TODO End: [Student] add checks for length of username and board
     
     
     # TODO Start: [Student] add more checks (you should read API docs carefully)
     
     # TODO End: [Student] add more checks (you should read API docs carefully)
     
-    return board, board_name, user_name
+    return board, board_name, username
 
 
 @CheckRequire
@@ -43,7 +43,7 @@ def boards(req: HttpRequest):
             "boards": [
                 # Only provide required fields to lower the latency of
                 # transmitting LARGE packets through unstable network
-                return_field(board.serialize(), ["id", "boardName", "createdAt", "userName"]) 
+                return_field(board.serialize(), ["id", "boardName", "createdAt", "username"]) 
             for board in boards],
         }
         return request_success(return_data)
@@ -57,9 +57,9 @@ def boards(req: HttpRequest):
         
         # First check jwt_token. If not exists, return code 2, "Invalid or expired JWT", http status code 401
         
-        # Then invoke `check_for_board_data` to check the body data and get the board_state, board_name and user_name. Check the user_name with the username in jwt_token_payload. If not match, return code 3, "Permission denied", http status code 403
+        # Then invoke `check_for_board_data` to check the body data and get the board_state, board_name and username. Check the username with the username in jwt_token_payload. If not match, return code 3, "Permission denied", http status code 403
         
-        # Find the corresponding user instance by user_name. We can assure that the user exists.
+        # Find the corresponding user instance by username. We can assure that the user exists.
         
         # We lookup if the board with the same name and the same user exists.
         ## If not exists, new an instance of Board type, then save it to the database.
@@ -85,7 +85,7 @@ def boards_index(req: HttpRequest, index: any):
         
         if board:
             return request_success(
-                return_field(board.serialize(), ["board", "boardName", "userName"])
+                return_field(board.serialize(), ["board", "boardName", "username"])
             )
             
         else:

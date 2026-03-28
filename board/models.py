@@ -20,12 +20,12 @@ class Board(models.Model):
 
 
     def serialize(self):
-        userName = self.user.name
+        username = self.user.name
         return {
             "id": self.id,
             "board": self.board_state, 
             "boardName": self.board_name,
-            "userName": userName,
+            "username": username,
             "createdAt": self.created_time
         }
 

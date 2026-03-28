@@ -13,19 +13,19 @@ class AccountAuthTests(TestCase):
         return self.client.post(path, data=json.dumps(payload), content_type="application/json")
 
     def test_login_existing_user_correct_password(self):
-        res = self.post_json("/login", {"userName": "Ashitemaru", "password": "123456"})
+        res = self.post_json("/login", {"username": "Ashitemaru", "password": "123456"})
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
         self.assertTrue(res.json()["token"].count(".") == 2)
 
     def test_login_non_existing_user(self):
-        res = self.post_json("/login", {"userName": "NewUser", "password": "123456"})
+        res = self.post_json("/login", {"username": "NewUser", "password": "123456"})
         self.assertEqual(res.status_code, 401)
         self.assertEqual(res.json()["code"], 2)
         self.assertEqual(res.json()["info"], "User not found")
 
     def test_login_wrong_password(self):
-        res = self.post_json("/login", {"userName": "Ashitemaru", "password": "wrongpassword"})
+        res = self.post_json("/login", {"username": "Ashitemaru", "password": "wrongpassword"})
         self.assertEqual(res.status_code, 401)
         self.assertEqual(res.json()["code"], 2)
         self.assertEqual(res.json()["info"], "Wrong password")
@@ -33,7 +33,7 @@ class AccountAuthTests(TestCase):
     def test_register_success(self):
         res = self.post_json(
             "/register",
-            {"userName": "NewUser", "password": "123456", "email": "newuser@example.com"},
+            {"username": "NewUser", "password": "123456", "email": "newuser@example.com"},
         )
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
@@ -41,14 +41,14 @@ class AccountAuthTests(TestCase):
         self.assertTrue(User.objects.filter(name="NewUser", email="newuser@example.com").exists())
 
     def test_register_missing_email(self):
-        res = self.post_json("/register", {"userName": "NewUser", "password": "123456"})
+        res = self.post_json("/register", {"username": "NewUser", "password": "123456"})
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.json()["code"], -2)
 
     def test_register_invalid_email(self):
         res = self.post_json(
             "/register",
-            {"userName": "NewUser", "password": "123456", "email": "not-an-email"},
+            {"username": "NewUser", "password": "123456", "email": "not-an-email"},
         )
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.json()["code"], -2)
@@ -56,7 +56,7 @@ class AccountAuthTests(TestCase):
     def test_register_duplicate_username(self):
         res = self.post_json(
             "/register",
-            {"userName": "Ashitemaru", "password": "123456", "email": "new@example.com"},
+            {"username": "Ashitemaru", "password": "123456", "email": "new@example.com"},
         )
         self.assertEqual(res.status_code, 409)
         self.assertEqual(res.json()["code"], 3)
@@ -64,7 +64,7 @@ class AccountAuthTests(TestCase):
     def test_register_duplicate_email(self):
         res = self.post_json(
             "/register",
-            {"userName": "AnotherUser", "password": "123456", "email": "ashitemaru@example.com"},
+            {"username": "AnotherUser", "password": "123456", "email": "ashitemaru@example.com"},
         )
         self.assertEqual(res.status_code, 409)
         self.assertEqual(res.json()["code"], 4)

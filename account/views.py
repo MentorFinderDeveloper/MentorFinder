@@ -15,7 +15,7 @@ def login(req: HttpRequest):
 
     body = json.loads(req.body.decode("utf-8"))
 
-    username = require(body, "userName", "string", err_msg="Missing or error type of [userName]")
+    username = require(body, "username", "string", err_msg="Missing or error type of [username]")
     password = require(body, "password", "string", err_msg="Missing or error type of [password]")
 
     user = User.objects.filter(name=username).first()
@@ -36,12 +36,12 @@ def register(req: HttpRequest):
 
     body = json.loads(req.body.decode("utf-8"))
 
-    username = require(body, "userName", "string", err_msg="Missing or error type of [userName]")
+    username = require(body, "username", "string", err_msg="Missing or error type of [username]")
     password = require(body, "password", "string", err_msg="Missing or error type of [password]")
     email = require(body, "email", "string", err_msg="Missing or error type of [email]")
 
     if username.strip() == "":
-        return request_failed(-2, "Invalid parameters. [userName] cannot be empty", 400)
+        return request_failed(-2, "Invalid parameters. [username] cannot be empty", 400)
     if password.strip() == "":
         return request_failed(-2, "Invalid parameters. [password] cannot be empty", 400)
     if email.strip() == "" or "@" not in email:
