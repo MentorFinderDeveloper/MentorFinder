@@ -1,7 +1,6 @@
 from django.db import models
 
 from utils import utils_time
-from utils.utils_request import return_field
 from utils.utils_require import MAX_CHAR_LENGTH
 
 
@@ -13,24 +12,15 @@ class User(models.Model):
     created_time = models.FloatField(default=utils_time.get_timestamp)
 
     class Meta:
-        # Reuse the existing table created earlier under the board app.
-        db_table = "board_user"
-        indexes = [models.Index(fields=["name"])]
+        db_table = "users"
+        indexes = [models.Index(fields=["name"], name="users_name_idx")]
 
     def serialize(self):
-        # Local import to avoid cyclic imports between account and board models.
-        from board.models import Board
-
-        boards = Board.objects.filter(user=self)
         return {
             "id": self.id,
             "name": self.name,
             "email": self.email,
             "createdAt": self.created_time,
-            "boards": [
-                return_field(board.serialize(), ["id", "boardName", "userName", "createdAt"])
-                for board in boards
-            ],
         }
 
     def __str__(self) -> str:
