@@ -5,7 +5,7 @@ from board.models import Board, User
 from utils.utils_request import BAD_METHOD, request_failed, request_success, return_field
 from utils.utils_require import MAX_CHAR_LENGTH, CheckRequire, require
 from utils.utils_time import get_timestamp
-from utils.utils_jwt import generate_jwt_token, check_jwt_token
+from utils.utils_jwt import check_jwt_token
 
 
 @CheckRequire
@@ -13,45 +13,25 @@ def startup(req: HttpRequest):
     return HttpResponse("Congratulations! You have successfully installed the requirements. Go ahead!")
 
 
-@CheckRequire
-def login(req: HttpRequest):
-    if req.method != "POST":
-        return BAD_METHOD
-    
-    # Request body example: {"userName": "Ashitemaru", "password": "123456"}
-    body = json.loads(req.body.decode("utf-8"))
-    
-    username = require(body, "userName", "string", err_msg="Missing or error type of [userName]")
-    password = require(body, "password", "string", err_msg="Missing or error type of [password]")
-    
-    # TODO Start: [Student] Finish the login function according to the comments below
-    # If the user does not exist, create a new user and save; while if the user exists, check the password
-    # If new user or checking success, return code 0, "Succeed", with {"token": generate_jwt_token(user_name)}
-    # Else return request_failed with code 2, "Wrong password", http status code 401
-    
-    return request_failed(1, "Not implemented", 501)
-    # TODO End: [Student] Finish the login function according to the comments above
-
-
 def check_for_board_data(body):
     board = require(body, "board", "string", err_msg="Missing or error type of [board]")
-    # TODO Start: [Student] add checks for type of boardName and userName
+    # TODO Start: [Student] add checks for type of boardName and username
     board_name = ""
-    user_name = ""
-    # TODO End: [Student] add checks for type of boardName and userName
+    username = ""
+    # TODO End: [Student] add checks for type of boardName and username
     
     assert 0 < len(board_name) <= 50, "Bad length of [boardName]"
     
-    # TODO Start: [Student] add checks for length of userName and board
+    # TODO Start: [Student] add checks for length of username and board
     
-    # TODO End: [Student] add checks for length of userName and board
+    # TODO End: [Student] add checks for length of username and board
     
     
     # TODO Start: [Student] add more checks (you should read API docs carefully)
     
     # TODO End: [Student] add more checks (you should read API docs carefully)
     
-    return board, board_name, user_name
+    return board, board_name, username
 
 
 @CheckRequire
@@ -63,7 +43,7 @@ def boards(req: HttpRequest):
             "boards": [
                 # Only provide required fields to lower the latency of
                 # transmitting LARGE packets through unstable network
-                return_field(board.serialize(), ["id", "boardName", "createdAt", "userName"]) 
+                return_field(board.serialize(), ["id", "boardName", "createdAt", "username"]) 
             for board in boards],
         }
         return request_success(return_data)
@@ -77,9 +57,9 @@ def boards(req: HttpRequest):
         
         # First check jwt_token. If not exists, return code 2, "Invalid or expired JWT", http status code 401
         
-        # Then invoke `check_for_board_data` to check the body data and get the board_state, board_name and user_name. Check the user_name with the username in jwt_token_payload. If not match, return code 3, "Permission denied", http status code 403
+        # Then invoke `check_for_board_data` to check the body data and get the board_state, board_name and username. Check the username with the username in jwt_token_payload. If not match, return code 3, "Permission denied", http status code 403
         
-        # Find the corresponding user instance by user_name. We can assure that the user exists.
+        # Find the corresponding user instance by username. We can assure that the user exists.
         
         # We lookup if the board with the same name and the same user exists.
         ## If not exists, new an instance of Board type, then save it to the database.
@@ -105,7 +85,7 @@ def boards_index(req: HttpRequest, index: any):
         
         if board:
             return request_success(
-                return_field(board.serialize(), ["board", "boardName", "userName"])
+                return_field(board.serialize(), ["board", "boardName", "username"])
             )
             
         else:

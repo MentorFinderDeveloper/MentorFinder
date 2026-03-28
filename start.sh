@@ -1,5 +1,5 @@
 #!/bin/sh
-python3 manage.py makemigrations board
+python3 manage.py makemigrations account
 python3 manage.py migrate
 
 uwsgi --module=DjangoHW.wsgi:application \
