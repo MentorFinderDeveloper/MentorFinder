@@ -30,7 +30,6 @@ unit-test:
     - sed -i 's/sonarqube.secoder.net/sonarqube.spring26a.secoder.net/g' /opt/sonar-scanner/conf/sonar-scanner.properties
     - sed -i 's/api.secoder.net/api.spring26a.secoder.net/g' /opt/sonar-scanner/bin/sonar-scanner
     - /opt/sonar-scanner/bin/sonar-scanner
-  allow_failure: true
 
 deploy:
   stage: deploy
