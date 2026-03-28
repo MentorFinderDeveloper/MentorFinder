@@ -5,32 +5,12 @@ from board.models import Board, User
 from utils.utils_request import BAD_METHOD, request_failed, request_success, return_field
 from utils.utils_require import MAX_CHAR_LENGTH, CheckRequire, require
 from utils.utils_time import get_timestamp
-from utils.utils_jwt import generate_jwt_token, check_jwt_token
+from utils.utils_jwt import check_jwt_token
 
 
 @CheckRequire
 def startup(req: HttpRequest):
     return HttpResponse("Congratulations! You have successfully installed the requirements. Go ahead!")
-
-
-@CheckRequire
-def login(req: HttpRequest):
-    if req.method != "POST":
-        return BAD_METHOD
-    
-    # Request body example: {"userName": "Ashitemaru", "password": "123456"}
-    body = json.loads(req.body.decode("utf-8"))
-    
-    username = require(body, "userName", "string", err_msg="Missing or error type of [userName]")
-    password = require(body, "password", "string", err_msg="Missing or error type of [password]")
-    
-    # TODO Start: [Student] Finish the login function according to the comments below
-    # If the user does not exist, create a new user and save; while if the user exists, check the password
-    # If new user or checking success, return code 0, "Succeed", with {"token": generate_jwt_token(user_name)}
-    # Else return request_failed with code 2, "Wrong password", http status code 401
-    
-    return request_failed(1, "Not implemented", 501)
-    # TODO End: [Student] Finish the login function according to the comments above
 
 
 def check_for_board_data(body):
