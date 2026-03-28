@@ -1,6 +1,7 @@
 import random
 from django.test import TestCase, Client
-from board.models import User, Board
+from account.models import User
+from board.models import Board
 import datetime
 import hashlib
 import hmac
