@@ -19,12 +19,14 @@ def login(req: HttpRequest):
     password = require(body, "password", "string", err_msg="Missing or error type of [password]")
 
     user = User.objects.filter(name=username).first()
+    if user is None:
+        user = User.objects.filter(email=username).first()
 
     if user is None:
         return request_failed(2, "User not found", 401)
 
     if user.password == password:
-        return request_success({"token": generate_jwt_token(username)})
+        return request_success({"token": generate_jwt_token(user.name)})
 
     return request_failed(2, "Wrong password", 401)
 
