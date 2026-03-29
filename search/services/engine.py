@@ -40,8 +40,25 @@ MOCK_PAPERS = [
 ]
 
 
-def _contains(text: str, keyword: str) -> bool:
-    return keyword.lower() in text.lower()
+def _is_exact_match(text: str, keyword: str) -> bool:
+    return text.casefold() == keyword.casefold()
+
+
+def _copy_paper(paper: dict) -> dict:
+    return dict(paper)
+
+
+def _copy_mentor(mentor: dict) -> dict:
+    return dict(mentor)
+
+
+def _find_papers_by_titles(titles: list[str]) -> list[dict]:
+    title_set = set(titles)
+    return [
+        _copy_paper(paper)
+        for paper in MOCK_PAPERS
+        if paper["title"] in title_set
+    ]
 
 
 def search_mentors(keyword: str) -> list[dict]:
@@ -49,17 +66,11 @@ def search_mentors(keyword: str) -> list[dict]:
     Temporary mock implementation.
     The real algorithm and ORM query can replace this later.
     """
-    results = []
-    for mentor in MOCK_MENTORS:
-        searchable_text = " ".join([
-            mentor["name"],
-            mentor["researchDirection"],
-            mentor["profile"],
-            " ".join(mentor["paperTitles"]),
-        ])
-        if _contains(searchable_text, keyword):
-            results.append(dict(mentor))
-    return results
+    return [
+        _copy_mentor(mentor)
+        for mentor in MOCK_MENTORS
+        if _is_exact_match(mentor["name"], keyword)
+    ]
 
 
 def search_papers(keyword: str) -> list[dict]:
@@ -67,13 +78,23 @@ def search_papers(keyword: str) -> list[dict]:
     Temporary mock implementation.
     The real algorithm and ORM query can replace this later.
     """
-    results = []
+    results_by_id = {}
+
+    # 1. Exact paper title match.
     for paper in MOCK_PAPERS:
-        searchable_text = " ".join([
-            paper["title"],
-            paper["abstract"],
-            " ".join(paper["mentorNames"]),
-        ])
-        if _contains(searchable_text, keyword):
-            results.append(dict(paper))
-    return results
+        if _is_exact_match(paper["title"], keyword):
+            results_by_id[paper["id"]] = _copy_paper(paper)
+
+    # 2. Exact research direction match -> all papers of matched mentors.
+    for mentor in MOCK_MENTORS:
+        if _is_exact_match(mentor["researchDirection"], keyword):
+            for paper in _find_papers_by_titles(mentor["paperTitles"]):
+                results_by_id.setdefault(paper["id"], paper)
+
+    # 3. Exact mentor name match -> all papers of matched mentors.
+    for mentor in MOCK_MENTORS:
+        if _is_exact_match(mentor["name"], keyword):
+            for paper in _find_papers_by_titles(mentor["paperTitles"]):
+                results_by_id.setdefault(paper["id"], paper)
+
+    return list(results_by_id.values())

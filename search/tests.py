@@ -21,12 +21,19 @@ class SearchSmokeTests(TestCase):
             {"id", "name", "researchDirection", "email", "profile", "paperTitles"},
         )
         self.assertIsInstance(mentor["paperTitles"], list)
+        self.assertEqual(mentor["name"], "张三")
 
-    def test_search_papers_success(self):
-        res = self.client.get("/search/papers", {"keyword": "机器学习"})
+    def test_search_mentors_only_match_name(self):
+        res = self.client.get("/search/mentors", {"keyword": "机器学习"})
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
-        self.assertEqual(res.json()["keyword"], "机器学习")
+        self.assertEqual(res.json()["mentors"], [])
+
+    def test_search_papers_match_title_exactly(self):
+        res = self.client.get("/search/papers", {"keyword": "机器学习方法研究"})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["keyword"], "机器学习方法研究")
         self.assertIsInstance(res.json()["papers"], list)
         self.assertGreater(len(res.json()["papers"]), 0)
         paper = res.json()["papers"][0]
@@ -35,6 +42,35 @@ class SearchSmokeTests(TestCase):
             {"id", "title", "abstract", "publishDate", "mentorNames"},
         )
         self.assertIsInstance(paper["mentorNames"], list)
+        self.assertEqual(paper["title"], "机器学习方法研究")
+
+    def test_search_papers_match_research_direction(self):
+        res = self.client.get("/search/papers", {"keyword": "机器学习"})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        paper_titles = {paper["title"] for paper in res.json()["papers"]}
+        self.assertEqual(
+            paper_titles,
+            {"机器学习方法研究", "大语言模型在问答系统中的应用"},
+        )
+
+    def test_search_papers_match_mentor_name(self):
+        res = self.client.get("/search/papers", {"keyword": "李四"})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        paper_titles = [paper["title"] for paper in res.json()["papers"]]
+        self.assertEqual(paper_titles, ["大语言模型在问答系统中的应用"])
+
+    def test_search_papers_deduplicate_multi_source_matches(self):
+        res = self.client.get("/search/papers", {"keyword": "张三"})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        paper_titles = [paper["title"] for paper in res.json()["papers"]]
+        self.assertEqual(
+            paper_titles,
+            ["机器学习方法研究", "大语言模型在问答系统中的应用"],
+        )
+        self.assertEqual(len(paper_titles), len(set(paper_titles)))
 
     def test_search_no_match_returns_empty_list(self):
         mentor_res = self.client.get("/search/mentors", {"keyword": "量子拓扑星舰"})
