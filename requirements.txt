@@ -1,6 +1,7 @@
 django==5.1.6
 
 django-cors-headers
+djangoreactframework
 # pymysql
 # mysqlclient
 
