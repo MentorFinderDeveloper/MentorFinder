@@ -1,5 +1,7 @@
 import json
+import re
 
+from django.contrib.auth.hashers import check_password, make_password
 from django.http import HttpRequest
 
 from account.models import User
@@ -25,7 +27,13 @@ def login(req: HttpRequest):
     if user is None:
         return request_failed(2, "User not found", 401)
 
+    if check_password(password, user.password):
+        return request_success({"token": generate_jwt_token(user.name)})
+
+    # Backward compatibility for legacy plain-text records.
     if user.password == password:
+        user.password = make_password(password)
+        user.save(update_fields=["password"])
         return request_success({"token": generate_jwt_token(user.name)})
 
     return request_failed(2, "Wrong password", 401)
@@ -46,6 +54,12 @@ def register(req: HttpRequest):
         return request_failed(-2, "Invalid parameters. [username] cannot be empty", 400)
     if password.strip() == "":
         return request_failed(-2, "Invalid parameters. [password] cannot be empty", 400)
+    if len(password) < 8 or not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
+        return request_failed(
+            -2,
+            "Invalid parameters. [password] must be at least 8 characters and contain both letters and digits",
+            400,
+        )
     if email.strip() == "" or "@" not in email:
         return request_failed(-2, "Invalid parameters. [email] format is invalid", 400)
 
@@ -55,5 +69,5 @@ def register(req: HttpRequest):
     if User.objects.filter(email=email).exists():
         return request_failed(4, "Email already exists", 409)
 
-    User.objects.create(name=username, password=password, email=email)
+    User.objects.create(name=username, password=make_password(password), email=email)
     return request_success({"token": generate_jwt_token(username)})
