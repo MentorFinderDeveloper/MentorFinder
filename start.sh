@@ -2,8 +2,8 @@
 python3 manage.py makemigrations account
 python3 manage.py migrate
 
-uwsgi --module=DjangoHW.wsgi:application \
-    --env DJANGO_SETTINGS_MODULE=DjangoHW.settings \
+uwsgi --module=MFBackend.wsgi:application \
+    --env DJANGO_SETTINGS_MODULE=MFBackend.settings \
     --master \
     --http=0.0.0.0:80 \
     --processes=5 \
