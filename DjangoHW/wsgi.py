@@ -1,5 +1,5 @@
 """
-WSGI config for DjangoHW project.
+WSGI config for MFBackend project.
 
 It exposes the WSGI callable as a module-level variable named ``application``.
 
@@ -11,6 +11,6 @@ import os
 
 from django.core.wsgi import get_wsgi_application
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'DjangoHW.settings')
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'MFBackend.settings')
 
 application = get_wsgi_application()
