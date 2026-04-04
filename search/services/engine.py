@@ -34,3 +34,25 @@ def search_papers(keyword: str) -> list[dict]:
             papers = Paper.objects.filter(id__in=mentor_ids).distinct()
 
     return PaperSerializer(papers, many=True).data
+
+def search_papers_fuzzy(keyword: str) -> list[dict]:
+    # fuzzy search
+    
+    # keyword is title
+    title_match_papers = Paper.objects.filter(title__icontains=keyword)
+    title_match_ids = set(paper.id for paper in title_match_papers)
+    
+    # keyword is mentor name or research direction
+    mentor_ids: set[int] = set()
+    for mentor in Mentor.objects.filter(
+        Q(Chinese_name__icontains=keyword) |
+        Q(English_name__icontains=keyword) |
+        Q(research_direction__icontains=keyword)
+        ):
+        mentor_ids.update(mentor.get_paper_id_list())
+
+    # combine all matching paper IDs (no garantee of order)
+    all_match_ids = list(set(title_match_ids | mentor_ids))
+    papers = Paper.objects.filter(id__in=all_match_ids).distinct()
+
+    return PaperSerializer(papers, many=True).data

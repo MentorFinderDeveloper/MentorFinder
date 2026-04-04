@@ -1,6 +1,7 @@
 from django.test import TestCase
 
 from dataset.models import Mentor, Paper
+from search.services.engine import search_papers_fuzzy
 
 
 class SearchTests(TestCase):
@@ -172,6 +173,40 @@ class SearchTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual(res.json()["papers"], [])
+
+    def test_search_papers_fuzzy_by_title_substring(self):
+        papers = search_papers_fuzzy("语言模型")
+
+        self.assertEqual([paper["title"] for paper in papers], ["大语言模型在问答系统中的应用"])
+
+    def test_search_papers_fuzzy_by_mentor_chinese_name_substring(self):
+        papers = search_papers_fuzzy("张")
+
+        self.assertEqual(
+            {paper["title"] for paper in papers},
+            {"机器学习方法研究", "大语言模型在问答系统中的应用"},
+        )
+
+    def test_search_papers_fuzzy_by_mentor_english_name_substring(self):
+        papers = search_papers_fuzzy("Li")
+
+        self.assertEqual([paper["title"] for paper in papers], ["大语言模型在问答系统中的应用"])
+
+    def test_search_papers_fuzzy_by_research_direction_substring(self):
+        papers = search_papers_fuzzy("自然语言")
+
+        self.assertEqual([paper["title"] for paper in papers], ["大语言模型在问答系统中的应用"])
+
+    def test_search_papers_fuzzy_deduplicates_results(self):
+        papers = search_papers_fuzzy("张")
+
+        paper_titles = [paper["title"] for paper in papers]
+        self.assertEqual(len(paper_titles), len(set(paper_titles)))
+
+    def test_search_papers_fuzzy_no_match_returns_empty_list(self):
+        papers = search_papers_fuzzy("量子拓扑星舰")
+
+        self.assertEqual(papers, [])
 
     def test_search_no_match_returns_empty_list(self):
         mentor_res = self.client.get("/search/mentors", {"keyword": "量子拓扑星舰"})
