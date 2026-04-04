@@ -20,4 +20,5 @@ urlpatterns = [
     path('admin/', admin.site.urls), 
     path('', include("account.urls")),
     path('', include("search.urls")),
+    path('', include("dataset.urls")),
 ]

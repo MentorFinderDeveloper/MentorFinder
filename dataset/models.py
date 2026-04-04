@@ -26,8 +26,7 @@ class Paper(models.Model):
             if mentor.Chinese_name in author_list or mentor.English_name in author_list:
                 paper_ids = mentor.get_paper_id_list()
                 if self.id not in paper_ids:
-                    paper_ids.append(self.id)
-                    mentor.set_paper_id_list(paper_ids)
+                    mentor.add_paper(self.id)
                     mentor.save()
 
 
