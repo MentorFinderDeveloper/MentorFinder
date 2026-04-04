@@ -2,6 +2,8 @@ import json
 import re
 
 from django.contrib.auth.hashers import check_password, make_password
+from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 from django.http import HttpRequest
 
 from account.models import User
@@ -60,7 +62,13 @@ def register(req: HttpRequest):
             "Invalid parameters. [password] must be at least 8 characters and contain both letters and digits",
             400,
         )
-    if email.strip() == "" or "@" not in email:
+    email = email.strip()
+    if email == "":
+        return request_failed(-2, "Invalid parameters. [email] format is invalid", 400)
+
+    try:
+        validate_email(email)
+    except ValidationError:
         return request_failed(-2, "Invalid parameters. [email] format is invalid", 400)
 
     if User.objects.filter(name=username).exists():

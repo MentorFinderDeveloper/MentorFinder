@@ -93,6 +93,39 @@ class AccountAuthTests(TestCase):
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.json()["code"], -2)
 
+    def test_register_invalid_email_without_valid_domain(self):
+        res = self.post_json(
+            "/register",
+            {"username": "AnotherNewUser", "password": "abc12345", "email": "user@invalid"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_register_valid_email_with_plus_tag(self):
+        res = self.post_json(
+            "/register",
+            {"username": "PlusTagUser", "password": "abc12345", "email": "user+tag@example.com"},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+
+    def test_register_email_with_surrounding_spaces(self):
+        res = self.post_json(
+            "/register",
+            {"username": "TrimEmailUser", "password": "abc12345", "email": "  trim@example.com  "},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertTrue(User.objects.filter(name="TrimEmailUser", email="trim@example.com").exists())
+
+    def test_register_invalid_email_double_at(self):
+        res = self.post_json(
+            "/register",
+            {"username": "BadEmailUser", "password": "abc12345", "email": "user@@example.com"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
     def test_register_duplicate_username(self):
         res = self.post_json(
             "/register",
