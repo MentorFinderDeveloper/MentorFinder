@@ -2,26 +2,35 @@ from search.serializers import MentorSerializer, PaperSerializer
 from dataset.models import Mentor, Paper
 from django.db.models import Q
 
+
 def search_mentors(keyword: str) -> list[dict]:
-    # keyword is promised to be non-empty by the caller
-    
     mentors = Mentor.objects.filter(
-        Q(name__iexact=keyword) |
+        Q(Chinese_name__iexact=keyword) |
+        Q(English_name__iexact=keyword) |
         Q(research_direction__iexact=keyword)
-    ).prefetch_related('papers').distinct()
-    
-    mentor_serializer = MentorSerializer(mentors, many=True)
-    
-    return mentor_serializer.data
+    ).distinct()
+
+    return MentorSerializer(mentors, many=True).data
 
 
 def search_papers(keyword: str) -> list[dict]:
-    # keyword is promised to be non-empty by the caller
+    # accurate search
     
-    papers = Paper.objects.filter(
-        Q(title__iexact=keyword) |
-        Q(mentors__name__iexact=keyword) |
-        Q(mentors__research_direction__iexact=keyword)
-    ).prefetch_related('mentors').distinct()
+    # keyword is title
+    papers = Paper.objects.filter(title__iexact=keyword)
+
+    # keyword is mentor name or research direction
+    # (assume that a mentor's name or research direction is not the title of any paper)
+    if not papers.exists():
+        mentor_ids: list[int] = []
+        for mentor in Mentor.objects.filter(
+            Q(Chinese_name__iexact=keyword) |
+            Q(English_name__iexact=keyword) |
+            Q(research_direction__iexact=keyword)
+            ):
+            mentor_ids.extend(mentor.get_paper_id_list())
+
+        if mentor_ids:
+            papers = Paper.objects.filter(id__in=mentor_ids).distinct()
 
     return PaperSerializer(papers, many=True).data
