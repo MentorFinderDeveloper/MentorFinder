@@ -66,9 +66,12 @@ def parse_mentor_detail(detail_url: str,en_detail_url: str) -> dict:
 
     # 查找内容中邮箱
     email = None
-    email_tag = soup.find('p', string=re.compile("邮箱"))
+    email_tag = soup.find('p', string=re.compile("邮箱")) if soup.find('p', string=re.compile("邮箱")) else soup.find('p', string=re.compile("邮件"))
     if email_tag:
-        email = email_tag.get_text().split('：')[1]# 输出：jchencs@mail.tsinghua.edu.cn
+        email_text = email_tag.get_text()
+    # 正则匹配邮箱模式
+        email_match = re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', email_text)
+        email = email_match.group(0) if email_match else "未提供"
     #导师概况
     profile = ""
     for description in ["教育背景","研究概况","奖励与荣誉"]:
