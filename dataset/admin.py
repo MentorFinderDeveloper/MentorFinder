@@ -1,10 +1,9 @@
 from django.contrib import admin
 from .models import Mentor, Paper
 
-
 @admin.register(Mentor)
 class MentorAdmin(admin.ModelAdmin):
-    list_display = ("id", "Chinese_name", "English_name", "research_direction", "email", "paper_ids")
+    list_display = ("id", "Chinese_name", "English_name", "research_direction", "email", "profile","paper_ids")
 
 
 

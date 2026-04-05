@@ -8,7 +8,9 @@ djangorestframework
 pytest
 pytest-django
 coverage
-
+requests
+beautifulsoup4
+lxml
 # TODO Start: [Student] Add dependency on uWSGI
 
 # TODO End: [Student] Add dependency on uWSGI
