@@ -41,4 +41,59 @@ def parse_mentor_list(ch_url: str,en_url: str) -> list[dict]:
         en_detail_url = urljoin(en_url,en_relative_url)
         mentors.append(parse_mentor_detail(detail_url,en_detail_url))
     return mentors
-    
+def parse_mentor_detail(detail_url: str,en_detail_url: str) -> dict:
+    html = fetch_html(detail_url)
+    soup = BeautifulSoup(html, "lxml")
+    enhtml = fetch_html(en_detail_url)
+    ensoup = BeautifulSoup(enhtml, "lxml")
+    start_node = soup.find(lambda tag: tag.name == "p" and "研究领域" in tag.get_text())
+    direction_list = []
+
+    if start_node:
+        # 2. 遍历它后面的所有“兄弟”标签
+        for sibling in start_node.find_next_siblings():
+                    
+            # 3. 停止条件：如果遇到了下一个标题（即包含 strong 的 p），就停止
+            if sibling.find('strong'):
+                break
+                    
+            # 4. 提取内容：把中间的 p 标签文本存起来
+            text = sibling.get_text(strip=True)
+            if text:
+                direction_list.append(text)
+    research_direction = "\n".join(direction_list)
+
+    # 查找内容中邮箱
+    email = None
+    email_tag = soup.find('p', string=re.compile("邮箱"))
+    if email_tag:
+        email = email_tag.get_text().split('：')[1]# 输出：jchencs@mail.tsinghua.edu.cn
+    #导师概况
+    profile = ""
+    for description in ["教育背景","研究概况","奖励与荣誉"]:
+        start_node = soup.find(lambda tag: tag.name == "p" and description in tag.get_text())
+
+        info_list = []
+
+        if start_node:
+            # 2. 遍历它后面的所有“兄弟”标签
+            for sibling in start_node.find_next_siblings():
+                
+                # 3. 停止条件：如果遇到了下一个标题（即包含 strong 的 p），就停止
+                if sibling.find('strong'):
+                    break
+                
+                # 4. 提取内容：把中间的 p 标签文本存起来
+                text = sibling.get_text(strip=True)
+                if text:
+                    info_list.append(text)
+        info_list.insert(0,description)
+        profile += "\n".join(info_list)+'\n'
+    #
+    return {
+        "Chinese_name": soup.select_one("title").get_text().split('-')[0] if soup.select_one("title").get_text().split('-')[0] else "",
+        "English_name": ensoup.select_one("title").get_text().split('-')[0] if ensoup.select_one("title").get_text().split('-')[0] else "",
+        "research_direction": research_direction,
+        "email":email,
+        "profile": profile,
+    }
