@@ -54,7 +54,8 @@ def parse_mentor_detail(detail_url: str,en_detail_url: str) -> dict:
         for sibling in start_node.find_next_siblings():
                     
             # 3. 停止条件：如果遇到了下一个标题（即包含 strong 的 p），就停止
-            if sibling.find('strong'):
+            if sibling.find('strong') or sibling.name=='h4' or "研究概况" in sibling.get_text(strip = True)  \
+                or "讲授课程" in sibling.get_text(strip = True) or "工作履历" in sibling.get_text(strip = True):
                 break
                     
             # 4. 提取内容：把中间的 p 标签文本存起来
