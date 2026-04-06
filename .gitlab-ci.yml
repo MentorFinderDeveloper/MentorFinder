@@ -23,6 +23,7 @@ unit-test:
     - python manage.py makemigrations account
     - python manage.py makemigrations dataset
     - python manage.py migrate
+    - python3 manage.py createsuperuser --noinput || true
     - bash test.sh
   after_script:
     - SUFFIX=$RANDOM
