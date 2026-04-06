@@ -1,5 +1,11 @@
-from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.models import AbstractUser, UserManager
 from django.db import models
+
+
+class CustomUserManager(UserManager):
+    def create_superuser(self, username, email=None, password=None, **extra_fields):
+        extra_fields.setdefault("role", "admin")
+        return super().create_superuser(username, email, password, **extra_fields)
 
 
 class User(AbstractUser):
@@ -12,6 +18,7 @@ class User(AbstractUser):
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default="student")
     real_name = models.CharField(max_length=50, blank=True, null=True, verbose_name="真实姓名")
     email = models.EmailField("email address", unique=True)
+    objects = CustomUserManager()
 
     def serialize(self):
         return {

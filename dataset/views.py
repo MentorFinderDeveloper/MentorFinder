@@ -37,7 +37,7 @@ def _require_admin(req: HttpRequest):
     if user is None:
         return request_failed(2, "User not found", 401)
 
-    if user.role != "admin" and not user.is_superuser:
+    if user.role != "admin":
         return request_failed(3, "Permission denied", 403)
 
     return None
