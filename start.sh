@@ -1,5 +1,7 @@
 #!/bin/sh
+echo "Running start.sh!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
 python3 manage.py makemigrations account
+python3 manage.py makemigrations dataset
 python3 manage.py migrate
 python3 manage.py createsuperuser --noinput || true
 
