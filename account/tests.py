@@ -18,12 +18,14 @@ class AccountAuthTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
         self.assertTrue(res.json()["token"].count(".") == 2)
+        self.assertEqual(res.json()["role"], "student")
 
     def test_login_with_email_correct_password(self):
         res = self.post_json("/login", {"username": "ashitemaru@example.com", "password": "abc12345"})
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
         self.assertTrue(res.json()["token"].count(".") == 2)
+        self.assertEqual(res.json()["role"], "student")
 
     def test_login_non_existing_user(self):
         res = self.post_json("/login", {"username": "NewUser", "password": "abc12345"})
@@ -51,6 +53,7 @@ class AccountAuthTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
         self.assertTrue(res.json()["token"].count(".") == 2)
+        self.assertEqual(res.json()["role"], "student")
         user = User.objects.filter(username="NewUser", email="newuser@example.com").first()
         self.assertIsNotNone(user)
         self.assertNotEqual(user.password, "abc12345")
