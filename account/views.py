@@ -29,7 +29,7 @@ def login(req: HttpRequest):
         return request_failed(2, "User not found", 401)
 
     if user.check_password(password):
-        return request_success({"token": generate_jwt_token(user.username)})
+        return request_success({"token": generate_jwt_token(user.username), "role": user.role})
 
     return request_failed(2, "Wrong password", 401)
 
@@ -76,4 +76,4 @@ def register(req: HttpRequest):
         password=password,
         role="student",
     )
-    return request_success({"token": generate_jwt_token(user.username)})
+    return request_success({"token": generate_jwt_token(user.username), "role": user.role})
