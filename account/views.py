@@ -1,7 +1,6 @@
 import json
 import re
 
-from django.contrib.auth.hashers import check_password, make_password
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.http import HttpRequest
@@ -22,21 +21,15 @@ def login(req: HttpRequest):
     username = require(body, "username", "string", err_msg="Missing or error type of [username]")
     password = require(body, "password", "string", err_msg="Missing or error type of [password]")
 
-    user = User.objects.filter(name=username).first()
+    user = User.objects.filter(username=username).first()
     if user is None:
         user = User.objects.filter(email=username).first()
 
     if user is None:
         return request_failed(2, "User not found", 401)
 
-    if check_password(password, user.password):
-        return request_success({"token": generate_jwt_token(user.name)})
-
-    # Backward compatibility for legacy plain-text records.
-    if user.password == password:
-        user.password = make_password(password)
-        user.save(update_fields=["password"])
-        return request_success({"token": generate_jwt_token(user.name)})
+    if user.check_password(password):
+        return request_success({"token": generate_jwt_token(user.username)})
 
     return request_failed(2, "Wrong password", 401)
 
@@ -71,11 +64,16 @@ def register(req: HttpRequest):
     except ValidationError:
         return request_failed(-2, "Invalid parameters. [email] format is invalid", 400)
 
-    if User.objects.filter(name=username).exists():
+    if User.objects.filter(username=username).exists():
         return request_failed(3, "User already exists", 409)
 
     if User.objects.filter(email=email).exists():
         return request_failed(4, "Email already exists", 409)
 
-    User.objects.create(name=username, password=make_password(password), email=email)
-    return request_success({"token": generate_jwt_token(username)})
+    user = User.objects.create_user(
+        username=username,
+        email=email,
+        password=password,
+        role="student",
+    )
+    return request_success({"token": generate_jwt_token(user.username)})

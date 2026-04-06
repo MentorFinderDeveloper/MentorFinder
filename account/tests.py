@@ -1,6 +1,6 @@
 import json
 
-from django.contrib.auth.hashers import check_password, make_password
+from django.contrib.auth.hashers import check_password
 from django.test import TestCase
 
 from account.models import User
@@ -8,7 +8,7 @@ from account.models import User
 
 class AccountAuthTests(TestCase):
     def setUp(self):
-        User.objects.create(name="Ashitemaru", password=make_password("abc12345"), email="ashitemaru@example.com")
+        User.objects.create_user(username="Ashitemaru", password="abc12345", email="ashitemaru@example.com")
 
     def post_json(self, path: str, payload: dict):
         return self.client.post(path, data=json.dumps(payload), content_type="application/json")
@@ -51,7 +51,7 @@ class AccountAuthTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
         self.assertTrue(res.json()["token"].count(".") == 2)
-        user = User.objects.filter(name="NewUser", email="newuser@example.com").first()
+        user = User.objects.filter(username="NewUser", email="newuser@example.com").first()
         self.assertIsNotNone(user)
         self.assertNotEqual(user.password, "abc12345")
         self.assertTrue(check_password("abc12345", user.password))
@@ -116,7 +116,7 @@ class AccountAuthTests(TestCase):
         )
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
-        self.assertTrue(User.objects.filter(name="TrimEmailUser", email="trim@example.com").exists())
+        self.assertTrue(User.objects.filter(username="TrimEmailUser", email="trim@example.com").exists())
 
     def test_register_invalid_email_double_at(self):
         res = self.post_json(
