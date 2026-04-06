@@ -1,27 +1,26 @@
+from django.contrib.auth.models import AbstractUser
 from django.db import models
 
-from utils import utils_time
-from utils.utils_require import MAX_CHAR_LENGTH
 
+class User(AbstractUser):
+    ROLE_CHOICES = (
+        ("student", "学生"),
+        ("tutor", "导师"),
+        ("admin", "系统管理员"),
+    )
 
-class User(models.Model):
-    id = models.BigAutoField(primary_key=True)
-    name = models.CharField(max_length=MAX_CHAR_LENGTH, unique=True)
-    password = models.CharField(max_length=MAX_CHAR_LENGTH)
-    email = models.EmailField(max_length=254, unique=True, null=True, blank=True)
-    created_time = models.FloatField(default=utils_time.get_timestamp)
-
-    class Meta:
-        db_table = "users"
-        indexes = [models.Index(fields=["name"], name="users_name_idx")]
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default="student")
+    real_name = models.CharField(max_length=50, blank=True, null=True, verbose_name="真实姓名")
+    email = models.EmailField("email address", unique=True)
 
     def serialize(self):
         return {
             "id": self.id,
-            "name": self.name,
+            "username": self.username,
             "email": self.email,
-            "createdAt": self.created_time,
+            "role": self.role,
+            "realName": self.real_name,
         }
 
     def __str__(self) -> str:
-        return self.name
+        return f"{self.username} ({self.get_role_display()})"
