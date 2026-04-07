@@ -7,4 +7,6 @@ omit =
     */settings.py
     */urls.py
     *__init__.py
-    */test.py
+    */apps.py
+    */admin.py
+    */tests.py
