@@ -1,4 +1,5 @@
 #!/bin/sh
+mkdir -p data
 python3 manage.py makemigrations account
 python3 manage.py makemigrations dataset
 python3 manage.py migrate
