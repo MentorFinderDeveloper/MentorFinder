@@ -1,0 +1,10 @@
+[run]
+omit =
+    */migrations/*
+    */manage.py
+    */wsgi.py
+    */asgi.py
+    */settings.py
+    */urls.py
+    *__init__.py
+    */test.py
