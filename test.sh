@@ -1,4 +1,4 @@
-coverage run --source MFBackend,account,utils -m pytest --junit-xml=xunit-reports/xunit-result.xml
+coverage run --source . -m pytest --junit-xml=xunit-reports/xunit-result.xml
 ret=$?
 coverage xml -o coverage-reports/coverage.xml
 coverage report

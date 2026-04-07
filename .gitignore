@@ -10,3 +10,5 @@ xunit-reports/
 .pytest_cache
 
 .env
+
+htmlcov/
