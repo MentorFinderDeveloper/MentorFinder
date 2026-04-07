@@ -45,6 +45,12 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual(res.json()["module"], "search")
 
+    def test_search_health_bad_method(self):
+        res = self.client.post("/search/health")
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
     def test_search_mentors_by_name(self):
         res = self.client.get("/search/mentors", {"keyword": "张三"})
 
@@ -229,8 +235,38 @@ class SearchTests(TestCase):
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.json()["code"], -2)
 
+    def test_search_keyword_too_long_for_mentors(self):
+        res = self.client.get("/search/mentors", {"keyword": "x" * 256})
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_search_keyword_too_long_for_papers(self):
+        res = self.client.get("/search/papers", {"keyword": "x" * 256})
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_search_keyword_trimmed_before_search(self):
+        mentor_res = self.client.get("/search/mentors", {"keyword": "  张三  "})
+        paper_res = self.client.get("/search/papers", {"keyword": "  李四  "})
+
+        self.assertEqual(mentor_res.status_code, 200)
+        self.assertEqual(mentor_res.json()["keyword"], "张三")
+        self.assertEqual(len(mentor_res.json()["mentors"]), 1)
+
+        self.assertEqual(paper_res.status_code, 200)
+        self.assertEqual(paper_res.json()["keyword"], "李四")
+        self.assertEqual([paper["title"] for paper in paper_res.json()["papers"]], ["大语言模型在问答系统中的应用"])
+
     def test_search_bad_method(self):
         res = self.client.post("/search/mentors", {"keyword": "张三"})
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+    def test_search_papers_bad_method(self):
+        res = self.client.post("/search/papers", {"keyword": "张三"})
 
         self.assertEqual(res.status_code, 405)
         self.assertEqual(res.json()["code"], -3)
