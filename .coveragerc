@@ -10,3 +10,4 @@ omit =
     */apps.py
     */admin.py
     */tests.py
+    MFBackend/*
