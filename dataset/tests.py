@@ -341,3 +341,345 @@ class DatasetViewTest(TestCase):
             self.admin_headers,
         )
 
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+
+        mentor = Mentor.objects.get(id=data["mentor"]["id"])
+        self.assertEqual(mentor.Chinese_name, "张老师")
+        self.assertEqual(mentor.English_name, "Zhang")
+        self.assertEqual(mentor.research_direction, "自然语言处理")
+        self.assertEqual(mentor.email, "zhang@example.com")
+        self.assertEqual(mentor.profile, "专注大模型与信息检索")
+        self.assertEqual(len(mentor.get_paper_id_list()), 1)
+
+    def test_create_mentor_rejects_non_admin(self):
+        response = self.post_json(
+            "/dataset/mentors",
+            {
+                "Chinese_name": "张老师",
+                "research_direction": "自然语言处理",
+            },
+            self.student_headers,
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()["code"], 3)
+        self.assertEqual(Mentor.objects.count(), 0)
+
+    def test_create_mentor_get_method_not_allowed(self):
+        response = self.client.get("/dataset/mentors")
+        self.assertEqual(response.status_code, 405)
+        self.assertEqual(response.json()["code"], -3)
+
+    def test_create_mentor_rejects_empty_research_direction(self):
+        response = self.post_json(
+            "/dataset/mentors",
+            {
+                "Chinese_name": "张老师",
+                "research_direction": "   ",
+            },
+            self.admin_headers,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], -2)
+
+    def test_create_mentor_rejects_too_long_english_name(self):
+        response = self.post_json(
+            "/dataset/mentors",
+            {
+                "Chinese_name": "张老师",
+                "English_name": "E" * 101,
+                "research_direction": "自然语言处理",
+            },
+            self.admin_headers,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], -2)
+
+    def test_update_mentor_success(self):
+        Paper.objects.create(title="Paper", author_names="李老师")
+        mentor = Mentor.objects.create(
+            Chinese_name="张老师",
+            English_name="Zhang",
+            research_direction="自然语言处理",
+            paper_ids="",
+        )
+
+        response = self.put_json(
+            f"/dataset/mentors/{mentor.id}",
+            {
+                "Chinese_name": "李老师",
+                "English_name": "Li",
+                "research_direction": "计算机视觉",
+                "email": "li@example.com",
+                "profile": "CV",
+            },
+            self.admin_headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["code"], 0)
+
+        mentor.refresh_from_db()
+        self.assertEqual(mentor.Chinese_name, "李老师")
+        self.assertEqual(mentor.research_direction, "计算机视觉")
+        self.assertIn("li@example.com", mentor.email)
+        self.assertEqual(len(mentor.get_paper_id_list()), 1)
+
+    def test_update_mentor_not_found(self):
+        response = self.put_json(
+            "/dataset/mentors/99999",
+            {
+                "Chinese_name": "李老师",
+                "research_direction": "计算机视觉",
+            },
+            self.admin_headers,
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["code"], 2)
+        self.assertEqual(response.json()["info"], "Mentor not found")
+
+    def test_update_mentor_rejects_invalid_email(self):
+        mentor = Mentor.objects.create(
+            Chinese_name="张老师",
+            research_direction="自然语言处理",
+            paper_ids="",
+        )
+
+        response = self.put_json(
+            f"/dataset/mentors/{mentor.id}",
+            {
+                "Chinese_name": "张老师",
+                "research_direction": "自然语言处理",
+                "email": "bad-email",
+            },
+            self.admin_headers,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], -2)
+
+    def test_update_mentor_rejects_too_long_research_direction(self):
+        mentor = Mentor.objects.create(
+            Chinese_name="张老师",
+            research_direction="自然语言处理",
+            paper_ids="",
+        )
+
+        response = self.put_json(
+            f"/dataset/mentors/{mentor.id}",
+            {
+                "Chinese_name": "张老师",
+                "research_direction": "x" * 256,
+            },
+            self.admin_headers,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], -2)
+
+    def test_delete_mentor_success(self):
+        mentor = Mentor.objects.create(
+            Chinese_name="张老师",
+            research_direction="自然语言处理",
+            paper_ids="",
+        )
+
+        response = self.delete_json(f"/dataset/mentors/{mentor.id}", self.admin_headers)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["code"], 0)
+        self.assertFalse(Mentor.objects.filter(id=mentor.id).exists())
+
+    def test_create_mentor_rejects_invalid_email(self):
+        response = self.post_json(
+            "/dataset/mentors",
+            {
+                "Chinese_name": "张老师",
+                "research_direction": "自然语言处理",
+                "email": "invalid-email",
+            },
+            self.admin_headers,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], -2)
+        self.assertEqual(Mentor.objects.count(), 0)
+
+    def test_detail_rejects_get(self):
+        mentor_response = self.client.get("/dataset/mentors/1")
+        paper_response = self.client.get("/dataset/papers/1")
+
+        self.assertEqual(mentor_response.status_code, 405)
+        self.assertEqual(mentor_response.json()["code"], -3)
+        self.assertEqual(paper_response.status_code, 405)
+        self.assertEqual(paper_response.json()["code"], -3)
+
+
+class DatasetCrawlerServiceTests(SimpleTestCase):
+    def test_fetch_html_uses_headers_and_returns_text(self):
+        response = MagicMock()
+        response.text = "<html>ok</html>"
+        response.apparent_encoding = "utf-8"
+
+        with patch("dataset.services.thu_crawler.requests.get", return_value=response) as mock_get:
+            html = thu_crawler.fetch_html("https://example.com")
+
+        mock_get.assert_called_once_with("https://example.com", headers=thu_crawler.BASE_HEADERS, timeout=15)
+        response.raise_for_status.assert_called_once()
+        self.assertEqual(response.encoding, "utf-8")
+        self.assertEqual(html, "<html>ok</html>")
+
+    def test_parse_mentor_list_uses_zip_and_urljoin(self):
+        ch_html = """
+        <html><body>
+            <h2><a href="detail/zhang.htm">张三</a></h2>
+            <h2><a href="detail/li.htm">李四</a></h2>
+        </body></html>
+        """
+        en_html = """
+        <html><body>
+            <h2><a href="detail/zhang_en.htm">Zhang</a></h2>
+        </body></html>
+        """
+
+        with patch("dataset.services.thu_crawler.fetch_html", side_effect=[ch_html, en_html]), patch(
+            "dataset.services.thu_crawler.parse_mentor_detail",
+            return_value={
+                "Chinese_name": "张三",
+                "English_name": "Zhang",
+                "research_direction": "AI",
+                "email": "zhang@example.com",
+                "profile": "profile",
+            },
+        ) as mock_parse_detail:
+            mentors = thu_crawler.parse_mentor_list(thu_crawler.url, thu_crawler.en_url)
+
+        expected_ch_detail = urljoin(thu_crawler.url, "detail/zhang.htm")
+        expected_en_detail = urljoin(thu_crawler.en_url, "detail/zhang_en.htm")
+        mock_parse_detail.assert_called_once_with(expected_ch_detail, expected_en_detail)
+        self.assertEqual(len(mentors), 1)
+
+    def test_parse_mentor_detail_extracts_expected_fields(self):
+        ch_detail_html = """
+        <html>
+            <head><title>张三-清华大学计算机系</title></head>
+            <body>
+                <p>研究领域</p>
+                <p>自然语言处理</p>
+                <p>信息检索</p>
+                <h4>研究概况</h4>
+
+                <p>邮箱：zhangsan@example.com</p>
+
+                <p>教育背景</p>
+                <p>清华博士</p>
+                <p>学术成果</p>
+
+                <p>研究概况</p>
+                <p>专注大模型</p>
+                <p>代表性论文</p>
+
+                <p>奖励与荣誉</p>
+                <p>国家奖学金</p>
+                <p><strong>结束</strong></p>
+            </body>
+        </html>
+        """
+        en_detail_html = """
+        <html>
+            <head><title>Zhang San-Tsinghua University</title></head>
+            <body></body>
+        </html>
+        """
+
+        with patch("dataset.services.thu_crawler.fetch_html", side_effect=[ch_detail_html, en_detail_html]):
+            detail = thu_crawler.parse_mentor_detail("https://example.com/ch", "https://example.com/en")
+
+        self.assertEqual(detail["Chinese_name"], "张三")
+        self.assertEqual(detail["English_name"], "Zhang San")
+        self.assertIn("自然语言处理", detail["research_direction"])
+        self.assertIn("信息检索", detail["research_direction"])
+        self.assertEqual(detail["email"], "zhangsan@example.com")
+        self.assertIn("教育背景", detail["profile"])
+        self.assertIn("研究概况", detail["profile"])
+        self.assertIn("奖励与荣誉", detail["profile"])
+
+    def test_parse_mentor_detail_without_email_returns_none(self):
+        ch_detail_html = """
+        <html>
+            <head><title>李四-清华大学计算机系</title></head>
+            <body>
+                <p>研究领域</p>
+                <p>系统安全</p>
+                <h4>研究概况</h4>
+            </body>
+        </html>
+        """
+        en_detail_html = """
+        <html>
+            <head><title>Li Si-Tsinghua University</title></head>
+            <body></body>
+        </html>
+        """
+
+        with patch("dataset.services.thu_crawler.fetch_html", side_effect=[ch_detail_html, en_detail_html]):
+            detail = thu_crawler.parse_mentor_detail("https://example.com/ch", "https://example.com/en")
+
+        self.assertEqual(detail["Chinese_name"], "李四")
+        self.assertIsNone(detail["email"])
+
+
+class DatasetImportMentorsCommandTests(TestCase):
+    @patch("dataset.management.commands.import_mentors.parse_mentor_list")
+    def test_import_mentors_creates_new_records(self, mock_parse_mentor_list):
+        mock_parse_mentor_list.return_value = [
+            {
+                "Chinese_name": "张老师",
+                "English_name": "Zhang",
+                "research_direction": "自然语言处理",
+                "email": "zhang@example.com",
+                "profile": "导师画像",
+            }
+        ]
+
+        out = StringIO()
+        call_command("import_mentors", stdout=out)
+
+        self.assertEqual(Mentor.objects.count(), 1)
+        mentor = Mentor.objects.get(Chinese_name="张老师")
+        self.assertEqual(mentor.English_name, "Zhang")
+        self.assertEqual(mentor.research_direction, "自然语言处理")
+        self.assertEqual(mentor.email, "zhang@example.com")
+        self.assertIn("Imported 1 mentors", out.getvalue())
+
+    @patch("dataset.management.commands.import_mentors.parse_mentor_list")
+    def test_import_mentors_updates_existing_record(self, mock_parse_mentor_list):
+        Mentor.objects.create(
+            Chinese_name="王老师",
+            English_name="Old Name",
+            research_direction="Old Direction",
+            email="old@example.com",
+            profile="old",
+            paper_ids="",
+        )
+        mock_parse_mentor_list.return_value = [
+            {
+                "Chinese_name": "王老师",
+                "English_name": "New Name",
+                "research_direction": "New Direction",
+                "email": "new@example.com",
+                "profile": "new",
+            }
+        ]
+
+        call_command("import_mentors")
+
+        self.assertEqual(Mentor.objects.filter(Chinese_name="王老师").count(), 1)
+        mentor = Mentor.objects.get(Chinese_name="王老师")
+        self.assertEqual(mentor.English_name, "New Name")
+        self.assertEqual(mentor.research_direction, "New Direction")
+        self.assertEqual(mentor.email, "new@example.com")
