@@ -59,6 +59,24 @@ class AccountAuthTests(TestCase):
         self.assertNotEqual(user.password, "abc12345")
         self.assertTrue(check_password("abc12345", user.password))
 
+    def test_register_success_with_underscore_and_hyphen_username(self):
+        res = self.post_json(
+            "/register",
+            {"username": "new_user-1", "password": "abc12345", "email": "new-user@example.com"},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertTrue(User.objects.filter(username="new_user-1", email="new-user@example.com").exists())
+
+    def test_register_invalid_username_characters(self):
+        res = self.post_json(
+            "/register",
+            {"username": "Bad User!", "password": "abc12345", "email": "baduser@example.com"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertFalse(User.objects.filter(email="baduser@example.com").exists())
+
     def test_register_password_too_short(self):
         res = self.post_json(
             "/register",
