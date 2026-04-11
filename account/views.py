@@ -10,6 +10,8 @@ from utils.utils_jwt import generate_jwt_token
 from utils.utils_request import BAD_METHOD, request_failed, request_success
 from utils.utils_require import CheckRequire, require
 
+USERNAME_REGEX = re.compile(r"^[A-Za-z0-9_-]+$")
+
 
 @CheckRequire
 def login(req: HttpRequest):
@@ -45,8 +47,15 @@ def register(req: HttpRequest):
     password = require(body, "password", "string", err_msg="Missing or error type of [password]")
     email = require(body, "email", "string", err_msg="Missing or error type of [email]")
 
+    username = username.strip()
     if username.strip() == "":
         return request_failed(-2, "Invalid parameters. [username] cannot be empty", 400)
+    if not USERNAME_REGEX.fullmatch(username):
+        return request_failed(
+            -2,
+            "Invalid parameters. [username] can only contain letters, digits, underscores, and hyphens",
+            400,
+        )
     if password.strip() == "":
         return request_failed(-2, "Invalid parameters. [password] cannot be empty", 400)
     if len(password) < 8 or not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
