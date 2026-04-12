@@ -11,6 +11,8 @@ coverage
 requests
 beautifulsoup4
 lxml
+arxiv
+scholarly
 # TODO Start: [Student] Add dependency on uWSGI
 
 # TODO End: [Student] Add dependency on uWSGI
