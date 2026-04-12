@@ -20,15 +20,40 @@ class Paper(models.Model):
         return [name.strip() for name in self.author_names.split(",")]
 
     def bind_to_mentors_by_authors(self):
+        # 1. 获取原作者列表，并生成一个小写的作者列表，方便后续不区分大小写比对
         author_list = self.get_author_list()
+        lower_authors = [author.lower() for author in author_list]
 
         for mentor in Mentor.objects.all():
-            if mentor.Chinese_name in author_list or mentor.English_name in author_list:
+            match_found = False
+
+            # 2. 检查中文名是否匹配（中文名通常格式固定，直接精确匹配即可）
+            if mentor.Chinese_name in author_list:
+                match_found = True
+
+            # 3. 检查英文名是否匹配（需要处理大小写和颠倒顺序）
+            elif mentor.English_name:
+                eng_name = mentor.English_name.lower().strip()
+                name_parts = eng_name.split()
+
+                # 构建可能的英文名格式列表
+                possible_names = [eng_name] # 正常格式: "wei xue"
+                if len(name_parts) == 2:
+                    # 如果英文名是两个词，加入颠倒后的格式
+                    possible_names.append(f"{name_parts[1]} {name_parts[0]}")  # "xue wei"
+                    possible_names.append(f"{name_parts[1]}, {name_parts[0]}") # "xue, wei"
+
+                # 只要上述任意一种格式，包含在论文作者名单的某一个作者名中，即视为匹配
+                for author in lower_authors:
+                    if any(possible_name in author for possible_name in possible_names):
+                        match_found = True
+                        break
+
+            # 4. 如果找到匹配，执行绑定
+            if match_found:
                 paper_ids = mentor.get_paper_id_list()
                 if self.id not in paper_ids:
                     mentor.add_paper(self.id)
-                    mentor.save()
-
 
 class Mentor(models.Model):
     Chinese_name = models.CharField(max_length=100, verbose_name="中文姓名")
