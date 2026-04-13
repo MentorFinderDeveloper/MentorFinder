@@ -1,5 +1,6 @@
 from django.contrib.auth.models import AbstractUser, UserManager
 from django.db import models
+from dataset.models import Mentor
 
 
 class CustomUserManager(UserManager):
@@ -31,3 +32,23 @@ class User(AbstractUser):
 
     def __str__(self) -> str:
         return f"{self.username} ({self.get_role_display()})"
+
+class MentorFollow(models.Model):
+    student = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="mentor_follows",
+    )
+    mentor = models.ForeignKey(
+        Mentor,
+        on_delete=models.CASCADE,
+        related_name="student_follows",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("student", "mentor")
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.student.username} follows {self.mentor.Chinese_name}"

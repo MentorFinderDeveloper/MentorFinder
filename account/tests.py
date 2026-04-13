@@ -3,7 +3,9 @@ import json
 from django.contrib.auth.hashers import check_password
 from django.test import TestCase
 
-from account.models import User
+from account.models import User, MentorFollow
+from dataset.models import Mentor
+from utils.utils_jwt import generate_jwt_token
 
 
 class AccountAuthTests(TestCase):
@@ -170,5 +172,213 @@ class AccountAuthTests(TestCase):
 
     def test_register_bad_method(self):
         res = self.client.get("/register")
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+
+class MentorFollowViewTests(TestCase):
+    def setUp(self):
+        self.student = User.objects.create_user(
+            username="student1",
+            email="student1@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.student_token = generate_jwt_token("student1")
+
+        self.other_student = User.objects.create_user(
+            username="student2",
+            email="student2@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.other_student_token = generate_jwt_token("student2")
+
+        self.admin = User.objects.create_user(
+            username="admin1",
+            email="admin1@example.com",
+            password="abc12345",
+            role="admin",
+        )
+        self.admin_token = generate_jwt_token("admin1")
+
+        self.mentor = Mentor.objects.create(
+            Chinese_name="张三",
+            English_name="Zhang San",
+            research_direction="机器学习",
+            email="zhangsan@example.com",
+            profile="主要研究机器学习。",
+        )
+
+        self.other_mentor = Mentor.objects.create(
+            Chinese_name="李四",
+            English_name="Li Si",
+            research_direction="自然语言处理",
+            email="lisi@example.com",
+            profile="主要研究自然语言处理。",
+        )
+
+    def auth_headers(self, token: str):
+        return {
+            "HTTP_AUTHORIZATION": f"Bearer {token}",
+        }
+
+    def test_student_can_follow_mentor(self):
+        res = self.client.post(
+            f"/follow/mentors/{self.mentor.id}",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["followed"], True)
+        self.assertTrue(
+            MentorFollow.objects.filter(
+                student=self.student,
+                mentor=self.mentor,
+            ).exists()
+        )
+
+    def test_follow_mentor_requires_login(self):
+        res = self.client.post(f"/follow/mentors/{self.mentor.id}")
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_only_student_can_follow_mentor(self):
+        res = self.client.post(
+            f"/follow/mentors/{self.mentor.id}",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.json()["code"], 3)
+        self.assertFalse(
+            MentorFollow.objects.filter(
+                student=self.admin,
+                mentor=self.mentor,
+            ).exists()
+        )
+
+    def test_follow_non_existing_mentor_returns_404(self):
+        res = self.client.post(
+            "/follow/mentors/999999",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
+        self.assertEqual(res.json()["info"], "Mentor not found")
+
+    def test_duplicate_follow_is_idempotent(self):
+        first_res = self.client.post(
+            f"/follow/mentors/{self.mentor.id}",
+            **self.auth_headers(self.student_token),
+        )
+        second_res = self.client.post(
+            f"/follow/mentors/{self.mentor.id}",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(first_res.status_code, 200)
+        self.assertEqual(second_res.status_code, 200)
+        self.assertEqual(
+            MentorFollow.objects.filter(
+                student=self.student,
+                mentor=self.mentor,
+            ).count(),
+            1,
+        )
+
+    def test_student_can_unfollow_mentor(self):
+        MentorFollow.objects.create(
+            student=self.student,
+            mentor=self.mentor,
+        )
+
+        res = self.client.delete(
+            f"/follow/mentors/{self.mentor.id}",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["followed"], False)
+        self.assertFalse(
+            MentorFollow.objects.filter(
+                student=self.student,
+                mentor=self.mentor,
+            ).exists()
+        )
+
+    def test_unfollow_not_followed_mentor_is_ok(self):
+        res = self.client.delete(
+            f"/follow/mentors/{self.mentor.id}",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["followed"], False)
+
+    def test_get_followed_mentors_requires_login(self):
+        res = self.client.get("/follow/mentors")
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_get_followed_mentors_returns_current_students_follows(self):
+        MentorFollow.objects.create(
+            student=self.student,
+            mentor=self.mentor,
+        )
+        MentorFollow.objects.create(
+            student=self.student,
+            mentor=self.other_mentor,
+        )
+        MentorFollow.objects.create(
+            student=self.other_student,
+            mentor=self.other_mentor,
+        )
+
+        res = self.client.get(
+            "/follow/mentors",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+
+        mentors = res.json()["mentors"]
+        mentor_names = {mentor["Chinese_name"] for mentor in mentors}
+
+        self.assertEqual(mentor_names, {"张三", "李四"})
+        self.assertEqual(len(mentors), 2)
+
+    def test_get_followed_mentors_returns_empty_list(self):
+        res = self.client.get(
+            "/follow/mentors",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["mentors"], [])
+
+    def test_follow_mentor_bad_method(self):
+        res = self.client.get(
+            f"/follow/mentors/{self.mentor.id}",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+    def test_followed_mentors_bad_method(self):
+        res = self.client.post(
+            "/follow/mentors",
+            **self.auth_headers(self.student_token),
+        )
+
         self.assertEqual(res.status_code, 405)
         self.assertEqual(res.json()["code"], -3)
