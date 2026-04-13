@@ -117,6 +117,23 @@ def _require_user(req: HttpRequest):
     return user, None
 
 @CheckRequire
+def followed_mentors(req: HttpRequest):
+    if req.method != "GET":
+        return BAD_METHOD
+
+    user, auth_error = _require_user(req)
+    if auth_error is not None:
+        return auth_error
+
+    follows = MentorFollow.objects.filter(student=user).select_related("mentor")
+    mentors = [follow.mentor for follow in follows]
+
+    return request_success({
+        "mentors": MentorSerializer(mentors, many=True).data,
+    })
+
+
+@CheckRequire
 def follow_mentor(req: HttpRequest, mentor_id: int):
     if req.method not in ["POST", "DELETE"]:
         return BAD_METHOD
