@@ -61,7 +61,7 @@ def _serialize_mentor(mentor: Mentor):
         "research_direction": mentor.research_direction,
         "email": mentor.email,
         "profile": mentor.profile,
-        "paper_ids": mentor.paper_ids,
+        "paper_ids": [_serialize_paper(paper) for paper in mentor.get_papers()],
     }
 
 
@@ -223,16 +223,19 @@ def paper_detail(req: HttpRequest, paper_id: int):
 
 @CheckRequire
 def mentor_detail(req: HttpRequest, mentor_id: int):
-    if req.method not in ["PUT", "DELETE"]:
+    if req.method not in ["GET", "PUT", "DELETE"]:
         return BAD_METHOD
-
-    auth_error = _require_admin(req)
-    if auth_error is not None:
-        return auth_error
 
     mentor = Mentor.objects.filter(id=mentor_id).first()
     if mentor is None:
         return request_failed(2, "Mentor not found", 404)
+
+    if req.method == "GET":
+        return request_success({"mentor": _serialize_mentor(mentor)})
+
+    auth_error = _require_admin(req)
+    if auth_error is not None:
+        return auth_error
 
     if req.method == "DELETE":
         mentor.delete()
@@ -247,4 +250,5 @@ def mentor_detail(req: HttpRequest, mentor_id: int):
     _refresh_mentor_papers(mentor)
 
     return request_success({"mentor": _serialize_mentor(mentor)})
+
 
