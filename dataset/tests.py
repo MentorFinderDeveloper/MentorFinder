@@ -394,6 +394,33 @@ class MentorViewTest(TestCase):
             HTTP_AUTHORIZATION=f"Bearer {self.admin_token}"
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_get_mentor_without_auth(self):
+        """测试未登录也可以获取导师详情"""
+        response = self.client.get(f"/dataset/mentors/{self.mentor.id}")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["mentor"]["id"], self.mentor.id)
+        self.assertEqual(data["mentor"]["Chinese_name"], "张三")
+        self.assertEqual(data["mentor"]["English_name"], "San Zhang")
+        self.assertEqual(data["mentor"]["research_direction"], "人工智能")
+        self.assertEqual(data["mentor"]["email"], "zhangsan@example.com")
+
+    def test_update_mentor_without_auth(self):
+        """测试未登录不能修改导师"""
+        response = self.client.put(
+            f"/dataset/mentors/{self.mentor.id}",
+            data=json.dumps({
+                "Chinese_name": "张三",
+                "English_name": "San Zhang",
+                "research_direction": "深度学习",
+                "email": "zhangsan_new@example.com"
+            }),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 401)
     
     def test_update_mentor_as_admin(self):
         """测试管理员更新导师"""
