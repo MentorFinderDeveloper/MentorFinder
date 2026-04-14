@@ -6,7 +6,7 @@ class Paper(models.Model):
     abstract = models.TextField(blank=True, null=True, verbose_name="摘要")
     publish_date = models.DateField(blank=True, null=True, verbose_name="发表日期")
     author_names = models.TextField(blank=True, default="", verbose_name="作者名单")
-
+    subjects = models.CharField(max_length=255, blank=True, default="",verbose_name="学科/分类")
     class Meta:
         verbose_name = "论文"
         verbose_name_plural = verbose_name
@@ -62,7 +62,6 @@ class Mentor(models.Model):
     email = models.EmailField(blank=True, null=True, verbose_name="导师邮箱")
     profile = models.TextField(blank=True, null=True, verbose_name="导师画像")
     paper_ids = models.TextField(blank=True, default="", verbose_name="论文ID列表") # 论文列表以字符串形式保存
-
     class Meta:
         verbose_name = "导师"
         verbose_name_plural = verbose_name

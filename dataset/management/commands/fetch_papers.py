@@ -41,24 +41,28 @@ class Command(BaseCommand):
                 abstract = result.summary.replace('\n', ' ')
                 publish_date = result.published.date()
                 authors = ", ".join([author.name for author in result.authors])
-
+                subjects_str = ", ".join(result.categories)
                 # 使用 get_or_create 防止论文重复录入数据库
                 paper, created = Paper.objects.get_or_create(
                     title=title,
                     defaults={
                         'abstract': abstract,
                         'publish_date': publish_date,
-                        'author_names': authors
+                        'author_names': authors,
+                        'subjects': subjects_str
                     }
                 )
 
                 if created:
-                    self.stdout.write(self.style.SUCCESS(f"    [新增论文] {title}"))
+                    self.stdout.write(self.style.SUCCESS(f"    [新增论文] {title} (分类: {subjects_str})"))
+                else:
+                    # 如果论文已经存在，检查是否之前没有爬取 subjects
+                    if not paper.subjects and subjects_str:
+                        paper.subjects = subjects_str
+                        paper.save()
+                        self.stdout.write(self.style.SUCCESS(f"    [更新旧论文分类] {title} (分类: {subjects_str})"))
                 
-                # 调用你写好的方法进行绑定
-                # 注意：你原本的方法是遍历所有Mentor，这里只需单向绑定即可，但用你的方法也没问题
                 paper.bind_to_mentors_by_authors()
-
         except Exception as e:
             self.stdout.write(self.style.ERROR(f"  arXiv 抓取报错: {e}"))
 
