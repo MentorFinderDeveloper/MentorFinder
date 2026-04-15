@@ -5,14 +5,14 @@ from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.http import HttpRequest
 
-from account.models import User
+from account.models import User, UserProfile
 from utils.utils_jwt import generate_jwt_token
 from utils.utils_request import BAD_METHOD, request_failed, request_success
 from utils.utils_require import CheckRequire, require
 
 from utils.utils_jwt import check_jwt_token
 from dataset.models import Mentor
-from account.models import User, MentorFollow
+from account.models import MentorFollow
 from search.serializers import MentorSerializer
 
 USERNAME_REGEX = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -155,3 +155,44 @@ def follow_mentor(req: HttpRequest, mentor_id: int):
 
     MentorFollow.objects.filter(student=user, mentor=mentor).delete()
     return request_success({"followed": False})
+
+
+@CheckRequire
+def my_profile(req: HttpRequest):
+    if req.method == "GET":
+        user, auth_error = _require_user(req)
+        if auth_error is not None:
+            return auth_error
+
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+        return request_success({"profile": profile.serialize()})
+
+    if req.method == "PUT":
+        user, auth_error = _require_user(req)
+        if auth_error is not None:
+            return auth_error
+
+        body = json.loads(req.body.decode("utf-8"))
+        if not isinstance(body, dict):
+            return request_failed(-2, "Invalid parameters. [body] must be an object", 400)
+
+        research_experience = body.get("researchExperience", "")
+        honors = body.get("honors", "")
+        project_experience = body.get("projectExperience", "")
+
+        if not isinstance(research_experience, str):
+            return request_failed(-2, "Invalid parameters. [researchExperience] must be a string", 400)
+        if not isinstance(honors, str):
+            return request_failed(-2, "Invalid parameters. [honors] must be a string", 400)
+        if not isinstance(project_experience, str):
+            return request_failed(-2, "Invalid parameters. [projectExperience] must be a string", 400)
+
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+        profile.research_experience = research_experience.strip()
+        profile.honors = honors.strip()
+        profile.project_experience = project_experience.strip()
+        profile.save()
+
+        return request_success({"profile": profile.serialize()})
+
+    return BAD_METHOD
