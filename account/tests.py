@@ -382,3 +382,85 @@ class MentorFollowViewTests(TestCase):
 
         self.assertEqual(res.status_code, 405)
         self.assertEqual(res.json()["code"], -3)
+
+
+class UserProfileViewTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="profile_user",
+            email="profile_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.token = generate_jwt_token("profile_user")
+
+    def auth_headers(self, token: str):
+        return {
+            "HTTP_AUTHORIZATION": f"Bearer {token}",
+        }
+
+    def test_get_profile_requires_login(self):
+        res = self.client.get("/profile/me")
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_get_profile_returns_default_profile(self):
+        res = self.client.get(
+            "/profile/me",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["profile"]["researchExperience"], "")
+        self.assertEqual(res.json()["profile"]["honors"], "")
+        self.assertEqual(res.json()["profile"]["projectExperience"], "")
+
+    def test_put_profile_updates_fields(self):
+        res = self.client.put(
+            "/profile/me",
+            data=json.dumps(
+                {
+                    "researchExperience": "发表2篇CCF论文",
+                    "honors": "国家奖学金",
+                    "projectExperience": "参与导师课题系统开发",
+                }
+            ),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["profile"]["researchExperience"], "发表2篇CCF论文")
+        self.assertEqual(res.json()["profile"]["honors"], "国家奖学金")
+        self.assertEqual(res.json()["profile"]["projectExperience"], "参与导师课题系统开发")
+
+    def test_put_profile_rejects_non_string_field(self):
+        res = self.client.put(
+            "/profile/me",
+            data=json.dumps(
+                {
+                    "researchExperience": ["wrong type"],
+                    "honors": "ok",
+                    "projectExperience": "ok",
+                }
+            ),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_profile_bad_method(self):
+        res = self.client.post(
+            "/profile/me",
+            data=json.dumps({}),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
