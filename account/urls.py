@@ -8,4 +8,5 @@ urlpatterns = [
     path('register', views.register),
     path("follow/mentors", views.followed_mentors),
     path("follow/mentors/<int:mentor_id>", views.follow_mentor),
+    path("profile/me", views.my_profile),
 ]

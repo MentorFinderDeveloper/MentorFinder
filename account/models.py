@@ -1,6 +1,7 @@
 from django.contrib.auth.models import AbstractUser, UserManager
 from django.db import models
 from dataset.models import Mentor
+from django.utils.timezone import localtime
 
 
 class CustomUserManager(UserManager):
@@ -32,6 +33,30 @@ class User(AbstractUser):
 
     def __str__(self) -> str:
         return f"{self.username} ({self.get_role_display()})"
+
+
+class UserProfile(models.Model):
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name="profile",
+    )
+    research_experience = models.TextField(blank=True, default="", verbose_name="科研经历")
+    honors = models.TextField(blank=True, default="", verbose_name="所获荣誉")
+    project_experience = models.TextField(blank=True, default="", verbose_name="项目经历")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def serialize(self):
+        return {
+            "researchExperience": self.research_experience,
+            "honors": self.honors,
+            "projectExperience": self.project_experience,
+            "updatedAt": localtime(self.updated_at).isoformat(sep=' ', timespec='seconds') if self.updated_at else "",
+        }
+
+    def __str__(self):
+        return f"Profile of {self.user.username}"
+
 
 class MentorFollow(models.Model):
     student = models.ForeignKey(
