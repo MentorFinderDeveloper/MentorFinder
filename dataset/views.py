@@ -254,7 +254,7 @@ def mentor_detail(req: HttpRequest, mentor_id: int):
     return request_success({"mentor": _serialize_mentor(mentor)})
 
 
-# 常见的 arXiv 分类代码与中文名称映射表（你可以根据需要扩充）
+# 常见的 arXiv 分类代码与中文名称映射表
 ARXIV_SUBJECT_MAPPING = {
     'cs.AI': '人工智能 (AI)',
     'cs.CV': '计算机视觉 (CV)',
@@ -268,32 +268,41 @@ ARXIV_SUBJECT_MAPPING = {
     'stat.ML': '统计机器学习 (Stat ML)',
 }
 
+#把论文按研究方向分类并按时间排序
 def paper_timeline_view(request):
-    # 1. 获取所有有日期的论文，按时间倒序排列（最新的在最上面）
-    papers = Paper.objects.exclude(publish_date__isnull=True).order_by('-publish_date')
+    if request.method != "GET":
+        return BAD_METHOD
 
-    # 2. 使用 defaultdict 存储按方向聚合的数据: { '人工智能': [paper1, paper2], ... }
+    papers = Paper.objects.exclude(publish_date__isnull=True).order_by("-publish_date")
     direction_groups = defaultdict(list)
 
     for paper in papers:
         if paper.subjects:
-            # 将类似 "cs.AI, cs.CV" 的字符串拆分成列表
-            raw_subjects = [s.strip() for s in paper.subjects.split(',')]
-            
-            # 因为一篇论文可能有多个分类，所以这篇论文会出现在多个时间线中
+            raw_subjects = [s.strip() for s in paper.subjects.split(",")]
             for sub in raw_subjects:
-                # 使用映射表转成中文，如果不在映射表中，就保留原代码
                 readable_name = ARXIV_SUBJECT_MAPPING.get(sub, sub)
-                direction_groups[readable_name].append(paper)
+                direction_groups[readable_name].append({
+                    "id": paper.id,
+                    "title": paper.title,
+                    "publish_date": str(paper.publish_date) if paper.publish_date else None,
+                    "author_names": paper.author_names,
+                    "abstract": paper.abstract,
+                })
         else:
-            # 处理没有 subject 的论文
-            direction_groups['其他/未分类'].append(paper)
+            direction_groups["其他/未分类"].append({
+                "id": paper.id,
+                "title": paper.title,
+                "publish_date": str(paper.publish_date) if paper.publish_date else None,
+                "author_names": paper.author_names,
+                "abstract": paper.abstract,
+            })
 
-    # 3. 将结果转换为普通字典，并提取所有的方向名用于前端生成 Tab 标签
-    # 过滤掉只有极少数论文的零碎分类（可选，这里保留全部）
-    context = {
-        'direction_groups': dict(direction_groups),
-        'directions': sorted(direction_groups.keys()), # 排序标签名
-    }
+    timeline = [
+        {
+            "direction": direction,
+            "papers": papers_list,
+        }
+        for direction, papers_list in sorted(direction_groups.items())
+    ]
 
-    return render(request, 'paper_timeline.html', context)
+    return request_success({"timeline": timeline})
