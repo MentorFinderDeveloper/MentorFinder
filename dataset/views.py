@@ -286,7 +286,7 @@ def paper_timeline_view(request):
                 readable_name = ARXIV_SUBJECT_MAPPING.get(sub, sub)
                 direction_groups[readable_name].append(paper)
         else:
-            # 处理没有 subject 的论文（比如之前从 Scholar 爬的）
+            # 处理没有 subject 的论文
             direction_groups['其他/未分类'].append(paper)
 
     # 3. 将结果转换为普通字典，并提取所有的方向名用于前端生成 Tab 标签
