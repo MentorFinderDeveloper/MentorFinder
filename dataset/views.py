@@ -256,16 +256,56 @@ def mentor_detail(req: HttpRequest, mentor_id: int):
 
 # 常见的 arXiv 分类代码与中文名称映射表
 ARXIV_SUBJECT_MAPPING = {
-    'cs.AI': '人工智能 (AI)',
-    'cs.CV': '计算机视觉 (CV)',
-    'cs.CL': '计算语言学 (NLP)',
-    'cs.LG': '机器学习 (ML)',
+    # --- 核心计算机科学 (Computer Science) ---
+    'cs.AI': '人工智能 (Artificial Intelligence)',
+    'cs.CV': '计算机视觉 (Computer Vision)',
+    'cs.CL': '自然语言处理 (NLP)',
+    'cs.LG': '机器学习 (Machine Learning)',
     'cs.RO': '机器人学 (Robotics)',
-    'cs.SE': '软件工程 (SE)',
-    'cs.CR': '密码学与安全 (Security)',
-    'cs.HC': '人机交互 (HCI)',
-    'math.OC': '优化与控制 (Optimization)',
-    'stat.ML': '统计机器学习 (Stat ML)',
+    'cs.SE': '软件工程 (Software Engineering)',
+    'cs.CR': '加密与安全 (Cryptography and Security)',
+    'cs.HC': '人机交互 (Human-Computer Interaction)',
+    'cs.DB': '数据库 (Databases)',
+    'cs.DC': '分布式与并行计算 (Distributed and Parallel Computing)',
+    'cs.DS': '数据结构与算法 (Data Structures and Algorithms)',
+    'cs.IR': '信息检索 (Information Retrieval)',
+    'cs.IT': '信息论 (Information Theory)',
+    'cs.LG': '机器学习 (Machine Learning)',
+    'cs.MA': '多智能体系统 (Multiagent Systems)',
+    'cs.MM': '多媒体 (Multimedia)',
+    'cs.NE': '神经与进化计算 (Neural and Evolutionary Computing)',
+    'cs.NI': '网络与互联网体系结构 (Networking and Internet Architecture)',
+    'cs.OS': '操作系统 (Operating Systems)',
+    'cs.PL': '编程语言 (Programming Languages)',
+    'cs.SI': '社会与信息网络 (Social and Information Networks)',
+    'cs.GR': '计算机图形学 (Computer Graphics)',
+    'cs.AR': '硬件体系结构 (Hardware Architecture)',
+    'cs.ET': '新兴技术 (Emerging Technologies)',
+    'cs.SY': '系统与控制 (Systems and Control)',
+    'cs.LO': '计算机科学逻辑 (Logic in Computer Science)',
+
+    # --- 统计学 (Statistics) ---
+    'stat.ML': '统计机器学习 (Machine Learning)',
+    'stat.AP': '应用统计 (Applications)',
+    'stat.ME': '统计方法论 (Methodology)',
+    'stat.TH': '统计理论 (Statistics Theory)',
+    'stat.CO': '统计计算 (Computation)',
+
+    # --- 数学相关 (Mathematics) ---
+    'math.OC': '优化与控制 (Optimization and Control)',
+    'math.ST': '统计理论 (Statistics Theory)',
+    'math.PR': '概率论 (Probability)',
+    'math.DS': '动力系统 (Dynamical Systems)',
+
+    # --- 电气工程与系统科学 (EESS) ---
+    'eess.IV': '图像与视频处理 (Image and Video Processing)',
+    'eess.AS': '音频与语音处理 (Audio and Speech Processing)',
+    'eess.SP': '信号处理 (Signal Processing)',
+    'eess.SY': '系统与控制 (Systems and Control)',
+
+    # --- 其他常见 ---
+    'physics.comp-ph': '计算物理 (Computational Physics)',
+    'q-bio.QM': '定量方法 (Quantitative Methods)',
 }
 
 #把论文按研究方向分类并按时间排序
