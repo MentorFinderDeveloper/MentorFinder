@@ -403,7 +403,10 @@ def paper_timeline_view(request):
             "direction": direction,
             "papers": papers_list,
         }
-        for direction, papers_list in sorted(direction_groups.items())
+        for direction, papers_list in sorted(
+            direction_groups.items(),
+            key=lambda item: (-len(item[1]), item[0]),
+        )
     ]
 
     return request_success({"timeline": timeline})
