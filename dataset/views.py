@@ -9,6 +9,8 @@ from dataset.models import Mentor, Paper
 from utils.utils_jwt import check_jwt_token
 from utils.utils_request import BAD_METHOD, request_failed, request_success
 from utils.utils_require import CheckRequire, MAX_CHAR_LENGTH, require
+from django.shortcuts import render
+from collections import defaultdict
 
 
 def _extract_token(req: HttpRequest) -> str:
@@ -252,3 +254,159 @@ def mentor_detail(req: HttpRequest, mentor_id: int):
     return request_success({"mentor": _serialize_mentor(mentor)})
 
 
+# 常见的 arXiv 分类代码与中文名称映射表
+ARXIV_SUBJECT_MAPPING = {
+    # --- 核心计算机科学 (Computer Science - 截图新增) ---
+    'cs.AI': '人工智能 (Artificial Intelligence)',
+    'cs.CV': '计算机视觉 (Computer Vision)',
+    'cs.CL': '自然语言处理 (NLP)',
+    'cs.LG': '机器学习 (Machine Learning)',
+    'cs.RO': '机器人学 (Robotics)',
+    'cs.SE': '软件工程 (Software Engineering)',
+    'cs.CR': '加密与安全 (Security)',
+    'cs.HC': '人机交互 (HCI)',
+    'cs.CC': '计算复杂性 (Computational Complexity)',
+    'cs.CE': '计算工程与科学 (Computational Engineering)',
+    'cs.CG': '计算几何 (Computational Geometry)',
+    'cs.CY': '计算机与社会 (Computers and Society)',
+    'cs.DM': '离散数学 (Discrete Mathematics)',
+    'cs.GT': '计算机科学与博弈论 (Game Theory)',
+    'cs.MS': '数学软件 (Mathematical Software)',
+    'cs.PF': '系统性能 (Performance)',
+    'cs.SD': '声音与音频处理 (Sound/Audio)',
+    'cs.ET': '新兴技术 (Emerging Technologies)',
+    'cs.GR': '计算机图形学 (Computer Graphics)',
+    'cs.IR': '信息检索 (Information Retrieval)',
+    'cs.IT': '信息论 (Information Theory)',
+    'cs.LO': '计算机科学逻辑 (Logic in Computer Science)',
+    'cs.MA': '多智能体系统 (Multiagent Systems)',
+    'cs.MM': '多媒体 (Multimedia)',
+    'cs.NE': '神经与进化计算 (Neural and Evolutionary Computing)',
+    'cs.NI': '网络与互联网体系结构 (Networking and Internet Architecture)',
+    'cs.OS': '操作系统 (Operating Systems)',
+    'cs.PL': '编程语言 (Programming Languages)',
+    'cs.SI': '社会与信息网络 (Social and Information Networks)',
+
+    'cs.AR': '硬件体系结构 (Hardware Architecture)',
+    'cs.DB': '数据库 (Databases)',
+    'cs.DC': '分布式、并行与集群计算 (Distributed and Parallel Computing)',
+    'cs.DS': '数据结构与算法 (Data Structures and Algorithms)',
+    # --- 天体物理学 (Astrophysics - 截图 5/6) ---
+    'astro-ph.CO': '宇宙学与非星系天体物理 (Cosmology)',
+    'astro-ph.EP': '地球与行星天体物理 (Planetary Astrophysics)',
+    'astro-ph.GA': '星系天体物理 (Astrophysics of Galaxies)',
+    'astro-ph.HE': '高能天体物理现象 (High Energy Astrophysics)',
+    'astro-ph.IM': '天体物理仪器与方法 (Instrumentation)',
+    'astro-ph.SR': '太阳与恒星天体物理 (Solar and Stellar)',
+
+    # --- 凝聚态物理 (Condensed Matter - 截图 5/6) ---
+    'cond-mat.mes-hall': '介观与纳米尺度物理 (Mesoscale Physics)',
+    'cond-mat.mtrl-sci': '材料科学 (Materials Science)',
+    'cond-mat.str-el': '强关联电子系统 (Strongly Correlated)',
+    'cond-mat.supr-con': '超导性 (Superconductivity)',
+
+    # --- 经济学 (Economics - 截图 2) ---
+    'econ.EM': '计量经济学 (Econometrics)',
+    'econ.GN': '一般经济学 (General Economics)',
+
+    # --- 高能物理与相对论 (Physics High Energy - 截图 3) ---
+    'gr-qc': '广义相对论与量子宇宙学 (General Relativity)',
+    'hep-ex': '高能物理-实验 (High Energy Physics - Exp)',
+    'hep-ph': '高能物理-现象学 (High Energy Physics - Phen)',
+    'hep-th': '高能物理-理论 (High Energy Physics - Theory)',
+    'quant-ph': '量子物理 (Quantum Physics)',
+
+    # --- 数学 (Mathematics - 截图 3/4) ---
+    'math-ph': '数学物理 (Mathematical Physics)',
+    'math.AG': '代数几何 (Algebraic Geometry)',
+    'math.AP': '偏微分方程分析 (Analysis of PDEs)',
+    'math.CA': '经典分析与常微分方程 (Classical Analysis)',
+    'math.CO': '组合数学 (Combinatorics)',
+    'math.CV': '复变量 (Complex Variables)',
+    'math.DG': '微分几何 (Differential Geometry)',
+    'math.FA': '泛函分析 (Functional Analysis)',
+    'math.GM': '一般数学 (General Mathematics)',
+    'math.NA': '数值分析 (Numerical Analysis)',
+    'math.NT': '数论 (Number Theory)',
+    'math.RT': '表示论 (Representation Theory)',
+    'math.OC': '优化与控制 (Optimization)',
+
+    # --- 非线性科学 (Nonlinear Sciences - 截图 4) ---
+    'nlin.AO': '适应与自组织系统 (Adaptation)',
+    'nlin.CD': '混沌动力学 (Chaotic Dynamics)',
+    'nlin.PS': '模式形成与孤子 (Pattern Formation)',
+
+    # --- 应用物理学 (Applied Physics - 截图 4/1) ---
+    'physics.atom-ph': '原子物理 (Atomic Physics)',
+    'physics.data-an': '数据分析、统计与概率 (Data Analysis)',
+    'physics.flu-dyn': '流体动力学 (Fluid Dynamics)',
+    'physics.ins-det': '仪器与探测器 (Instrumentation)',
+    'physics.med-ph': '医学物理 (Medical Physics)',
+    'physics.optics': '光学 (Optics)',
+    'physics.plasm-ph': '等离子体物理 (Plasma Physics)',
+    'physics.soc-ph': '物理学与社会 (Physics and Society)',
+    'physics.space-ph': '空间物理 (Space Physics)',
+
+    # --- 定量生物学 (Quantitative Biology - 截图 1) ---
+    'q-bio.BM': '生物分子 (Biomolecules)',
+    'q-bio.GN': '基因组学 (Genomics)',
+    'q-bio.MN': '分子网络 (Molecular Networks)',
+    'q-bio.NC': '神经元与认知 (Neurons and Cognition)',
+
+    # --- 统计学 (Statistics) ---
+    'stat.ML': '统计机器学习 (Stat Machine Learning)',
+    'stat.OT': '其他统计学 (Other Statistics)',
+    # ---其他漏掉的领域---
+    'eess.AS': '音频与语音处理 (Audio and Speech Processing)',
+    'eess.IV': '图像与视频处理 (Image and Video Processing)',
+    'eess.SP': '信号处理 (Signal Processing)',
+    'eess.SY': '系统与控制 (Systems and Control)',
+    'math.DS': '动力系统 (Dynamical Systems)',
+    'math.PR': '概率论 (Probability)',
+    'physics.comp-ph': '计算物理 (Computational Physics)',
+    'q-bio.QM': '定量方法 (Quantitative Methods)',
+    'stat.AP': '应用统计 (Applications)',
+    'stat.ME': '统计方法论 (Methodology)',
+}
+
+#把论文按研究方向分类并按时间排序
+def paper_timeline_view(request):
+    if request.method != "GET":
+        return BAD_METHOD
+
+    papers = Paper.objects.exclude(publish_date__isnull=True).order_by("-publish_date")
+    direction_groups = defaultdict(list)
+
+    for paper in papers:
+        if paper.subjects:
+            raw_subjects = [s.strip() for s in paper.subjects.split(",")]
+            for sub in raw_subjects:
+                readable_name = ARXIV_SUBJECT_MAPPING.get(sub, sub)
+                direction_groups[readable_name].append({
+                    "id": paper.id,
+                    "title": paper.title,
+                    "publish_date": str(paper.publish_date) if paper.publish_date else None,
+                    "author_names": paper.author_names,
+                    "abstract": paper.abstract,
+                })
+        else:
+            direction_groups["其他/未分类"].append({
+                "id": paper.id,
+                "title": paper.title,
+                "publish_date": str(paper.publish_date) if paper.publish_date else None,
+                "author_names": paper.author_names,
+                "abstract": paper.abstract,
+            })
+
+    timeline = [
+        {
+            "direction": direction,
+            "papers": papers_list,
+        }
+        for direction, papers_list in sorted(
+            direction_groups.items(),
+            key=lambda item: (-len(item[1]), item[0]),
+        )
+    ]
+
+    return request_success({"timeline": timeline})
