@@ -52,6 +52,51 @@ def parse_mentor_list(ch_url: str) -> list[dict]:
         
     return mentors
 
+
+def _normalize_name(name: str) -> str:
+    return " ".join(name.strip().lower().split())
+
+
+def _english_name_variants(english_name: str) -> set[str]:
+    normalized = _normalize_name(english_name)
+    if normalized == "":
+        return set()
+
+    variants = {normalized}
+    parts = normalized.split(" ")
+    if len(parts) == 2:
+        variants.add(f"{parts[1]} {parts[0]}")
+        variants.add(f"{parts[1]}, {parts[0]}")
+    return variants
+
+
+def crawl_mentor_by_name(chinese_name: str = "", english_name: str = "") -> dict | None:
+    target_cn = chinese_name.strip()
+    target_en_variants = _english_name_variants(english_name)
+
+    if target_cn == "" and not target_en_variants:
+        return None
+
+    html = fetch_html(url)
+    soup = BeautifulSoup(html, "lxml")
+
+    for item in soup.select("h2"):
+        anchor = item.select_one("a")
+        if anchor is None or "href" not in anchor.attrs:
+            continue
+
+        detail_url = urljoin(url, anchor["href"])
+        mentor = parse_mentor_detail(detail_url)
+
+        if target_cn and mentor.get("Chinese_name", "").strip() == target_cn:
+            return mentor
+
+        mentor_en_variants = _english_name_variants(str(mentor.get("English_name", "")))
+        if target_en_variants and mentor_en_variants & target_en_variants:
+            return mentor
+
+    return None
+
 def parse_mentor_detail(detail_url: str) -> dict:
     html = fetch_html(detail_url)
     soup = BeautifulSoup(html, "lxml")
