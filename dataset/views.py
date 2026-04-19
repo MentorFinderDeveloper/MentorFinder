@@ -6,7 +6,7 @@ from django.http import HttpRequest
 
 from account.models import User
 from dataset.models import Mentor, Paper
-from dataset.services.thu_crawler import crawl_mentor_by_name
+from dataset.services.thu_crawler import build_given_name_surname_pinyin, crawl_mentor_by_name
 from utils.utils_jwt import check_jwt_token
 from utils.utils_request import BAD_METHOD, request_failed, request_success
 from utils.utils_require import CheckRequire, MAX_CHAR_LENGTH, require
@@ -67,6 +67,16 @@ def _require_user(req: HttpRequest):
     if user is None:
         return None, request_failed(2, "Unauthorized", 401)
     return user, None
+
+
+def _build_crawler_lookup_names(chinese_name: str, english_name: str) -> tuple[str, str]:
+    normalized_english = english_name.strip()
+    if normalized_english != "":
+        # English name has priority when both Chinese and English are provided.
+        return "", normalized_english
+
+    normalized_chinese = chinese_name.strip()
+    return "", build_given_name_surname_pinyin(normalized_chinese)
 
 
 def _serialize_paper(paper: Paper):
@@ -244,7 +254,11 @@ def create_custom_mentor(req: HttpRequest):
     if len(english_name) > 100:
         return request_failed(-2, "Invalid parameters. [English_name] is too long", 400)
 
-    crawler_result = crawl_mentor_by_name(chinese_name=chinese_name, english_name=english_name)
+    lookup_chinese_name, lookup_english_name = _build_crawler_lookup_names(chinese_name, english_name)
+    crawler_result = crawl_mentor_by_name(
+        chinese_name=lookup_chinese_name,
+        english_name=lookup_english_name,
+    )
     if crawler_result is None:
         return request_failed(2, "Mentor not found by crawler", 404)
 

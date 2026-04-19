@@ -53,8 +53,28 @@ def parse_mentor_list(ch_url: str) -> list[dict]:
     return mentors
 
 
+def build_given_name_surname_pinyin(chinese_name: str) -> str:
+    """将中文姓名转换为名-姓全拼，例如“唐杰” -> "jie-tang"。"""
+    normalized = chinese_name.strip()
+    if normalized == "":
+        return ""
+
+    pinyin_list = lazy_pinyin(normalized)
+    if len(pinyin_list) == 0:
+        return ""
+    if len(pinyin_list) == 1:
+        return pinyin_list[0].lower()
+
+    surname = pinyin_list[0].lower()
+    given_name = "".join(pinyin_list[1:]).lower()
+    return f"{given_name}-{surname}"
+
+
 def _normalize_name(name: str) -> str:
-    return " ".join(name.strip().lower().split())
+    lowered = name.strip().lower()
+    # Support inputs like "jie-tang" and "tang, jie" by normalizing separators.
+    lowered = lowered.replace("-", " ").replace(",", " ")
+    return " ".join(lowered.split())
 
 
 def _english_name_variants(english_name: str) -> set[str]:
