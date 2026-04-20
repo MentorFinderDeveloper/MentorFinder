@@ -5,7 +5,7 @@ from django.contrib.auth.hashers import check_password
 from django.test import TestCase
 
 from account.models import User, MentorFollow
-from account.services.weekly_push import build_weekly_push_digest
+from account.services.weekly_push import build_weekly_push_digest, render_weekly_push_email
 from dataset.models import Mentor, Paper
 from utils.utils_jwt import generate_jwt_token
 
@@ -670,3 +670,56 @@ class WeeklyPushDigestTests(TestCase):
         self.assertEqual(digest["totalPaperCount"], 0)
         self.assertEqual(digest["mentorGroups"], [])
         self.assertEqual(digest["subjectDistribution"], [])
+
+    def test_render_weekly_push_email_includes_digest_sections(self):
+        digest = build_weekly_push_digest(
+            self.user,
+            [
+                [self.followed_paper],
+                [self.private_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        email_content = render_weekly_push_email(digest)
+
+        self.assertEqual(
+            email_content["subject"],
+            "[MentorFinder]你关注的导师本周有 2 篇新论文",
+        )
+        self.assertIn("按导师分组：", email_content["body"])
+        self.assertIn("- 张三：1 篇", email_content["body"])
+        self.assertIn("- 李四（私有导师）：1 篇", email_content["body"])
+        self.assertIn("1. 机器学习方法研究", email_content["body"])
+        self.assertIn("1. 大语言模型在问答系统中的应用", email_content["body"])
+        self.assertIn("分类：cs.LG, cs.AI", email_content["body"])
+        self.assertIn("研究方向分布：", email_content["body"])
+        self.assertIn("- cs.AI：1 篇", email_content["body"])
+        self.assertIn("- cs.CL：1 篇", email_content["body"])
+
+    def test_render_weekly_push_email_without_updates(self):
+        digest = build_weekly_push_digest(
+            self.user,
+            [
+                [self.unrelated_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        email_content = render_weekly_push_email(digest)
+
+        self.assertEqual(email_content["subject"], "[MentorFinder]本周无论文更新")
+        self.assertIn("本周无论文更新", email_content["body"])
+        self.assertIn(
+            "系统当前未检测到你关注的导师或私有导师有新增论文。",
+            email_content["body"],
+        )
