@@ -1,8 +1,10 @@
 import json
+from io import StringIO
 from datetime import date
 from unittest.mock import patch
 
 from django.contrib.auth.hashers import check_password
+from django.core.management import call_command
 from django.test import TestCase
 
 from account.models import User, MentorFollow
@@ -782,3 +784,78 @@ class WeeklyPushDigestTests(TestCase):
         self.assertEqual(result["sentCount"], 0)
         self.assertEqual(result["digest"]["hasUpdates"], False)
         mock_send_mail.assert_called_once()
+
+
+class MockWeeklyPushCommandTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="command_user",
+            email="command_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.other_user = User.objects.create_user(
+            username="other_command_user",
+            email="other_command_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.mentor = Mentor.objects.create(
+            Chinese_name="周报导师",
+            English_name="Weekly Mentor",
+            research_direction="机器学习",
+        )
+        MentorFollow.objects.create(student=self.user, mentor=self.mentor)
+
+        self.paper = Paper.objects.create(
+            title="周报命令测试论文",
+            abstract="命令测试摘要",
+            publish_date=date(2026, 4, 15),
+            author_names="周报导师",
+            subjects="cs.LG",
+        )
+        self.mentor.add_paper(self.paper.id)
+
+    @patch("account.management.commands.send_weekly_push_mock.send_weekly_push_email")
+    def test_mock_weekly_push_command_sends_to_users(self, mock_send_weekly_push_email):
+        mock_send_weekly_push_email.return_value = {
+            "sent": True,
+            "digest": {
+                "totalPaperCount": 1,
+            },
+        }
+        out = StringIO()
+
+        call_command("send_weekly_push_mock", stdout=out)
+
+        self.assertEqual(mock_send_weekly_push_email.call_count, 2)
+        called_users = {
+            call.args[0].username
+            for call in mock_send_weekly_push_email.call_args_list
+        }
+        self.assertEqual(called_users, {"command_user", "other_command_user"})
+        self.assertIn("Prepared 7 mocked daily paper lists with 1 papers.", out.getvalue())
+        self.assertIn("command_user: sent, 1 matched paper(s).", out.getvalue())
+
+    @patch("account.management.commands.send_weekly_push_mock.send_weekly_push_email")
+    def test_mock_weekly_push_command_filters_by_username(self, mock_send_weekly_push_email):
+        mock_send_weekly_push_email.return_value = {
+            "sent": True,
+            "digest": {
+                "totalPaperCount": 1,
+            },
+        }
+
+        call_command("send_weekly_push_mock", "--user", "command_user", stdout=StringIO())
+
+        mock_send_weekly_push_email.assert_called_once()
+        self.assertEqual(mock_send_weekly_push_email.call_args.args[0].username, "command_user")
+
+    @patch("account.management.commands.send_weekly_push_mock.send_weekly_push_email")
+    def test_mock_weekly_push_command_dry_run_does_not_send(self, mock_send_weekly_push_email):
+        out = StringIO()
+
+        call_command("send_weekly_push_mock", "--dry-run", stdout=out)
+
+        mock_send_weekly_push_email.assert_not_called()
+        self.assertIn("[DRY RUN] command_user: 1 matched paper(s).", out.getvalue())
