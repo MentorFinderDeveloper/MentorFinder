@@ -126,7 +126,7 @@ def followed_mentors(req: HttpRequest):
         return auth_error
 
     follows = MentorFollow.objects.filter(student=user).select_related("mentor")
-    mentors = [follow.mentor for follow in follows]
+    mentors = [follow.mentor for follow in follows if follow.mentor.is_visible_to(user)]
 
     return request_success({
         "mentors": MentorSerializer(mentors, many=True).data,
@@ -147,6 +147,8 @@ def follow_mentor(req: HttpRequest, mentor_id: int):
 
     mentor = Mentor.objects.filter(id=mentor_id).first()
     if mentor is None:
+        return request_failed(2, "Mentor not found", 404)
+    if not mentor.is_visible_to(user):
         return request_failed(2, "Mentor not found", 404)
 
     if req.method == "POST":

@@ -6,6 +6,7 @@ from django.http import HttpRequest
 
 from account.models import User
 from dataset.models import Mentor, Paper
+from dataset.services.thu_crawler import build_given_name_surname_pinyin, crawl_mentor_by_name
 from utils.utils_jwt import check_jwt_token
 from utils.utils_request import BAD_METHOD, request_failed, request_success
 from utils.utils_require import CheckRequire, MAX_CHAR_LENGTH, require
@@ -45,6 +46,39 @@ def _require_admin(req: HttpRequest):
     return None
 
 
+def _resolve_user(req: HttpRequest):
+    token = _extract_token(req)
+    if token == "":
+        return None
+
+    token_data = check_jwt_token(token)
+    if token_data is None:
+        return None
+
+    username = str(token_data.get("username", "")).strip()
+    if username == "":
+        return None
+
+    return User.objects.filter(username=username).first()
+
+
+def _require_user(req: HttpRequest):
+    user = _resolve_user(req)
+    if user is None:
+        return None, request_failed(2, "Unauthorized", 401)
+    return user, None
+
+
+def _build_crawler_lookup_names(chinese_name: str, english_name: str) -> tuple[str, str]:
+    normalized_english = english_name.strip()
+    if normalized_english != "":
+        # English name has priority when both Chinese and English are provided.
+        return "", normalized_english
+
+    normalized_chinese = chinese_name.strip()
+    return "", build_given_name_surname_pinyin(normalized_chinese)
+
+
 def _serialize_paper(paper: Paper):
     return {
         "id": paper.id,
@@ -63,6 +97,7 @@ def _serialize_mentor(mentor: Mentor):
         "research_direction": mentor.research_direction,
         "email": mentor.email,
         "profile": mentor.profile,
+        "is_private": mentor.is_private,
         "paper_ids": [_serialize_paper(paper) for paper in mentor.get_papers()],
     }
 
@@ -187,10 +222,79 @@ def create_mentor(req: HttpRequest):
     body = json.loads(req.body.decode("utf-8"))
     mentor_payload = _validate_mentor_payload(body)
 
-    mentor = Mentor.objects.create(**mentor_payload, paper_ids="")
+    mentor = Mentor.objects.create(**mentor_payload, paper_ids="", owner=None)
     _refresh_mentor_papers(mentor)
 
     return request_success({"mentor": _serialize_mentor(mentor)})
+
+
+@CheckRequire
+def create_custom_mentor(req: HttpRequest):
+    if req.method != "POST":
+        return BAD_METHOD
+
+    user, auth_error = _require_user(req)
+    if auth_error is not None:
+        return auth_error
+
+    body = json.loads(req.body.decode("utf-8"))
+
+    chinese_name = str(body.get("Chinese_name", "")).strip()
+    english_name = str(body.get("English_name", "")).strip()
+
+    if chinese_name == "" and english_name == "":
+        return request_failed(
+            -2,
+            "Invalid parameters. [Chinese_name] or [English_name] is required",
+            400,
+        )
+
+    if len(chinese_name) > 100:
+        return request_failed(-2, "Invalid parameters. [Chinese_name] is too long", 400)
+    if len(english_name) > 100:
+        return request_failed(-2, "Invalid parameters. [English_name] is too long", 400)
+
+    lookup_chinese_name, lookup_english_name = _build_crawler_lookup_names(chinese_name, english_name)
+    crawler_result = crawl_mentor_by_name(
+        chinese_name=lookup_chinese_name,
+        english_name=lookup_english_name,
+    )
+    if crawler_result is None:
+        return request_failed(2, "Mentor not found by crawler", 404)
+
+    final_chinese_name = str(crawler_result.get("Chinese_name") or chinese_name).strip()
+    final_english_name = str(crawler_result.get("English_name") or english_name).strip()
+    if final_chinese_name == "":
+        return request_failed(2, "Mentor not found by crawler", 404)
+
+    if Mentor.objects.filter(owner=user, Chinese_name=final_chinese_name).exists():
+        return request_failed(3, "Mentor already exists in your private library", 409)
+
+    mentor = Mentor.objects.create(
+        Chinese_name=final_chinese_name,
+        English_name=final_english_name or None,
+        research_direction=str(crawler_result.get("research_direction") or "").strip() or "未提供",
+        email=str(crawler_result.get("email") or "").strip() or None,
+        profile=str(crawler_result.get("profile") or "").strip() or None,
+        paper_ids="",
+        owner=user,
+    )
+    _refresh_mentor_papers(mentor)
+
+    return request_success({"mentor": _serialize_mentor(mentor)})
+
+
+@CheckRequire
+def my_custom_mentors(req: HttpRequest):
+    if req.method != "GET":
+        return BAD_METHOD
+
+    user, auth_error = _require_user(req)
+    if auth_error is not None:
+        return auth_error
+
+    mentors = Mentor.objects.filter(owner=user).order_by("-id")
+    return request_success({"mentors": [_serialize_mentor(mentor) for mentor in mentors]})
 
 
 @CheckRequire
@@ -232,12 +336,23 @@ def mentor_detail(req: HttpRequest, mentor_id: int):
     if mentor is None:
         return request_failed(2, "Mentor not found", 404)
 
+    current_user = _resolve_user(req)
+    if not mentor.is_visible_to(current_user):
+        return request_failed(2, "Mentor not found", 404)
+
     if req.method == "GET":
         return request_success({"mentor": _serialize_mentor(mentor)})
 
-    auth_error = _require_admin(req)
-    if auth_error is not None:
-        return auth_error
+    if mentor.owner_id is None:
+        auth_error = _require_admin(req)
+        if auth_error is not None:
+            return auth_error
+    else:
+        actor, auth_error = _require_user(req)
+        if auth_error is not None:
+            return auth_error
+        if actor.role != "admin" and actor.id != mentor.owner_id:
+            return request_failed(3, "Permission denied", 403)
 
     if req.method == "DELETE":
         mentor.delete()

@@ -218,6 +218,15 @@ class MentorFollowViewTests(TestCase):
             profile="主要研究自然语言处理。",
         )
 
+        self.private_mentor = Mentor.objects.create(
+            Chinese_name="王五",
+            English_name="Wang Wu",
+            research_direction="强化学习",
+            email="wangwu@example.com",
+            profile="私有导师",
+            owner=self.other_student,
+        )
+
     def auth_headers(self, token: str):
         return {
             "HTTP_AUTHORIZATION": f"Bearer {token}",
@@ -269,6 +278,21 @@ class MentorFollowViewTests(TestCase):
         self.assertEqual(res.status_code, 404)
         self.assertEqual(res.json()["code"], 2)
         self.assertEqual(res.json()["info"], "Mentor not found")
+
+    def test_student_cannot_follow_other_students_private_mentor(self):
+        res = self.client.post(
+            f"/follow/mentors/{self.private_mentor.id}",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
+        self.assertFalse(
+            MentorFollow.objects.filter(
+                student=self.student,
+                mentor=self.private_mentor,
+            ).exists()
+        )
 
     def test_duplicate_follow_is_idempotent(self):
         first_res = self.client.post(

@@ -3,8 +3,16 @@ from dataset.models import Mentor, Paper
 from django.db.models import Q
 
 
-def search_mentors(keyword: str) -> list[dict]:
-    mentors = Mentor.objects.filter(
+def _visible_mentors(user):
+    if user is None:
+        return Mentor.objects.filter(owner__isnull=True)
+    if getattr(user, "role", "") == "admin":
+        return Mentor.objects.all()
+    return Mentor.objects.filter(Q(owner__isnull=True) | Q(owner_id=user.id))
+
+
+def search_mentors(keyword: str, user=None) -> list[dict]:
+    mentors = _visible_mentors(user).filter(
         Q(Chinese_name__iexact=keyword) |
         Q(English_name__iexact=keyword) |
         Q(research_direction__iexact=keyword)
@@ -13,7 +21,7 @@ def search_mentors(keyword: str) -> list[dict]:
     return MentorSerializer(mentors, many=True).data
 
 
-def search_papers(keyword: str) -> list[dict]:
+def search_papers(keyword: str, user=None) -> list[dict]:
     # accurate search
     
     # keyword is title
@@ -23,7 +31,7 @@ def search_papers(keyword: str) -> list[dict]:
     # (assume that a mentor's name or research direction is not the title of any paper)
     if not papers.exists():
         mentor_ids: list[int] = []
-        for mentor in Mentor.objects.filter(
+        for mentor in _visible_mentors(user).filter(
             Q(Chinese_name__iexact=keyword) |
             Q(English_name__iexact=keyword) |
             Q(research_direction__iexact=keyword)

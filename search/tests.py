@@ -1,11 +1,29 @@
 from django.test import TestCase
 
+from account.models import User
 from dataset.models import Mentor, Paper
 from search.services.engine import search_papers_fuzzy
+from utils.utils_jwt import generate_jwt_token
 
 
 class SearchTests(TestCase):
     def setUp(self):
+        self.owner = User.objects.create_user(
+            username="owner1",
+            email="owner1@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.owner_token = generate_jwt_token("owner1")
+
+        self.other_user = User.objects.create_user(
+            username="other1",
+            email="other1@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.other_token = generate_jwt_token("other1")
+
         self.zs = Mentor.objects.create(
             Chinese_name="张三",
             English_name="Zhang San",
@@ -34,9 +52,29 @@ class SearchTests(TestCase):
             author_names="李四,张三",
         )
 
+        self.private_paper = Paper.objects.create(
+            title="隐私导师论文",
+            abstract="仅用于测试私有导师检索可见性。",
+            publish_date="2024-07-01",
+            author_names="王五",
+        )
+
+        self.private_mentor = Mentor.objects.create(
+            Chinese_name="王五",
+            English_name="Wang Wu",
+            research_direction="强化学习",
+            email="wangwu@example.com",
+            profile="私有导师",
+            owner=self.owner,
+        )
+
         self.zs.add_paper(self.paper1.id)
         self.zs.add_paper(self.paper2.id)
         self.ls.add_paper(self.paper2.id)
+        self.private_mentor.add_paper(self.private_paper.id)
+
+    def auth_headers(self, token: str):
+        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
 
     def test_search_health(self):
         res = self.client.get("/search/health")
@@ -222,6 +260,36 @@ class SearchTests(TestCase):
         self.assertEqual(mentor_res.json()["mentors"], [])
         self.assertEqual(paper_res.status_code, 200)
         self.assertEqual(paper_res.json()["papers"], [])
+
+    def test_search_mentors_excludes_private_mentor_without_auth(self):
+        res = self.client.get("/search/mentors", {"keyword": "王五"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["mentors"], [])
+
+    def test_search_mentors_includes_private_mentor_for_owner(self):
+        res = self.client.get(
+            "/search/mentors",
+            {"keyword": "王五"},
+            **self.auth_headers(self.owner_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(len(res.json()["mentors"]), 1)
+        self.assertEqual(res.json()["mentors"][0]["Chinese_name"], "王五")
+
+    def test_search_mentors_excludes_private_mentor_for_other_user(self):
+        res = self.client.get(
+            "/search/mentors",
+            {"keyword": "王五"},
+            **self.auth_headers(self.other_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["mentors"], [])
 
     def test_search_keyword_missing(self):
         res = self.client.get("/search/mentors")

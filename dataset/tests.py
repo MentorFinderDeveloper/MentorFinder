@@ -311,6 +311,14 @@ class MentorViewTest(TestCase):
             role="student"
         )
         self.normal_token = generate_jwt_token("user")
+
+        self.other_user = AccountUser.objects.create_user(
+            username="other",
+            email="other@test.com",
+            password="other123",
+            role="student"
+        )
+        self.other_token = generate_jwt_token("other")
         
         # 创建测试导师
         self.mentor = Mentor.objects.create(
@@ -394,6 +402,144 @@ class MentorViewTest(TestCase):
             HTTP_AUTHORIZATION=f"Bearer {self.admin_token}"
         )
         self.assertEqual(response.status_code, 400)
+
+    @patch("dataset.views.crawl_mentor_by_name")
+    def test_create_custom_mentor_success(self, mock_crawler):
+        mock_crawler.return_value = {
+            "Chinese_name": "王五",
+            "English_name": "Wang Wu",
+            "research_direction": "强化学习",
+            "email": "wangwu@example.com",
+            "profile": "测试私有导师",
+        }
+
+        response = self.client.post(
+            "/dataset/mentors/custom",
+            data=json.dumps({
+                "Chinese_name": "王五",
+                "English_name": "Wang Wu",
+            }),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.normal_token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        created = Mentor.objects.filter(owner=self.normal_user, Chinese_name="王五").first()
+        self.assertIsNotNone(created)
+        self.assertEqual(response.json()["mentor"]["Chinese_name"], "王五")
+        self.assertEqual(response.json()["mentor"]["is_private"], True)
+
+    @patch("dataset.views.crawl_mentor_by_name")
+    def test_create_custom_mentor_prefers_english_name_for_crawler(self, mock_crawler):
+        mock_crawler.return_value = {
+            "Chinese_name": "王五",
+            "English_name": "Wang Wu",
+            "research_direction": "强化学习",
+            "email": "wangwu@example.com",
+            "profile": "测试私有导师",
+        }
+
+        response = self.client.post(
+            "/dataset/mentors/custom",
+            data=json.dumps({
+                "Chinese_name": "错误中文名",
+                "English_name": "Wang Wu",
+            }),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.normal_token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        mock_crawler.assert_called_once_with(chinese_name="", english_name="Wang Wu")
+
+    @patch("dataset.views.crawl_mentor_by_name")
+    def test_create_custom_mentor_uses_pinyin_name_surname_when_english_missing(self, mock_crawler):
+        mock_crawler.return_value = {
+            "Chinese_name": "唐杰",
+            "English_name": "Jie Tang",
+            "research_direction": "知识图谱",
+            "email": "jietang@example.com",
+            "profile": "测试私有导师",
+        }
+
+        response = self.client.post(
+            "/dataset/mentors/custom",
+            data=json.dumps({
+                "Chinese_name": "唐杰",
+            }),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.normal_token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        mock_crawler.assert_called_once_with(chinese_name="", english_name="jie-tang")
+
+    def test_create_custom_mentor_requires_login(self):
+        response = self.client.post(
+            "/dataset/mentors/custom",
+            data=json.dumps({
+                "Chinese_name": "王五",
+            }),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    @patch("dataset.views.crawl_mentor_by_name")
+    def test_my_custom_mentors_only_returns_current_user_records(self, mock_crawler):
+        mock_crawler.return_value = {
+            "Chinese_name": "王五",
+            "English_name": "Wang Wu",
+            "research_direction": "强化学习",
+            "email": "wangwu@example.com",
+            "profile": "测试私有导师",
+        }
+
+        self.client.post(
+            "/dataset/mentors/custom",
+            data=json.dumps({"Chinese_name": "王五"}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.normal_token}",
+        )
+
+        Mentor.objects.create(
+            Chinese_name="赵六",
+            English_name="Zhao Liu",
+            research_direction="数据库",
+            owner=self.other_user,
+        )
+
+        response = self.client.get(
+            "/dataset/mentors/mine",
+            HTTP_AUTHORIZATION=f"Bearer {self.normal_token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        names = {mentor["Chinese_name"] for mentor in response.json()["mentors"]}
+        self.assertEqual(names, {"王五"})
+
+    def test_private_mentor_detail_only_visible_to_owner(self):
+        private_mentor = Mentor.objects.create(
+            Chinese_name="私有导师",
+            English_name="Private Mentor",
+            research_direction="系统安全",
+            owner=self.normal_user,
+        )
+
+        anonymous_res = self.client.get(f"/dataset/mentors/{private_mentor.id}")
+        self.assertEqual(anonymous_res.status_code, 404)
+
+        other_res = self.client.get(
+            f"/dataset/mentors/{private_mentor.id}",
+            HTTP_AUTHORIZATION=f"Bearer {self.other_token}",
+        )
+        self.assertEqual(other_res.status_code, 404)
+
+        owner_res = self.client.get(
+            f"/dataset/mentors/{private_mentor.id}",
+            HTTP_AUTHORIZATION=f"Bearer {self.normal_token}",
+        )
+        self.assertEqual(owner_res.status_code, 200)
 
     def test_get_mentor_without_auth(self):
         """测试未登录也可以获取导师详情"""

@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 
 
@@ -62,12 +63,31 @@ class Mentor(models.Model):
     email = models.EmailField(blank=True, null=True, verbose_name="导师邮箱")
     profile = models.TextField(blank=True, null=True, verbose_name="导师画像")
     paper_ids = models.TextField(blank=True, default="", verbose_name="论文ID列表") # 论文列表以字符串形式保存
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="private_mentors",
+        null=True,
+        blank=True,
+        verbose_name="所属用户",
+    )
     class Meta:
         verbose_name = "导师"
         verbose_name_plural = verbose_name
 
     def __str__(self):
         return self.Chinese_name
+
+    @property
+    def is_private(self) -> bool:
+        return self.owner_id is not None
+
+    def is_visible_to(self, user) -> bool:
+        if self.owner_id is None:
+            return True
+        if user is None:
+            return False
+        return self.owner_id == user.id or getattr(user, "role", "") == "admin"
 
     def get_paper_id_list(self): # 将逗号分隔的字符串转换为整数列表 
         if self.paper_ids == "":

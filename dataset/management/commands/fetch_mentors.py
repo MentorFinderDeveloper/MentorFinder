@@ -18,11 +18,13 @@ class Command(BaseCommand):
         for item in mentors:
             mentor, created = Mentor.objects.update_or_create(
                 Chinese_name=item["Chinese_name"],
+                owner=None,
                 defaults={
                     "English_name": item["English_name"] or None,
                     "research_direction": item["research_direction"] or "未提供",
                     "email": item["email"] or None,
                     "profile": item["profile"] or None,
+                    "owner": None,
                 },
             )
             if created:

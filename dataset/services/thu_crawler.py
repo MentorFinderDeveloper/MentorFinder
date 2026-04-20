@@ -52,6 +52,71 @@ def parse_mentor_list(ch_url: str) -> list[dict]:
         
     return mentors
 
+
+def build_given_name_surname_pinyin(chinese_name: str) -> str:
+    """将中文姓名转换为名-姓全拼，例如“唐杰” -> "jie-tang"。"""
+    normalized = chinese_name.strip()
+    if normalized == "":
+        return ""
+
+    pinyin_list = lazy_pinyin(normalized)
+    if len(pinyin_list) == 0:
+        return ""
+    if len(pinyin_list) == 1:
+        return pinyin_list[0].lower()
+
+    surname = pinyin_list[0].lower()
+    given_name = "".join(pinyin_list[1:]).lower()
+    return f"{given_name}-{surname}"
+
+
+def _normalize_name(name: str) -> str:
+    lowered = name.strip().lower()
+    # Support inputs like "jie-tang" and "tang, jie" by normalizing separators.
+    lowered = lowered.replace("-", " ").replace(",", " ")
+    return " ".join(lowered.split())
+
+
+def _english_name_variants(english_name: str) -> set[str]:
+    normalized = _normalize_name(english_name)
+    if normalized == "":
+        return set()
+
+    variants = {normalized}
+    parts = normalized.split(" ")
+    if len(parts) == 2:
+        variants.add(f"{parts[1]} {parts[0]}")
+        variants.add(f"{parts[1]}, {parts[0]}")
+    return variants
+
+
+def crawl_mentor_by_name(chinese_name: str = "", english_name: str = "") -> dict | None:
+    target_cn = chinese_name.strip()
+    target_en_variants = _english_name_variants(english_name)
+
+    if target_cn == "" and not target_en_variants:
+        return None
+
+    html = fetch_html(url)
+    soup = BeautifulSoup(html, "lxml")
+
+    for item in soup.select("h2"):
+        anchor = item.select_one("a")
+        if anchor is None or "href" not in anchor.attrs:
+            continue
+
+        detail_url = urljoin(url, anchor["href"])
+        mentor = parse_mentor_detail(detail_url)
+
+        if target_cn and mentor.get("Chinese_name", "").strip() == target_cn:
+            return mentor
+
+        mentor_en_variants = _english_name_variants(str(mentor.get("English_name", "")))
+        if target_en_variants and mentor_en_variants & target_en_variants:
+            return mentor
+
+    return None
+
 def parse_mentor_detail(detail_url: str) -> dict:
     html = fetch_html(detail_url)
     soup = BeautifulSoup(html, "lxml")
