@@ -128,6 +128,18 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+
+# Email
+# Default to console backend so local weekly push tests never send real emails.
+EMAIL_BACKEND = os.environ.get(
+    'EMAIL_BACKEND',
+    'django.core.mail.backends.console.EmailBackend',
+)
+DEFAULT_FROM_EMAIL = os.environ.get(
+    'DEFAULT_FROM_EMAIL',
+    'MentorFinder <no-reply@mentorfinder.local>',
+)
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.1/ref/settings/#default-auto-field
 
