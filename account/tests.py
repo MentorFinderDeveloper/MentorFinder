@@ -1,11 +1,16 @@
 import json
 from datetime import date
+from unittest.mock import patch
 
 from django.contrib.auth.hashers import check_password
 from django.test import TestCase
 
 from account.models import User, MentorFollow
-from account.services.weekly_push import build_weekly_push_digest, render_weekly_push_email
+from account.services.weekly_push import (
+    build_weekly_push_digest,
+    render_weekly_push_email,
+    send_weekly_push_email,
+)
 from dataset.models import Mentor, Paper
 from utils.utils_jwt import generate_jwt_token
 
@@ -723,3 +728,57 @@ class WeeklyPushDigestTests(TestCase):
             "系统当前未检测到你关注的导师或私有导师有新增论文。",
             email_content["body"],
         )
+
+    @patch("account.services.weekly_push.send_mail")
+    def test_send_weekly_push_email_sends_rendered_digest(self, mock_send_mail):
+        mock_send_mail.return_value = 1
+
+        result = send_weekly_push_email(
+            self.user,
+            [
+                [self.followed_paper],
+                [self.private_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        self.assertEqual(result["sent"], True)
+        self.assertEqual(result["sentCount"], 1)
+        self.assertEqual(result["digest"]["totalPaperCount"], 2)
+        self.assertIn("机器学习方法研究", result["email"]["body"])
+
+        mock_send_mail.assert_called_once()
+        send_kwargs = mock_send_mail.call_args.kwargs
+        self.assertEqual(
+            send_kwargs["subject"],
+            "[MentorFinder]你关注的导师本周有 2 篇新论文",
+        )
+        self.assertEqual(send_kwargs["recipient_list"], ["digest_user@example.com"])
+        self.assertEqual(send_kwargs["fail_silently"], False)
+        self.assertIn("大语言模型在问答系统中的应用", send_kwargs["message"])
+
+    @patch("account.services.weekly_push.send_mail")
+    def test_send_weekly_push_email_reports_send_failure(self, mock_send_mail):
+        mock_send_mail.return_value = 0
+
+        result = send_weekly_push_email(
+            self.user,
+            [
+                [self.unrelated_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        self.assertEqual(result["sent"], False)
+        self.assertEqual(result["sentCount"], 0)
+        self.assertEqual(result["digest"]["hasUpdates"], False)
+        mock_send_mail.assert_called_once()

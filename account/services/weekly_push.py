@@ -1,6 +1,9 @@
 from collections import Counter
 from collections.abc import Iterable
 
+from django.conf import settings
+from django.core.mail import send_mail
+
 from account.models import MentorFollow, User
 from dataset.models import Mentor, Paper
 
@@ -113,6 +116,29 @@ def render_weekly_push_email(digest: dict) -> dict:
     return {
         "subject": subject,
         "body": "\n".join(body_lines).rstrip(),
+    }
+
+
+def send_weekly_push_email(
+    user: User,
+    daily_paper_lists: Iterable[Iterable[Paper]],
+) -> dict:
+    digest = build_weekly_push_digest(user, daily_paper_lists)
+    email_content = render_weekly_push_email(digest)
+
+    sent_count = send_mail(
+        subject=email_content["subject"],
+        message=email_content["body"],
+        from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None),
+        recipient_list=[user.email],
+        fail_silently=False,
+    )
+
+    return {
+        "digest": digest,
+        "email": email_content,
+        "sent": sent_count > 0,
+        "sentCount": sent_count,
     }
 
 
