@@ -1,10 +1,12 @@
 import json
+from datetime import date
 
 from django.contrib.auth.hashers import check_password
 from django.test import TestCase
 
 from account.models import User, MentorFollow
-from dataset.models import Mentor
+from account.services.weekly_push import build_weekly_push_digest
+from dataset.models import Mentor, Paper
 from utils.utils_jwt import generate_jwt_token
 
 
@@ -488,3 +490,183 @@ class UserProfileViewTests(TestCase):
 
         self.assertEqual(res.status_code, 405)
         self.assertEqual(res.json()["code"], -3)
+
+
+class WeeklyPushDigestTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="digest_user",
+            email="digest_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.other_user = User.objects.create_user(
+            username="other_digest_user",
+            email="other_digest_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+
+        self.followed_mentor = Mentor.objects.create(
+            Chinese_name="张三",
+            English_name="Zhang San",
+            research_direction="机器学习",
+        )
+        self.private_mentor = Mentor.objects.create(
+            Chinese_name="李四",
+            English_name="Li Si",
+            research_direction="自然语言处理",
+            owner=self.user,
+        )
+        self.unrelated_mentor = Mentor.objects.create(
+            Chinese_name="王五",
+            English_name="Wang Wu",
+            research_direction="数据库",
+            owner=self.other_user,
+        )
+
+        MentorFollow.objects.create(student=self.user, mentor=self.followed_mentor)
+        MentorFollow.objects.create(student=self.user, mentor=self.private_mentor)
+
+        self.followed_paper = Paper.objects.create(
+            title="机器学习方法研究",
+            abstract="第一行摘要\n第二行摘要\n第三行摘要\n第四行摘要",
+            publish_date=date(2026, 4, 16),
+            author_names="张三, Alice",
+            subjects="cs.LG, cs.AI",
+        )
+        self.private_paper = Paper.objects.create(
+            title="大语言模型在问答系统中的应用",
+            abstract="私有导师论文摘要",
+            publish_date=date(2026, 4, 17),
+            author_names="李四, Bob",
+            subjects="cs.CL",
+        )
+        self.unrelated_paper = Paper.objects.create(
+            title="不应推送的论文",
+            abstract="无关摘要",
+            publish_date=date(2026, 4, 18),
+            author_names="王五",
+            subjects="cs.DB",
+        )
+
+        self.followed_mentor.add_paper(self.followed_paper.id)
+        self.private_mentor.add_paper(self.private_paper.id)
+        self.unrelated_mentor.add_paper(self.unrelated_paper.id)
+
+    def test_build_weekly_digest_groups_followed_and_private_mentor_papers(self):
+        digest = build_weekly_push_digest(
+            self.user,
+            [
+                [self.followed_paper],
+                [],
+                [self.private_paper, self.unrelated_paper],
+                [],
+                [self.followed_paper],
+                [],
+                [],
+            ],
+        )
+
+        self.assertEqual(digest["hasUpdates"], True)
+        self.assertEqual(digest["totalPaperCount"], 2)
+        self.assertEqual(
+            digest["title"],
+            "[MentorFinder]你关注的导师本周有 2 篇新论文",
+        )
+
+        mentor_names = {
+            group["mentorName"]
+            for group in digest["mentorGroups"]
+        }
+        self.assertEqual(mentor_names, {"张三", "李四"})
+        self.assertEqual(len(digest["mentorGroups"]), 2)
+
+        all_paper_titles = {
+            paper["title"]
+            for group in digest["mentorGroups"]
+            for paper in group["papers"]
+        }
+        self.assertEqual(
+            all_paper_titles,
+            {"机器学习方法研究", "大语言模型在问答系统中的应用"},
+        )
+
+        followed_group = next(
+            group
+            for group in digest["mentorGroups"]
+            if group["mentorName"] == "张三"
+        )
+        followed_paper = followed_group["papers"][0]
+        self.assertEqual(
+            followed_paper["abstractPreview"],
+            "第一行摘要\n第二行摘要\n第三行摘要",
+        )
+        self.assertEqual(followed_paper["subjects"], ["cs.LG", "cs.AI"])
+
+    def test_build_weekly_digest_deduplicates_private_mentor_follow(self):
+        digest = build_weekly_push_digest(
+            self.user,
+            [
+                [self.private_paper],
+                [self.private_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        private_groups = [
+            group
+            for group in digest["mentorGroups"]
+            if group["mentorName"] == "李四"
+        ]
+        self.assertEqual(len(private_groups), 1)
+        self.assertEqual(private_groups[0]["paperCount"], 1)
+        self.assertEqual(digest["totalPaperCount"], 1)
+
+    def test_build_weekly_digest_counts_subject_distribution(self):
+        digest = build_weekly_push_digest(
+            self.user,
+            [
+                [self.followed_paper, self.private_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        self.assertEqual(
+            digest["subjectDistribution"],
+            [
+                {"subject": "cs.AI", "count": 1},
+                {"subject": "cs.CL", "count": 1},
+                {"subject": "cs.LG", "count": 1},
+            ],
+        )
+
+    def test_build_weekly_digest_returns_empty_summary_without_updates(self):
+        digest = build_weekly_push_digest(
+            self.user,
+            [
+                [self.unrelated_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        self.assertEqual(digest["hasUpdates"], False)
+        self.assertEqual(digest["title"], "[MentorFinder]本周无论文更新")
+        self.assertEqual(digest["summary"], "本周无论文更新")
+        self.assertEqual(digest["totalPaperCount"], 0)
+        self.assertEqual(digest["mentorGroups"], [])
+        self.assertEqual(digest["subjectDistribution"], [])
