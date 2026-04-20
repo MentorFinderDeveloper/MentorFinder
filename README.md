@@ -39,6 +39,44 @@ python3 manage.py runserver
 
 
 
+## 周报推送 mock 命令
+
+后端当前提供了一个手动触发的 mock 周报命令，用于验证“构造本周新增论文列表 -> 生成周报内容 -> 渲染邮件 -> 发送邮件”的链路。
+
+本地预览周报结果，不发送邮件：
+
+```bash
+python manage.py send_weekly_push_mock --dry-run
+```
+
+只预览某个用户的周报：
+
+```bash
+python manage.py send_weekly_push_mock --user <username> --dry-run
+```
+
+触发发送流程：
+
+```bash
+python manage.py send_weekly_push_mock --user <username>
+```
+
+默认邮件后端是 Django console backend，所以本地发送时邮件内容会打印到控制台，不会真正发出。若需要接入真实 SMTP，可以通过环境变量覆盖 `EMAIL_BACKEND` 和 `DEFAULT_FROM_EMAIL`。
+
+mock 数据说明：
+
+- 命令会从数据库最近的论文中取 `--paper-limit` 篇，默认 `20` 篇。
+- 这些论文会被轮流分配到 7 个 list，模拟上周四到本周三每天爬虫发现的新论文。
+- 当前逻辑会给有邮箱的用户生成周报；周报内容只包含用户关注导师和用户私有导师关联的新论文。
+
+当前还没有实现的内容：
+
+- 没有接入真实定时任务。
+- 没有使用 `Paper.discovered_at` 判定真实发现时间。
+- 没有做邮箱验证。
+- 没有接入真实 SMTP 配置。
+
+
 ## 代码阅读
 
 快速阅读提供的代码框架，试着回答以下问题：
