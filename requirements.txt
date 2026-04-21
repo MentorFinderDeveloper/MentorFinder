@@ -14,6 +14,7 @@ lxml
 arxiv
 scholarly
 pypinyin
+apscheduler
 # TODO Start: [Student] Add dependency on uWSGI
 
 # TODO End: [Student] Add dependency on uWSGI

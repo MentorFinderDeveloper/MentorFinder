@@ -109,10 +109,25 @@ JSON 文件格式示例：
 
 当前还没有实现的内容：
 
-- 没有接入真实定时任务。
 - 没有使用 `Paper.discovered_at` 判定真实发现时间。
 - 没有做邮箱验证。
 - 没有接入真实 SMTP 配置。
+
+## 爬虫定时任务
+
+后端已提供 `run_daily_sync` 命令，会在指定时刻执行 `sync_dataset`（即先抓导师再抓论文）。默认配置是每天 `04:00`（`Asia/Shanghai`）。
+
+本地手动运行：
+
+```bash
+python manage.py run_daily_sync
+```
+
+在 Docker 启动脚本中会直接后台拉起该任务：
+
+```bash
+python3 manage.py run_daily_sync &
+```
 
 
 ## 代码阅读
