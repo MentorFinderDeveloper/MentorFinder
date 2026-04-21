@@ -14,6 +14,9 @@ from django.shortcuts import render
 from collections import defaultdict
 
 
+PRIVATE_MENTOR_LIMIT = 10
+
+
 def _extract_token(req: HttpRequest) -> str:
     auth_header = req.headers.get("Authorization", "").strip()
     if auth_header == "":
@@ -253,6 +256,13 @@ def create_custom_mentor(req: HttpRequest):
         return request_failed(-2, "Invalid parameters. [Chinese_name] is too long", 400)
     if len(english_name) > 100:
         return request_failed(-2, "Invalid parameters. [English_name] is too long", 400)
+
+    if Mentor.objects.filter(owner=user).count() >= PRIVATE_MENTOR_LIMIT:
+        return request_failed(
+            3,
+            f"Private mentor limit reached (max {PRIVATE_MENTOR_LIMIT})",
+            409,
+        )
 
     lookup_chinese_name, lookup_english_name = _build_crawler_lookup_names(chinese_name, english_name)
     crawler_result = crawl_mentor_by_name(

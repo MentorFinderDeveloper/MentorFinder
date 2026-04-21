@@ -486,6 +486,31 @@ class MentorViewTest(TestCase):
         self.assertEqual(response.status_code, 401)
 
     @patch("dataset.views.crawl_mentor_by_name")
+    def test_create_custom_mentor_rejects_when_reaching_limit(self, mock_crawler):
+        for idx in range(10):
+            Mentor.objects.create(
+                Chinese_name=f"私有导师{idx}",
+                English_name=f"Private Mentor {idx}",
+                research_direction="测试方向",
+                owner=self.normal_user,
+            )
+
+        response = self.client.post(
+            "/dataset/mentors/custom",
+            data=json.dumps({
+                "Chinese_name": "王五",
+                "English_name": "Wang Wu",
+            }),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.normal_token}",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["info"], "Private mentor limit reached (max 10)")
+        self.assertEqual(Mentor.objects.filter(owner=self.normal_user).count(), 10)
+        mock_crawler.assert_not_called()
+
+    @patch("dataset.views.crawl_mentor_by_name")
     def test_my_custom_mentors_only_returns_current_user_records(self, mock_crawler):
         mock_crawler.return_value = {
             "Chinese_name": "王五",
