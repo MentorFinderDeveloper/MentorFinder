@@ -32,7 +32,6 @@ class Command(BaseCommand):
             # 构建查询：au 代表 author (作者)
             search = arxiv.Search(
                 query=f'au:"{mentor.English_name}"',
-                max_results=10,  # 限制抓取数量，避免一次性过多
                 sort_by=arxiv.SortCriterion.SubmittedDate
             )
 
@@ -75,7 +74,7 @@ class Command(BaseCommand):
             author = next(search_query) # 获取第一个匹配的作者
             author = scholarly.fill(author) # 填充该作者的详细信息（包括论文列表）
 
-            for pub in author['publications'][:10]: # 限制前10篇
+            for pub in author['publications']:
                 pub_filled = scholarly.fill(pub) # 填充单篇论文详细信息获取摘要和作者
                 
                 title = pub_filled['bib'].get('title', '')

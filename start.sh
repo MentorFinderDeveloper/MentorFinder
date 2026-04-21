@@ -5,6 +5,7 @@ python3 manage.py makemigrations dataset
 python3 manage.py migrate
 python3 manage.py createsuperuser --noinput || true
 python3 manage.py sync_dataset || true
+python3 manage.py run_daily_sync &
 
 uwsgi --module=MFBackend.wsgi:application \
     --env DJANGO_SETTINGS_MODULE=MFBackend.settings \
