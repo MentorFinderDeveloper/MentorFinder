@@ -1,7 +1,12 @@
 from django.http import HttpRequest
 
 from account.models import User
-from search.services.engine import search_mentors, search_papers
+from search.services.engine import (
+    search_mentors,
+    search_mentors_fuzzy,
+    search_papers,
+    search_papers_fuzzy,
+)
 from utils.utils_jwt import check_jwt_token
 from utils.utils_require import CheckRequire, MAX_CHAR_LENGTH, require
 from utils.utils_request import BAD_METHOD, request_success
@@ -27,6 +32,18 @@ def _get_keyword(req: HttpRequest) -> str:
     assert keyword != "", "Invalid parameters. [keyword] cannot be empty"
     assert len(keyword) <= MAX_CHAR_LENGTH, "Invalid parameters. [keyword] is too long"
     return keyword
+
+
+def _get_search_mode(req: HttpRequest) -> str:
+    search_mode = str(req.GET.get("search_mode", "exact")).strip().lower()
+    assert search_mode in {"exact", "fuzzy"}, "Invalid parameters. [search_mode] must be exact or fuzzy"
+    return search_mode
+
+
+def _get_sort_mode(req: HttpRequest) -> str:
+    sort_mode = str(req.GET.get("sort_mode", "default")).strip().lower()
+    assert sort_mode in {"default", "early", "late"}, "Invalid parameters. [sort_mode] must be default, early or late"
+    return sort_mode
 
 
 def _resolve_user(req: HttpRequest):
@@ -55,10 +72,13 @@ def mentors(req: HttpRequest):
         return BAD_METHOD
 
     keyword = _get_keyword(req)
+    search_mode = _get_search_mode(req)
     user = _resolve_user(req)
+    mentors = search_mentors_fuzzy(keyword, user=user) if search_mode == "fuzzy" else search_mentors(keyword, user=user)
     return request_success({
         "keyword": keyword,
-        "mentors": search_mentors(keyword, user=user),
+        "search_mode": search_mode,
+        "mentors": mentors,
     })
 
 
@@ -68,8 +88,13 @@ def papers(req: HttpRequest):
         return BAD_METHOD
 
     keyword = _get_keyword(req)
+    search_mode = _get_search_mode(req)
+    sort_mode = _get_sort_mode(req)
     user = _resolve_user(req)
+    papers = search_papers_fuzzy(keyword, user=user, sort_mode=sort_mode) if search_mode == "fuzzy" else search_papers(keyword, user=user, sort_mode=sort_mode)
     return request_success({
         "keyword": keyword,
-        "papers": search_papers(keyword, user=user),
+        "search_mode": search_mode,
+        "sort_mode": sort_mode,
+        "papers": papers,
     })

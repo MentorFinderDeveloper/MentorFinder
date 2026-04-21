@@ -89,6 +89,7 @@ def _serialize_paper(paper: Paper):
         "abstract": paper.abstract,
         "publish_date": paper.publish_date,
         "author_names": paper.author_names,
+        "subjects": paper.subjects,
     }
 
 
