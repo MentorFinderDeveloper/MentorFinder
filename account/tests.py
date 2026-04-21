@@ -1,10 +1,12 @@
 import json
+import tempfile
 from io import StringIO
 from datetime import date
 from unittest.mock import patch
 
 from django.contrib.auth.hashers import check_password
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import TestCase
 
 from account.models import User, MentorFollow
@@ -859,3 +861,51 @@ class MockWeeklyPushCommandTests(TestCase):
 
         mock_send_weekly_push_email.assert_not_called()
         self.assertIn("[DRY RUN] command_user: 1 matched paper(s).", out.getvalue())
+
+    @patch("account.management.commands.send_weekly_push_mock.send_weekly_push_email")
+    def test_mock_weekly_push_command_loads_papers_from_json_file(self, mock_send_weekly_push_email):
+        mock_send_weekly_push_email.return_value = {
+            "sent": True,
+            "digest": {
+                "totalPaperCount": 1,
+            },
+        }
+
+        with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8", delete=False) as fp:
+            json.dump(
+                {
+                    "thursday": [self.paper.id],
+                    "friday": [],
+                    "saturday": [],
+                    "sunday": [],
+                    "monday": [],
+                    "tuesday": [],
+                    "wednesday": [],
+                },
+                fp,
+            )
+            file_path = fp.name
+
+        call_command(
+            "send_weekly_push_mock",
+            "--user",
+            "command_user",
+            "--paper-file",
+            file_path,
+            stdout=StringIO(),
+        )
+
+        mock_send_weekly_push_email.assert_called_once()
+        passed_lists = mock_send_weekly_push_email.call_args.args[1]
+        self.assertEqual(len(passed_lists), 7)
+        self.assertEqual([paper.id for paper in passed_lists[0]], [self.paper.id])
+        self.assertEqual(passed_lists[1], [])
+
+    def test_mock_weekly_push_command_rejects_missing_paper_file(self):
+        with self.assertRaises(CommandError):
+            call_command(
+                "send_weekly_push_mock",
+                "--paper-file",
+                "/tmp/not-found-weekly-papers.json",
+                stdout=StringIO(),
+            )
