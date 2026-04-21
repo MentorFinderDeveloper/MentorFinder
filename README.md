@@ -61,13 +61,37 @@ python manage.py send_weekly_push_mock --user <username> --dry-run
 python manage.py send_weekly_push_mock --user <username>
 ```
 
+使用 JSON 文件指定七天新增论文列表：
+
+```bash
+python manage.py send_weekly_push_mock --paper-file data/mock_weekly_papers.json --dry-run
+```
+
 默认邮件后端是 Django console backend，所以本地发送时邮件内容会打印到控制台，不会真正发出。若需要接入真实 SMTP，可以通过环境变量覆盖 `EMAIL_BACKEND` 和 `DEFAULT_FROM_EMAIL`。
 
 mock 数据说明：
 
 - 命令会从数据库最近的论文中取 `--paper-limit` 篇，默认 `20` 篇。
 - 这些论文会被轮流分配到 7 个 list，模拟上周四到本周三每天爬虫发现的新论文。
+- 如果传入 `--paper-file`，命令会优先使用 JSON 文件中的论文 ID 列表，而不是 `--paper-limit`。
+- JSON 文件中的 ID 必须是数据库里已经存在的 `Paper.id`；如果 ID 不存在，命令会报错。
 - 当前逻辑会给有邮箱的用户生成周报；周报内容只包含用户关注导师和用户私有导师关联的新论文。
+
+JSON 文件格式示例：
+
+```json
+{
+  "thursday": [1, 2],
+  "friday": [],
+  "saturday": [3],
+  "sunday": [],
+  "monday": [],
+  "tuesday": [],
+  "wednesday": [4]
+}
+```
+
+其中 7 个字段分别对应上周四、上周五、上周六、上周日、本周一、本周二、本周三。`data/mock_weekly_papers.json` 可以作为本地测试文件使用，但里面的论文 ID 依赖本地数据库，不一定适合其他环境直接复用。
 
 当前还没有实现的内容：
 
