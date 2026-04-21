@@ -29,6 +29,11 @@ class PaperModelTest(TestCase):
         self.assertEqual(self.paper.publish_date, date(2023, 1, 1))
         self.assertEqual(self.paper.author_names, "张三, 李四, Wang Wu")
 
+    def test_subjects_field(self):
+        """测试论文学科字段"""
+        paper = Paper.objects.create(title="分类论文", subjects="cs.LG, cs.AI")
+        self.assertEqual(paper.subjects, "cs.LG, cs.AI")
+
     def test_get_author_list(self):
         """测试获取作者列表"""
         authors = self.paper.get_author_list()

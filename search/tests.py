@@ -44,12 +44,14 @@ class SearchTests(TestCase):
             abstract="本文讨论常见机器学习方法及其应用场景。",
             publish_date="2024-05-01",
             author_names="张三",
+            subjects="cs.LG, cs.AI",
         )
         self.paper2 = Paper.objects.create(
             title="大语言模型在问答系统中的应用",
             abstract="本文介绍大语言模型在智能问答中的实践。",
             publish_date="2024-06-15",
             author_names="李四,张三",
+            subjects="cs.CL",
         )
 
         self.private_paper = Paper.objects.create(
@@ -57,6 +59,7 @@ class SearchTests(TestCase):
             abstract="仅用于测试私有导师检索可见性。",
             publish_date="2024-07-01",
             author_names="王五",
+            subjects="cs.CR",
         )
 
         self.private_mentor = Mentor.objects.create(
@@ -142,9 +145,10 @@ class SearchTests(TestCase):
         paper = res.json()["papers"][0]
         self.assertEqual(
             set(paper.keys()),
-            {"id", "title", "abstract", "publish_date", "author_names", "mentorNames"},
+            {"id", "title", "abstract", "publish_date", "author_names", "subjects", "mentorNames"},
         )
         self.assertEqual(paper["title"], "机器学习方法研究")
+        self.assertEqual(paper["subjects"], "cs.LG, cs.AI")
         self.assertEqual(paper["mentorNames"], ["张三"])
         self.assertEqual(paper["author_names"], "张三")
 
