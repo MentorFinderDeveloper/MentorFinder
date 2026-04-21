@@ -40,6 +40,12 @@ def _get_search_mode(req: HttpRequest) -> str:
     return search_mode
 
 
+def _get_sort_mode(req: HttpRequest) -> str:
+    sort_mode = str(req.GET.get("sort_mode", "default")).strip().lower()
+    assert sort_mode in {"default", "early", "late"}, "Invalid parameters. [sort_mode] must be default, early or late"
+    return sort_mode
+
+
 def _resolve_user(req: HttpRequest):
     auth_header = req.headers.get("Authorization", "").strip()
     if auth_header == "":
@@ -83,10 +89,12 @@ def papers(req: HttpRequest):
 
     keyword = _get_keyword(req)
     search_mode = _get_search_mode(req)
+    sort_mode = _get_sort_mode(req)
     user = _resolve_user(req)
-    papers = search_papers_fuzzy(keyword, user=user) if search_mode == "fuzzy" else search_papers(keyword, user=user)
+    papers = search_papers_fuzzy(keyword, user=user, sort_mode=sort_mode) if search_mode == "fuzzy" else search_papers(keyword, user=user, sort_mode=sort_mode)
     return request_success({
         "keyword": keyword,
         "search_mode": search_mode,
+        "sort_mode": sort_mode,
         "papers": papers,
     })

@@ -273,8 +273,43 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["search_mode"], "fuzzy")
         self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["大语言模型在问答系统中的应用"])
 
+    def test_search_papers_default_sort_mode(self):
+        res = self.client.get("/search/papers", {"keyword": "机器学习"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["sort_mode"], "default")
+
+    def test_search_papers_sort_mode_early(self):
+        res = self.client.get("/search/papers", {"keyword": "机器学习", "sort_mode": "early"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["sort_mode"], "early")
+        self.assertEqual(
+            [paper["title"] for paper in res.json()["papers"]],
+            ["机器学习方法研究", "大语言模型在问答系统中的应用"],
+        )
+
+    def test_search_papers_sort_mode_late(self):
+        res = self.client.get("/search/papers", {"keyword": "机器学习", "sort_mode": "late"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["sort_mode"], "late")
+        self.assertEqual(
+            [paper["title"] for paper in res.json()["papers"]],
+            ["大语言模型在问答系统中的应用", "机器学习方法研究"],
+        )
+
     def test_search_api_invalid_search_mode(self):
         res = self.client.get("/search/papers", {"keyword": "机器学习", "search_mode": "partial"})
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_search_api_invalid_sort_mode(self):
+        res = self.client.get("/search/papers", {"keyword": "机器学习", "sort_mode": "random"})
 
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.json()["code"], -2)

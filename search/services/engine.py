@@ -3,6 +3,14 @@ from dataset.models import Mentor, Paper
 from django.db.models import Q
 
 
+def _order_papers(papers, sort_mode: str):
+    if sort_mode == "early":
+        return papers.order_by("publish_date", "id")
+    if sort_mode == "late":
+        return papers.order_by("-publish_date", "-id")
+    return papers
+
+
 def _visible_mentors(user):
     if user is None:
         return Mentor.objects.filter(owner__isnull=True)
@@ -30,7 +38,7 @@ def search_mentors_fuzzy(keyword: str, user=None) -> list[dict]:
     return MentorSerializer(mentors, many=True).data
 
 
-def search_papers(keyword: str, user=None) -> list[dict]:
+def search_papers(keyword: str, user=None, sort_mode: str = "default") -> list[dict]:
     # accurate search
     
     # keyword is title
@@ -50,9 +58,10 @@ def search_papers(keyword: str, user=None) -> list[dict]:
         if mentor_ids:
             papers = Paper.objects.filter(id__in=mentor_ids).distinct()
 
-    return PaperSerializer(papers, many=True).data
+    ordered_papers = _order_papers(papers, sort_mode)
+    return PaperSerializer(ordered_papers, many=True).data
 
-def search_papers_fuzzy(keyword: str, user=None) -> list[dict]:
+def search_papers_fuzzy(keyword: str, user=None, sort_mode: str = "default") -> list[dict]:
     # fuzzy search
     
     # keyword is title
@@ -71,5 +80,6 @@ def search_papers_fuzzy(keyword: str, user=None) -> list[dict]:
     # combine all matching paper IDs (no garantee of order)
     all_match_ids = list(set(title_match_ids | mentor_ids))
     papers = Paper.objects.filter(id__in=all_match_ids).distinct()
+    ordered_papers = _order_papers(papers, sort_mode)
 
-    return PaperSerializer(papers, many=True).data
+    return PaperSerializer(ordered_papers, many=True).data
