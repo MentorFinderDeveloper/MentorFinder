@@ -256,6 +256,29 @@ class SearchTests(TestCase):
 
         self.assertEqual(papers, [])
 
+    def test_search_mentors_api_fuzzy_mode(self):
+        res = self.client.get("/search/mentors", {"keyword": "张", "search_mode": "fuzzy"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["search_mode"], "fuzzy")
+        self.assertEqual(len(res.json()["mentors"]), 1)
+        self.assertEqual(res.json()["mentors"][0]["Chinese_name"], "张三")
+
+    def test_search_papers_api_fuzzy_mode(self):
+        res = self.client.get("/search/papers", {"keyword": "语言模型", "search_mode": "fuzzy"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["search_mode"], "fuzzy")
+        self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["大语言模型在问答系统中的应用"])
+
+    def test_search_api_invalid_search_mode(self):
+        res = self.client.get("/search/papers", {"keyword": "机器学习", "search_mode": "partial"})
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
     def test_search_no_match_returns_empty_list(self):
         mentor_res = self.client.get("/search/mentors", {"keyword": "量子拓扑星舰"})
         paper_res = self.client.get("/search/papers", {"keyword": "量子拓扑星舰"})
