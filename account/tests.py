@@ -994,3 +994,63 @@ class RecordWeeklyPushPapersCommandTests(TestCase):
                     f"{tmpdir}/weekly_papers.json",
                     stdout=StringIO(),
                 )
+
+
+class ResetWeeklyPushPapersCommandTests(TestCase):
+    def test_reset_weekly_push_papers_creates_empty_weekly_json_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            file_path = f"{tmpdir}/weekly_papers.json"
+            out = StringIO()
+
+            call_command(
+                "reset_weekly_push_papers",
+                "--paper-file",
+                file_path,
+                stdout=out,
+            )
+
+            with open(file_path, "r", encoding="utf-8") as fp:
+                payload = json.load(fp)
+
+            self.assertEqual(
+                payload,
+                {
+                    "thursday": [],
+                    "friday": [],
+                    "saturday": [],
+                    "sunday": [],
+                    "monday": [],
+                    "tuesday": [],
+                    "wednesday": [],
+                },
+            )
+            self.assertIn("Reset weekly push paper records", out.getvalue())
+
+    def test_reset_weekly_push_papers_overwrites_existing_weekly_json_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            file_path = f"{tmpdir}/weekly_papers.json"
+            with open(file_path, "w", encoding="utf-8") as fp:
+                json.dump(
+                    {
+                        "thursday": [1, 2],
+                        "friday": [3],
+                        "saturday": [],
+                        "sunday": [],
+                        "monday": [4],
+                        "tuesday": [],
+                        "wednesday": [5],
+                    },
+                    fp,
+                )
+
+            call_command(
+                "reset_weekly_push_papers",
+                "--paper-file",
+                file_path,
+                stdout=StringIO(),
+            )
+
+            with open(file_path, "r", encoding="utf-8") as fp:
+                payload = json.load(fp)
+
+            self.assertTrue(all(paper_ids == [] for paper_ids in payload.values()))
