@@ -909,3 +909,88 @@ class MockWeeklyPushCommandTests(TestCase):
                 "/tmp/not-found-weekly-papers.json",
                 stdout=StringIO(),
             )
+
+
+class RecordWeeklyPushPapersCommandTests(TestCase):
+    def setUp(self):
+        self.paper = Paper.objects.create(
+            title="每日增量论文",
+            abstract="每日增量摘要",
+            publish_date=date(2026, 4, 16),
+            author_names="Crawler",
+            subjects="cs.AI",
+        )
+        self.other_paper = Paper.objects.create(
+            title="另一篇每日增量论文",
+            abstract="另一篇每日增量摘要",
+            publish_date=date(2026, 4, 17),
+            author_names="Crawler",
+            subjects="cs.LG",
+        )
+
+    def test_record_weekly_push_papers_creates_weekly_json_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            file_path = f"{tmpdir}/weekly_papers.json"
+            out = StringIO()
+
+            call_command(
+                "record_weekly_push_papers",
+                "--day",
+                "monday",
+                "--paper-ids",
+                f"{self.paper.id},{self.other_paper.id}",
+                "--paper-file",
+                file_path,
+                stdout=out,
+            )
+
+            with open(file_path, "r", encoding="utf-8") as fp:
+                payload = json.load(fp)
+
+            self.assertEqual(payload["monday"], [self.paper.id, self.other_paper.id])
+            self.assertEqual(payload["thursday"], [])
+            self.assertIn("Recorded 2 new paper ID(s) for monday", out.getvalue())
+
+    def test_record_weekly_push_papers_appends_unique_ids(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            file_path = f"{tmpdir}/weekly_papers.json"
+
+            call_command(
+                "record_weekly_push_papers",
+                "--day",
+                "friday",
+                "--paper-ids",
+                str(self.paper.id),
+                "--paper-file",
+                file_path,
+                stdout=StringIO(),
+            )
+            call_command(
+                "record_weekly_push_papers",
+                "--day",
+                "friday",
+                "--paper-ids",
+                f"{self.paper.id},{self.other_paper.id}",
+                "--paper-file",
+                file_path,
+                stdout=StringIO(),
+            )
+
+            with open(file_path, "r", encoding="utf-8") as fp:
+                payload = json.load(fp)
+
+            self.assertEqual(payload["friday"], [self.paper.id, self.other_paper.id])
+
+    def test_record_weekly_push_papers_rejects_unknown_paper_id(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(CommandError):
+                call_command(
+                    "record_weekly_push_papers",
+                    "--day",
+                    "tuesday",
+                    "--paper-ids",
+                    "999999",
+                    "--paper-file",
+                    f"{tmpdir}/weekly_papers.json",
+                    stdout=StringIO(),
+                )
