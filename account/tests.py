@@ -9,7 +9,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase
 
-from account.models import User, MentorFollow
+from account.models import MentorVerificationRequest, User, MentorFollow
 from account.services.weekly_push import (
     build_weekly_push_digest,
     render_weekly_push_email,
@@ -463,6 +463,7 @@ class UserProfileViewTests(TestCase):
         self.assertEqual(res.json()["profile"]["researchExperience"], "")
         self.assertEqual(res.json()["profile"]["honors"], "")
         self.assertEqual(res.json()["profile"]["projectExperience"], "")
+        self.assertIsNone(res.json()["mentorVerificationRequest"])
 
     def test_put_profile_updates_fields(self):
         res = self.client.put(
@@ -511,6 +512,47 @@ class UserProfileViewTests(TestCase):
 
         self.assertEqual(res.status_code, 405)
         self.assertEqual(res.json()["code"], -3)
+
+    def test_student_can_submit_mentor_verification_request(self):
+        res = self.client.post(
+            "/profile/mentor-verification-request",
+            data=json.dumps({
+                "submittedName": "张老师",
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["mentorVerificationRequest"]["submittedName"], "张老师")
+        self.assertTrue(
+            MentorVerificationRequest.objects.filter(
+                user=self.user,
+                submitted_name="张老师",
+                status=MentorVerificationRequest.STATUS_PENDING,
+            ).exists()
+        )
+
+    def test_cannot_submit_duplicate_pending_mentor_verification_request(self):
+        MentorVerificationRequest.objects.create(
+            user=self.user,
+            submitted_name="张老师",
+            status=MentorVerificationRequest.STATUS_PENDING,
+        )
+
+        res = self.client.post(
+            "/profile/mentor-verification-request",
+            data=json.dumps({
+                "submittedName": "李老师",
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.json()["code"], 3)
+        self.assertEqual(res.json()["info"], "A pending mentor verification request already exists")
 
 
 class AdminUserManagementTests(TestCase):
@@ -701,6 +743,113 @@ class AdminUserManagementTests(TestCase):
             [user["username"] for user in res.json()["users"]],
             [mentor_user.username],
         )
+
+    def test_admin_can_view_verification_request_list(self):
+        request_obj = MentorVerificationRequest.objects.create(
+            user=self.student,
+            submitted_name="待认证导师姓名",
+            status=MentorVerificationRequest.STATUS_PENDING,
+        )
+
+        res = self.client.get(
+            "/management/users",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        verification_requests = res.json()["verificationRequests"]
+        self.assertEqual(len(verification_requests), 1)
+        self.assertEqual(verification_requests[0]["id"], request_obj.id)
+        self.assertEqual(verification_requests[0]["username"], "managed_student")
+        self.assertEqual(verification_requests[0]["submittedName"], "待认证导师姓名")
+        self.assertEqual(verification_requests[0]["status"], MentorVerificationRequest.STATUS_PENDING)
+
+    def test_admin_can_approve_verification_request_with_public_mentor_binding(self):
+        request_obj = MentorVerificationRequest.objects.create(
+            user=self.student,
+            submitted_name="待认证导师姓名",
+            status=MentorVerificationRequest.STATUS_PENDING,
+        )
+
+        res = self.client.put(
+            f"/management/verification-requests/{request_obj.id}",
+            data=json.dumps({
+                "status": MentorVerificationRequest.STATUS_APPROVED,
+                "mentorId": self.public_mentor.id,
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        request_obj.refresh_from_db()
+        self.student.refresh_from_db()
+        self.assertEqual(request_obj.status, MentorVerificationRequest.STATUS_APPROVED)
+        self.assertEqual(self.student.role, User.ROLE_MENTOR)
+        self.assertEqual(self.student.mentor_profile_id, self.public_mentor.id)
+
+    def test_approving_verification_request_requires_public_mentor_binding(self):
+        request_obj = MentorVerificationRequest.objects.create(
+            user=self.student,
+            submitted_name="待认证导师姓名",
+            status=MentorVerificationRequest.STATUS_PENDING,
+        )
+
+        res = self.client.put(
+            f"/management/verification-requests/{request_obj.id}",
+            data=json.dumps({
+                "status": MentorVerificationRequest.STATUS_APPROVED,
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], 3)
+        self.assertEqual(res.json()["info"], "Mentor binding is required for approval")
+
+    def test_admin_can_reject_verification_request(self):
+        request_obj = MentorVerificationRequest.objects.create(
+            user=self.student,
+            submitted_name="待认证导师姓名",
+            status=MentorVerificationRequest.STATUS_PENDING,
+        )
+
+        res = self.client.put(
+            f"/management/verification-requests/{request_obj.id}",
+            data=json.dumps({
+                "status": MentorVerificationRequest.STATUS_REJECTED,
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        request_obj.refresh_from_db()
+        self.student.refresh_from_db()
+        self.assertEqual(request_obj.status, MentorVerificationRequest.STATUS_REJECTED)
+        self.assertEqual(self.student.role, User.ROLE_STUDENT)
+        self.assertIsNone(self.student.mentor_profile)
+
+    def test_cannot_review_verification_request_twice(self):
+        request_obj = MentorVerificationRequest.objects.create(
+            user=self.student,
+            submitted_name="待认证导师姓名",
+            status=MentorVerificationRequest.STATUS_APPROVED,
+        )
+
+        res = self.client.put(
+            f"/management/verification-requests/{request_obj.id}",
+            data=json.dumps({
+                "status": MentorVerificationRequest.STATUS_REJECTED,
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.json()["code"], 3)
+        self.assertEqual(res.json()["info"], "Verification request has already been reviewed")
 
 
 class WeeklyPushDigestTests(TestCase):

@@ -86,6 +86,46 @@ class UserProfile(models.Model):
         return f"Profile of {self.user.username}"
 
 
+class MentorVerificationRequest(models.Model):
+    STATUS_PENDING = "pending"
+    STATUS_APPROVED = "approved"
+    STATUS_REJECTED = "rejected"
+
+    STATUS_CHOICES = (
+        (STATUS_PENDING, "待处理"),
+        (STATUS_APPROVED, "已通过"),
+        (STATUS_REJECTED, "已拒绝"),
+    )
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="mentor_verification_requests",
+    )
+    submitted_name = models.CharField(max_length=100, verbose_name="提交姓名")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def serialize(self):
+        return {
+            "id": self.id,
+            "userId": self.user_id,
+            "username": self.user.username,
+            "userEmail": self.user.email,
+            "submittedName": self.submitted_name,
+            "status": self.status,
+            "createdAt": localtime(self.created_at).isoformat(sep=" ", timespec="seconds") if self.created_at else "",
+            "updatedAt": localtime(self.updated_at).isoformat(sep=" ", timespec="seconds") if self.updated_at else "",
+        }
+
+    def __str__(self):
+        return f"Mentor verification request of {self.user.username}: {self.submitted_name}"
+
+
 class MentorFollow(models.Model):
     student = models.ForeignKey(
         User,
