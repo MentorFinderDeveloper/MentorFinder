@@ -103,12 +103,13 @@ class SearchTests(TestCase):
         mentor = res.json()["mentors"][0]
         self.assertEqual(
             set(mentor.keys()),
-            {"id", "Chinese_name", "English_name", "research_direction", "email", "profile", "paperTitles"},
+            {"id", "Chinese_name", "English_name", "research_direction", "email", "profile", "paperTitles", "is_private"},
         )
         self.assertEqual(mentor["Chinese_name"], "张三")
         self.assertEqual(mentor["English_name"], "Zhang San")
         self.assertEqual(mentor["research_direction"], "机器学习")
         self.assertEqual(mentor["paperTitles"], ["机器学习方法研究", "大语言模型在问答系统中的应用"])
+        self.assertEqual(mentor["is_private"], False)
 
     def test_search_mentors_by_research_direction(self):
         res = self.client.get("/search/mentors", {"keyword": "机器学习"})

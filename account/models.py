@@ -11,15 +11,30 @@ class CustomUserManager(UserManager):
 
 
 class User(AbstractUser):
+    ROLE_STUDENT = "student"
+    ROLE_MENTOR = "mentor"
+    ROLE_ADMIN = "admin"
+    ROLE_BANNED = "banned"
+
     ROLE_CHOICES = (
-        ("student", "学生"),
-        ("tutor", "导师"),
-        ("admin", "系统管理员"),
+        (ROLE_STUDENT, "学生"),
+        (ROLE_MENTOR, "导师"),
+        (ROLE_ADMIN, "系统管理员"),
+        (ROLE_BANNED, "已封禁"),
     )
 
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default="student")
     real_name = models.CharField(max_length=50, blank=True, null=True, verbose_name="真实姓名")
     email = models.EmailField("email address", unique=True)
+    mentor_profile = models.OneToOneField(
+        Mentor,
+        on_delete=models.SET_NULL,
+        related_name="bound_user",
+        null=True,
+        blank=True,
+        verbose_name="绑定公共导师",
+        limit_choices_to={"owner__isnull": True},
+    )
     objects = CustomUserManager()
 
     def serialize(self):
@@ -29,6 +44,19 @@ class User(AbstractUser):
             "email": self.email,
             "role": self.role,
             "realName": self.real_name,
+            "mentorProfile": self.serialize_mentor_profile(),
+        }
+
+    def serialize_mentor_profile(self):
+        if self.mentor_profile is None:
+            return None
+
+        return {
+            "id": self.mentor_profile.id,
+            "Chinese_name": self.mentor_profile.Chinese_name,
+            "English_name": self.mentor_profile.English_name,
+            "research_direction": self.mentor_profile.research_direction,
+            "email": self.mentor_profile.email,
         }
 
     def __str__(self) -> str:
