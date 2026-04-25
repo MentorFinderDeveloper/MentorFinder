@@ -4,6 +4,7 @@ import re
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.http import HttpRequest
+from django.db.models import Q
 
 from account.models import User, UserProfile
 from utils.utils_jwt import generate_jwt_token
@@ -196,15 +197,27 @@ def admin_users(req: HttpRequest):
         return BAD_METHOD
 
     keyword = str(req.GET.get("keyword", "")).strip()
+    role_filter = str(req.GET.get("role", "")).strip().lower()
     users = User.objects.select_related("mentor_profile").order_by("id")
+
+    if role_filter != "":
+        if role_filter not in MANAGEABLE_ROLES:
+            return request_failed(-2, "Invalid parameters. [role] is invalid", 400)
+        users = users.filter(role=role_filter)
+
     if keyword != "":
         if len(keyword) > MAX_CHAR_LENGTH:
             return request_failed(-2, "Invalid parameters. [keyword] is too long", 400)
-        users = users.filter(username__icontains=keyword)
+        users = users.filter(
+            Q(username__icontains=keyword) |
+            Q(email__icontains=keyword) |
+            Q(real_name__icontains=keyword)
+        )
 
     return request_success({
         "users": [_serialize_admin_user(user) for user in users],
         "currentUserId": admin_user.id,
+        "roleFilter": role_filter,
     })
 
 

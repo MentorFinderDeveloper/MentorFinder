@@ -546,7 +546,7 @@ class AdminUserManagementTests(TestCase):
 
     def test_admin_can_list_users(self):
         res = self.client.get(
-            "/admin/users",
+            "/management/users",
             **self.auth_headers(self.admin_token),
         )
 
@@ -558,7 +558,7 @@ class AdminUserManagementTests(TestCase):
 
     def test_non_admin_cannot_list_users(self):
         res = self.client.get(
-            "/admin/users",
+            "/management/users",
             **self.auth_headers(self.student_token),
         )
 
@@ -567,7 +567,7 @@ class AdminUserManagementTests(TestCase):
 
     def test_admin_can_promote_student_to_admin(self):
         res = self.client.put(
-            f"/admin/users/{self.student.id}",
+            f"/management/users/{self.student.id}",
             data=json.dumps({"role": User.ROLE_ADMIN}),
             content_type="application/json",
             **self.auth_headers(self.admin_token),
@@ -580,7 +580,7 @@ class AdminUserManagementTests(TestCase):
 
     def test_admin_can_bind_public_mentor_and_set_role_to_mentor(self):
         res = self.client.put(
-            f"/admin/users/{self.student.id}",
+            f"/management/users/{self.student.id}",
             data=json.dumps({"role": User.ROLE_MENTOR, "mentorId": self.public_mentor.id}),
             content_type="application/json",
             **self.auth_headers(self.admin_token),
@@ -594,7 +594,7 @@ class AdminUserManagementTests(TestCase):
 
     def test_mentor_role_requires_public_mentor_binding(self):
         res = self.client.put(
-            f"/admin/users/{self.student.id}",
+            f"/management/users/{self.student.id}",
             data=json.dumps({"role": User.ROLE_MENTOR}),
             content_type="application/json",
             **self.auth_headers(self.admin_token),
@@ -606,7 +606,7 @@ class AdminUserManagementTests(TestCase):
 
     def test_non_mentor_role_cannot_bind_mentor_profile(self):
         res = self.client.put(
-            f"/admin/users/{self.student.id}",
+            f"/management/users/{self.student.id}",
             data=json.dumps({"role": User.ROLE_STUDENT, "mentorId": self.public_mentor.id}),
             content_type="application/json",
             **self.auth_headers(self.admin_token),
@@ -618,7 +618,7 @@ class AdminUserManagementTests(TestCase):
 
     def test_admin_can_ban_user(self):
         res = self.client.put(
-            f"/admin/users/{self.student.id}",
+            f"/management/users/{self.student.id}",
             data=json.dumps({"role": User.ROLE_BANNED}),
             content_type="application/json",
             **self.auth_headers(self.admin_token),
@@ -644,7 +644,7 @@ class AdminUserManagementTests(TestCase):
 
     def test_admin_cannot_ban_self(self):
         res = self.client.put(
-            f"/admin/users/{self.admin.id}",
+            f"/management/users/{self.admin.id}",
             data=json.dumps({"role": User.ROLE_BANNED}),
             content_type="application/json",
             **self.auth_headers(self.admin_token),
@@ -653,6 +653,54 @@ class AdminUserManagementTests(TestCase):
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.json()["code"], 3)
         self.assertEqual(res.json()["info"], "Admin cannot ban self")
+
+    def test_admin_can_search_users_by_email_and_real_name(self):
+        self.student.real_name = "张同学"
+        self.student.save(update_fields=["real_name"])
+
+        email_res = self.client.get(
+            "/management/users",
+            {"keyword": "managed_student@example.com"},
+            **self.auth_headers(self.admin_token),
+        )
+        self.assertEqual(email_res.status_code, 200)
+        self.assertEqual(
+            [user["username"] for user in email_res.json()["users"]],
+            ["managed_student"],
+        )
+
+        real_name_res = self.client.get(
+            "/management/users",
+            {"keyword": "张同学"},
+            **self.auth_headers(self.admin_token),
+        )
+        self.assertEqual(real_name_res.status_code, 200)
+        self.assertEqual(
+            [user["username"] for user in real_name_res.json()["users"]],
+            ["managed_student"],
+        )
+
+    def test_admin_can_filter_users_by_role(self):
+        mentor_user = User.objects.create_user(
+            username="mentor_user",
+            email="mentor_user@example.com",
+            password="abc12345",
+            role=User.ROLE_MENTOR,
+            mentor_profile=self.public_mentor,
+        )
+
+        res = self.client.get(
+            "/management/users",
+            {"role": User.ROLE_MENTOR},
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["roleFilter"], User.ROLE_MENTOR)
+        self.assertEqual(
+            [user["username"] for user in res.json()["users"]],
+            [mentor_user.username],
+        )
 
 
 class WeeklyPushDigestTests(TestCase):
