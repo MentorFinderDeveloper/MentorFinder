@@ -6,7 +6,7 @@ from django.core.validators import validate_email
 from django.http import HttpRequest
 from django.db.models import Q
 
-from account.models import User, UserProfile
+from account.models import MentorVerificationRequest, User, UserProfile
 from utils.utils_jwt import generate_jwt_token
 from utils.utils_request import BAD_METHOD, request_failed, request_success
 from utils.utils_require import CheckRequire, MAX_CHAR_LENGTH, require
@@ -144,6 +144,35 @@ def _serialize_admin_user(user: User):
     return serialized
 
 
+def _serialize_verification_request(request_obj: MentorVerificationRequest):
+    return request_obj.serialize()
+
+
+def _validate_verification_review_payload(body: dict):
+    status = require(body, "status", "string", err_msg="Missing or error type of [status]").strip().lower()
+    if status not in {
+        MentorVerificationRequest.STATUS_APPROVED,
+        MentorVerificationRequest.STATUS_REJECTED,
+    }:
+        raise KeyError("Invalid parameters. [status] is invalid", -2)
+
+    mentor = None
+    mentor_id_raw = body.get("mentorId")
+    if status == MentorVerificationRequest.STATUS_APPROVED:
+        if mentor_id_raw in (None, ""):
+            raise KeyError("Mentor binding is required for approval", 3)
+        try:
+            mentor_id = int(mentor_id_raw)
+        except (TypeError, ValueError) as exc:
+            raise KeyError("Invalid parameters. [mentorId] must be an integer", -2) from exc
+
+        mentor = Mentor.objects.filter(id=mentor_id, owner__isnull=True).first()
+        if mentor is None:
+            raise KeyError("Mentor not found", 2)
+
+    return status, mentor
+
+
 def _validate_user_role_payload(body: dict):
     role = require(body, "role", "string", err_msg="Missing or error type of [role]").strip().lower()
     if role not in MANAGEABLE_ROLES:
@@ -216,6 +245,10 @@ def admin_users(req: HttpRequest):
 
     return request_success({
         "users": [_serialize_admin_user(user) for user in users],
+        "verificationRequests": [
+            _serialize_verification_request(request_obj)
+            for request_obj in MentorVerificationRequest.objects.select_related("user").all()
+        ],
         "currentUserId": admin_user.id,
         "roleFilter": role_filter,
     })
@@ -249,6 +282,54 @@ def admin_user_detail(req: HttpRequest, user_id: int):
 
     return request_success({
         "user": _serialize_admin_user(target_user),
+    })
+
+
+@CheckRequire
+def admin_verification_request_detail(req: HttpRequest, request_id: int):
+    admin_user, auth_error = _require_admin(req)
+    if auth_error is not None:
+        return auth_error
+
+    if req.method != "PUT":
+        return BAD_METHOD
+
+    request_obj = (
+        MentorVerificationRequest.objects
+        .select_related("user")
+        .filter(id=request_id)
+        .first()
+    )
+    if request_obj is None:
+        return request_failed(2, "Verification request not found", 404)
+
+    body = json.loads(req.body.decode("utf-8"))
+    if not isinstance(body, dict):
+        return request_failed(-2, "Invalid parameters. [body] must be an object", 400)
+
+    status, mentor = _validate_verification_review_payload(body)
+    if request_obj.status != MentorVerificationRequest.STATUS_PENDING:
+        return request_failed(3, "Verification request has already been reviewed", 409)
+
+    target_user = request_obj.user
+
+    if status == MentorVerificationRequest.STATUS_APPROVED:
+        transition_error = _apply_user_role(target_user, User.ROLE_MENTOR, mentor)
+        if transition_error is not None:
+            return transition_error
+    else:
+        if target_user.role == User.ROLE_MENTOR and target_user.mentor_profile_id is not None:
+            target_user.role = User.ROLE_STUDENT
+            target_user.mentor_profile = None
+            target_user.save(update_fields=["role", "mentor_profile"])
+
+    request_obj.status = status
+    request_obj.save(update_fields=["status", "updated_at"])
+
+    return request_success({
+        "verificationRequest": _serialize_verification_request(request_obj),
+        "user": _serialize_admin_user(target_user),
+        "reviewedByUserId": admin_user.id,
     })
 
 @CheckRequire
@@ -302,7 +383,19 @@ def my_profile(req: HttpRequest):
             return auth_error
 
         profile, _ = UserProfile.objects.get_or_create(user=user)
-        return request_success({"profile": profile.serialize()})
+        verification_request = (
+            MentorVerificationRequest.objects
+            .filter(user=user)
+            .order_by("-created_at")
+            .first()
+        )
+        return request_success({
+            "profile": profile.serialize(),
+            "mentorVerificationRequest": (
+                _serialize_verification_request(verification_request)
+                if verification_request is not None else None
+            ),
+        })
 
     if req.method == "PUT":
         user, auth_error = _require_user(req)
@@ -333,3 +426,45 @@ def my_profile(req: HttpRequest):
         return request_success({"profile": profile.serialize()})
 
     return BAD_METHOD
+
+
+@CheckRequire
+def mentor_verification_request(req: HttpRequest):
+    user, auth_error = _require_user(req)
+    if auth_error is not None:
+        return auth_error
+
+    if req.method != "POST":
+        return BAD_METHOD
+
+    body = json.loads(req.body.decode("utf-8"))
+    if not isinstance(body, dict):
+        return request_failed(-2, "Invalid parameters. [body] must be an object", 400)
+
+    submitted_name = require(
+        body,
+        "submittedName",
+        "string",
+        err_msg="Missing or error type of [submittedName]",
+    ).strip()
+    if submitted_name == "":
+        return request_failed(-2, "Invalid parameters. [submittedName] cannot be empty", 400)
+    if len(submitted_name) > 100:
+        return request_failed(-2, "Invalid parameters. [submittedName] is too long", 400)
+
+    latest_request = (
+        MentorVerificationRequest.objects
+        .filter(user=user)
+        .order_by("-created_at")
+        .first()
+    )
+    if latest_request is not None and latest_request.status == MentorVerificationRequest.STATUS_PENDING:
+        return request_failed(3, "A pending mentor verification request already exists", 409)
+
+    request_obj = MentorVerificationRequest.objects.create(
+        user=user,
+        submitted_name=submitted_name,
+    )
+    return request_success({
+        "mentorVerificationRequest": _serialize_verification_request(request_obj),
+    })
