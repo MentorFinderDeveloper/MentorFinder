@@ -7,7 +7,10 @@ class Paper(models.Model):
     abstract = models.TextField(blank=True, null=True, verbose_name="摘要")
     publish_date = models.DateField(blank=True, null=True, verbose_name="发表日期")
     author_names = models.TextField(blank=True, default="", verbose_name="作者名单")
-    subjects = models.CharField(max_length=255, blank=True, default="",verbose_name="学科/分类")
+    subjects = models.CharField(max_length=255, blank=True, default="", verbose_name="学科/分类")
+    arxiv_id = models.CharField(max_length=64, blank=True, default="", verbose_name="arXiv ID")
+    arxiv_url = models.URLField(blank=True, null=True, verbose_name="arXiv 链接")
+    tldr = models.TextField(blank=True, null=True, verbose_name="一句话总结")
     class Meta:
         verbose_name = "论文"
         verbose_name_plural = verbose_name
