@@ -9,8 +9,9 @@ from django.contrib.auth.hashers import check_password
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase
+from django.utils import timezone
 
-from account.models import MentorVerificationRequest, User, MentorFollow, WeeklyPushPaperBucket
+from account.models import MentorVerificationRequest, PushRecord, User, MentorFollow, WeeklyPushPaperBucket
 from account.services.weekly_push import (
     build_weekly_push_digest,
     render_weekly_push_email,
@@ -1410,6 +1411,76 @@ class WeeklyPushCommandTests(TestCase):
             0,
         )
         self.assertIn("promoted staged next-cycle records", out.getvalue())
+
+    @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
+    def test_weekly_push_command_skips_users_already_sent_in_same_period(self, mock_send_weekly_push_email):
+        mock_send_weekly_push_email.return_value = {
+            "sent": True,
+            "digest": {
+                "totalPaperCount": 1,
+            },
+        }
+        push_record = PushRecord.objects.create(
+            user=self.user,
+            type=PushRecord.TYPE_WEEKLY,
+            period_key="20260416_20260422",
+            period_start=timezone.datetime(2026, 4, 16, 0, 0, tzinfo=timezone.get_current_timezone()),
+            period_end=timezone.datetime(2026, 4, 22, 23, 59, 59, tzinfo=timezone.get_current_timezone()),
+            status=PushRecord.STATUS_SENT,
+            sent_at=timezone.now(),
+        )
+
+        with patch("account.management.commands.send_weekly_push._build_weekly_period_metadata") as mock_period:
+            mock_period.return_value = (
+                push_record.period_key,
+                push_record.period_start,
+                push_record.period_end,
+            )
+            out = StringIO()
+            call_command("send_weekly_push", stdout=out)
+
+        self.assertEqual(mock_send_weekly_push_email.call_count, 1)
+        self.assertIn("weekly_user: skipped, already sent for weekly period 20260416_20260422.", out.getvalue())
+
+    @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
+    def test_weekly_push_command_retries_failed_user_without_duplicate_success(self, mock_send_weekly_push_email):
+        mock_send_weekly_push_email.return_value = {
+            "sent": True,
+            "digest": {
+                "totalPaperCount": 1,
+            },
+        }
+        sent_record = PushRecord.objects.create(
+            user=self.user,
+            type=PushRecord.TYPE_WEEKLY,
+            period_key="20260416_20260422",
+            period_start=timezone.datetime(2026, 4, 16, 0, 0, tzinfo=timezone.get_current_timezone()),
+            period_end=timezone.datetime(2026, 4, 22, 23, 59, 59, tzinfo=timezone.get_current_timezone()),
+            status=PushRecord.STATUS_SENT,
+            sent_at=timezone.now(),
+        )
+        failed_record = PushRecord.objects.create(
+            user=self.other_user,
+            type=PushRecord.TYPE_WEEKLY,
+            period_key="20260416_20260422",
+            period_start=sent_record.period_start,
+            period_end=sent_record.period_end,
+            status=PushRecord.STATUS_FAILED,
+            error_message="previous failure",
+        )
+
+        with patch("account.management.commands.send_weekly_push._build_weekly_period_metadata") as mock_period:
+            mock_period.return_value = (
+                sent_record.period_key,
+                sent_record.period_start,
+                sent_record.period_end,
+            )
+            call_command("send_weekly_push", stdout=StringIO())
+
+        self.assertEqual(mock_send_weekly_push_email.call_count, 1)
+        failed_record.refresh_from_db()
+        self.assertEqual(failed_record.status, PushRecord.STATUS_SENT)
+        self.assertEqual(PushRecord.objects.filter(period_key="20260416_20260422").count(), 2)
 
 
 class WeeklyPushSchedulerCommandTests(TestCase):

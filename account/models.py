@@ -181,3 +181,47 @@ class WeeklyPushPaperBucket(models.Model):
     def __str__(self) -> str:
         archive_suffix = f" [{self.archive_batch}]" if self.archive_batch else ""
         return f"{self.cycle}:{self.day_key}:{self.paper_id}{archive_suffix}"
+
+
+class PushRecord(models.Model):
+    TYPE_WEEKLY = "weekly"
+
+    TYPE_CHOICES = (
+        (TYPE_WEEKLY, "周报"),
+    )
+
+    STATUS_PENDING = "pending"
+    STATUS_SENT = "sent"
+    STATUS_FAILED = "failed"
+
+    STATUS_CHOICES = (
+        (STATUS_PENDING, "待发送"),
+        (STATUS_SENT, "发送成功"),
+        (STATUS_FAILED, "发送失败"),
+    )
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="push_records",
+    )
+    type = models.CharField(max_length=20, choices=TYPE_CHOICES, verbose_name="推送类型")
+    period_key = models.CharField(max_length=64, verbose_name="周期键")
+    period_start = models.DateTimeField(verbose_name="周期开始时间")
+    period_end = models.DateTimeField(verbose_name="周期结束时间")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    sent_at = models.DateTimeField(blank=True, null=True, verbose_name="发送时间")
+    updated_at = models.DateTimeField(auto_now=True)
+    error_message = models.TextField(blank=True, default="", verbose_name="失败信息")
+
+    class Meta:
+        ordering = ["-updated_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "type", "period_key"],
+                name="unique_push_record_user_type_period",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user.username}:{self.type}:{self.period_key}:{self.status}"

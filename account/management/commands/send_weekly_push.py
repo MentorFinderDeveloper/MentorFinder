@@ -1,8 +1,10 @@
+from datetime import datetime, timedelta
+
 from django.core.management.base import BaseCommand
 from django.core.management.base import CommandError
 from django.utils import timezone
 
-from account.models import WeeklyPushPaperBucket
+from account.models import PushRecord, WeeklyPushPaperBucket
 from account.management.commands.send_weekly_push_mock import _get_target_users
 from account.services.weekly_push import build_weekly_push_digest, send_weekly_push_email
 from account.services.weekly_push_files import (
@@ -37,6 +39,7 @@ class Command(BaseCommand):
         payload = load_weekly_push_payload(options["cycle"])
         daily_paper_lists = load_daily_paper_lists_from_cycle(options["cycle"])
         users = _get_target_users(options.get("username"))
+        period_key, period_start, period_end = _build_weekly_period_metadata()
 
         if not users.exists():
             self.stdout.write(self.style.WARNING("No target users found."))
@@ -47,7 +50,21 @@ class Command(BaseCommand):
             f"Loaded 7 recorded daily paper lists with {total_recorded_paper_count} paper ID(s)."
         )
 
+        pending_users = []
         for user in users:
+            push_record = _get_or_create_weekly_push_record(
+                user=user,
+                period_key=period_key,
+                period_start=period_start,
+                period_end=period_end,
+            )
+
+            if not options["dry_run"] and push_record.status == PushRecord.STATUS_SENT:
+                self.stdout.write(
+                    f"{user.username}: skipped, already sent for weekly period {period_key}."
+                )
+                continue
+
             if options["dry_run"]:
                 digest = build_weekly_push_digest(user, daily_paper_lists)
                 self.stdout.write(
@@ -56,8 +73,13 @@ class Command(BaseCommand):
                 )
                 continue
 
+            pending_users.append(user.username)
             result = send_weekly_push_email(user, daily_paper_lists)
             status = "sent" if result["sent"] else "failed"
+            if result["sent"]:
+                _mark_push_record_sent(push_record)
+            else:
+                _mark_push_record_failed(push_record, "Weekly push email failed")
             self.stdout.write(
                 f"{user.username}: {status}, "
                 f"{result['digest']['totalPaperCount']} matched paper(s)."
@@ -67,6 +89,11 @@ class Command(BaseCommand):
 
         if options["dry_run"]:
             return
+
+        if pending_users:
+            self.stdout.write(
+                f"Weekly push period {period_key}: completed delivery attempts for {len(pending_users)} user(s)."
+            )
 
         archive_batch = _build_archive_batch()
         archived_count = archive_weekly_push_payload(archive_batch)
@@ -83,3 +110,49 @@ class Command(BaseCommand):
 
 def _build_archive_batch() -> str:
     return timezone.localtime().strftime("%Y%m%d_%H%M%S")
+
+
+def _build_weekly_period_metadata(now: datetime | None = None) -> tuple[str, datetime, datetime]:
+    local_now = timezone.localtime(now) if now is not None else timezone.localtime()
+    start_of_today = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    period_end = start_of_today - timedelta(seconds=1)
+    period_start = (start_of_today - timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
+    period_key = f"{period_start.strftime('%Y%m%d')}_{period_end.strftime('%Y%m%d')}"
+    return period_key, period_start, period_end
+
+
+def _get_or_create_weekly_push_record(user, period_key: str, period_start: datetime, period_end: datetime) -> PushRecord:
+    push_record, created = PushRecord.objects.get_or_create(
+        user=user,
+        type=PushRecord.TYPE_WEEKLY,
+        period_key=period_key,
+        defaults={
+            "period_start": period_start,
+            "period_end": period_end,
+            "status": PushRecord.STATUS_PENDING,
+        },
+    )
+    if not created:
+        fields_to_update = []
+        if push_record.period_start != period_start:
+            push_record.period_start = period_start
+            fields_to_update.append("period_start")
+        if push_record.period_end != period_end:
+            push_record.period_end = period_end
+            fields_to_update.append("period_end")
+        if fields_to_update:
+            push_record.save(update_fields=fields_to_update + ["updated_at"])
+    return push_record
+
+
+def _mark_push_record_sent(push_record: PushRecord):
+    push_record.status = PushRecord.STATUS_SENT
+    push_record.sent_at = timezone.now()
+    push_record.error_message = ""
+    push_record.save(update_fields=["status", "sent_at", "error_message", "updated_at"])
+
+
+def _mark_push_record_failed(push_record: PushRecord, error_message: str):
+    push_record.status = PushRecord.STATUS_FAILED
+    push_record.error_message = error_message
+    push_record.save(update_fields=["status", "error_message", "updated_at"])
