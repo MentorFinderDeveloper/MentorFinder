@@ -152,6 +152,40 @@ python manage.py run_weekly_push_scheduler
 python3 manage.py run_weekly_push_scheduler &
 ```
 
+## 周报发送记录
+
+后端当前会把正式周报的发送状态写入 `PushRecord`。你可以在 Django Admin 中查看，也可以通过管理命令查询和重试失败记录。
+
+查看最近的周报发送记录：
+
+```bash
+python manage.py show_weekly_push_records
+```
+
+按周期查看：
+
+```bash
+python manage.py show_weekly_push_records --period-key 20260416_20260422
+```
+
+只看失败记录：
+
+```bash
+python manage.py show_weekly_push_records --period-key 20260416_20260422 --status failed
+```
+
+只预览将要重试的失败用户：
+
+```bash
+python manage.py retry_failed_weekly_push --period-key 20260416_20260422 --dry-run
+```
+
+正式重试某个周期失败的周报发送：
+
+```bash
+python manage.py retry_failed_weekly_push --period-key 20260416_20260422
+```
+
 ## 爬虫定时任务
 
 后端已提供 `run_daily_sync` 命令，会在指定时刻执行 `sync_dataset`（即先抓导师再抓论文）。默认配置是每天 `04:00`（`Asia/Shanghai`）。

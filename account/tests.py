@@ -1502,6 +1502,97 @@ class WeeklyPushSchedulerCommandTests(TestCase):
         mock_scheduler.start.assert_called_once()
 
 
+class PushRecordCommandTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="record_user",
+            email="record_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.failed_user = User.objects.create_user(
+            username="failed_user",
+            email="failed_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.period_key = "20260416_20260422"
+        self.period_start = timezone.datetime(2026, 4, 16, 0, 0, tzinfo=timezone.get_current_timezone())
+        self.period_end = timezone.datetime(2026, 4, 22, 23, 59, 59, tzinfo=timezone.get_current_timezone())
+        PushRecord.objects.create(
+            user=self.user,
+            type=PushRecord.TYPE_WEEKLY,
+            period_key=self.period_key,
+            period_start=self.period_start,
+            period_end=self.period_end,
+            status=PushRecord.STATUS_SENT,
+            sent_at=timezone.now(),
+        )
+        PushRecord.objects.create(
+            user=self.failed_user,
+            type=PushRecord.TYPE_WEEKLY,
+            period_key=self.period_key,
+            period_start=self.period_start,
+            period_end=self.period_end,
+            status=PushRecord.STATUS_FAILED,
+            error_message="smtp timeout",
+        )
+
+    def test_show_weekly_push_records_filters_by_status(self):
+        out = StringIO()
+
+        call_command(
+            "show_weekly_push_records",
+            "--period-key",
+            self.period_key,
+            "--status",
+            PushRecord.STATUS_FAILED,
+            stdout=out,
+        )
+
+        output = out.getvalue()
+        self.assertIn("failed_user | 20260416_20260422 | failed", output)
+        self.assertNotIn("record_user | 20260416_20260422 | sent", output)
+
+    @patch("account.management.commands.retry_failed_weekly_push.SendWeeklyPushCommand.handle")
+    def test_retry_failed_weekly_push_dry_run_reports_target_users(self, mock_send_handle):
+        out = StringIO()
+
+        call_command(
+            "retry_failed_weekly_push",
+            "--period-key",
+            self.period_key,
+            "--dry-run",
+            stdout=out,
+        )
+
+        mock_send_handle.assert_not_called()
+        self.assertIn("[DRY RUN] Would retry 1 failed weekly push user(s)", out.getvalue())
+
+    @patch("account.management.commands.retry_failed_weekly_push.SendWeeklyPushCommand.handle")
+    def test_retry_failed_weekly_push_retries_each_failed_user(self, mock_send_handle):
+        def fake_retry(*args, **kwargs):
+            record = PushRecord.objects.get(user=self.failed_user, period_key=self.period_key)
+            record.status = PushRecord.STATUS_SENT
+            record.sent_at = timezone.now()
+            record.error_message = ""
+            record.save(update_fields=["status", "sent_at", "error_message", "updated_at"])
+
+        mock_send_handle.side_effect = fake_retry
+        out = StringIO()
+
+        call_command(
+            "retry_failed_weekly_push",
+            "--period-key",
+            self.period_key,
+            stdout=out,
+        )
+
+        mock_send_handle.assert_called_once()
+        self.assertIn("Retrying weekly push for failed_user", out.getvalue())
+        self.assertIn("Retried 1 failed weekly push user(s)", out.getvalue())
+
+
 class RecordWeeklyPushPapersCommandTests(TestCase):
     def setUp(self):
         self.paper = Paper.objects.create(
