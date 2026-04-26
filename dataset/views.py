@@ -90,6 +90,9 @@ def _serialize_paper(paper: Paper):
         "publish_date": paper.publish_date,
         "author_names": paper.author_names,
         "subjects": paper.subjects,
+        "arxiv_id": paper.arxiv_id,
+        "arxiv_url": paper.arxiv_url,
+        "tldr": paper.tldr,
     }
 
 
@@ -514,6 +517,8 @@ def paper_timeline_view(request):
                     "publish_date": str(paper.publish_date) if paper.publish_date else None,
                     "author_names": paper.author_names,
                     "abstract": paper.abstract,
+                    "arxiv_url": paper.arxiv_url,
+                    "tldr": paper.tldr,
                 })
         else:
             direction_groups["其他/未分类"].append({
@@ -522,6 +527,8 @@ def paper_timeline_view(request):
                 "publish_date": str(paper.publish_date) if paper.publish_date else None,
                 "author_names": paper.author_names,
                 "abstract": paper.abstract,
+                "arxiv_url": paper.arxiv_url,
+                "tldr": paper.tldr,
             })
 
     timeline = [

@@ -633,43 +633,6 @@ class FetchPapersCommandTest(TestCase):
     def setUp(self):
         self.command = FetchPapersCommand()
 
-    def test_normalize_arxiv_id(self):
-        self.assertEqual(
-            self.command._normalize_arxiv_id("https://arxiv.org/abs/2501.01234v2"),
-            "2501.01234",
-        )
-        self.assertEqual(
-            self.command._normalize_arxiv_id("ARXIV:cs/9901001v1"),
-            "cs/9901001",
-        )
 
-    def test_merge_subjects_deduplicates_case_insensitively(self):
-        merged = self.command._merge_subjects(
-            ["cs.AI", "cs.LG"],
-            ["Computer Science", "cs.ai"],
-            ["Machine Learning", "computer science"],
-        )
-        self.assertEqual(merged, "cs.AI, cs.LG, Computer Science, Machine Learning")
-
-    @patch("dataset.management.commands.fetch_papers.requests.get")
-    def test_fetch_semantic_scholar_metadata_parses_and_caches(self, mock_get):
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "s2FieldsOfStudy": [
-                {"category": "Computer Science", "source": "external"},
-                {"category": "Machine Learning", "source": "external"},
-                {"category": "computer science", "source": "external"},
-            ],
-            "tldr": {"text": "A concise summary."},
-        }
-        mock_get.return_value = mock_resp
-
-        fields, tldr = self.command.fetch_semantic_scholar_metadata("2501.01234v1")
-        self.assertEqual(fields, ["Computer Science", "Machine Learning"])
-        self.assertEqual(tldr, "A concise summary.")
-
-        cached_fields, cached_tldr = self.command.fetch_semantic_scholar_metadata("2501.01234")
-        self.assertEqual(cached_fields, ["Computer Science", "Machine Learning"])
-        self.assertEqual(cached_tldr, "A concise summary.")
-        mock_get.assert_called_once()
+    
+   

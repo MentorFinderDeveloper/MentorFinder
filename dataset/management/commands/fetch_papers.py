@@ -10,6 +10,8 @@ from dataset.models import Mentor, Paper
 
 class Command(BaseCommand):
     help = '从 arXiv 和 Google Scholar 抓取导师的论文'
+    S2_API_URL = "https://api.semanticscholar.org/graph/v1/paper/ARXIV:{arxiv_id}"
+    S2_FIELDS = "s2FieldsOfStudy,tldr"
 
     SEMANTIC_SCHOLAR_API_TEMPLATE = "https://api.semanticscholar.org/graph/v1/paper/ARXIV:{arxiv_id}"
     SEMANTIC_SCHOLAR_FIELDS = "s2FieldsOfStudy,tldr"
@@ -37,131 +39,54 @@ class Command(BaseCommand):
             # self.fetch_from_scholar(mentor)
             time.sleep(3)
 
-    def _build_semantic_scholar_headers(self) -> dict[str, str]:
-        headers = {
-            "User-Agent": "MentorFinder/1.0",
-            "Accept": "application/json",
-        }
-        api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
-        if api_key:
-            headers["x-api-key"] = api_key
-        return headers
-
-    def _split_subjects(self, subjects_str: str) -> list[str]:
-        if not subjects_str:
-            return []
-        return [s.strip() for s in subjects_str.split(",") if s.strip()]
-
-    def _deduplicate_terms(self, terms: list[str]) -> list[str]:
-        deduplicated = []
-        seen = set()
-        for term in terms:
-            cleaned = str(term).strip()
-            if not cleaned:
-                continue
-            key = cleaned.casefold()
-            if key in seen:
-                continue
-            seen.add(key)
-            deduplicated.append(cleaned)
-        return deduplicated
-
-    def _merge_subjects(self, *subject_groups: list[str]) -> str:
-        merged = []
-        for group in subject_groups:
-            merged.extend(group)
-        return ", ".join(self._deduplicate_terms(merged))
-
-    def _normalize_arxiv_id(self, raw_arxiv_id: str) -> str:
-        normalized = (raw_arxiv_id or "").strip()
-        if normalized == "":
+    def _extract_arxiv_id(self, entry_id: str) -> str:
+        # arXiv entry_id examples:
+        # - http://arxiv.org/abs/2504.12345v1
+        # - http://arxiv.org/abs/cs/0112017v1
+        if not entry_id:
             return ""
+        arxiv_part = entry_id.rsplit("/abs/", 1)[-1].strip()
+        if arxiv_part == "":
+            return ""
+        return arxiv_part.split("v", 1)[0]
 
-        normalized = normalized.replace("ARXIV:", "").replace("arXiv:", "")
-        normalized = normalized.replace(".pdf", "")
+    def _build_arxiv_url(self, arxiv_id: str) -> str:
+        if arxiv_id == "":
+            return ""
+        return f"https://arxiv.org/abs/{arxiv_id}"
 
-        if "/abs/" in normalized:
-            normalized = normalized.split("/abs/", 1)[1]
-        if "/pdf/" in normalized:
-            normalized = normalized.split("/pdf/", 1)[1]
+    def _fetch_s2_metadata(self, arxiv_id: str) -> tuple[str, str]:
+        if arxiv_id == "":
+            return "", ""
 
-        normalized = normalized.split("?", 1)[0].strip("/")
-        normalized = self._ARXIV_VERSION_PATTERN.sub("", normalized)
-        return normalized
-
-    def _extract_arxiv_id(self, result) -> str:
-        entry_id = getattr(result, "entry_id", "")
-        normalized_from_entry = self._normalize_arxiv_id(entry_id)
-        if normalized_from_entry:
-            return normalized_from_entry
-
-        get_short_id = getattr(result, "get_short_id", None)
-        if callable(get_short_id):
-            return self._normalize_arxiv_id(get_short_id())
-        return ""
-
-    def fetch_semantic_scholar_metadata(self, arxiv_id: str) -> tuple[list[str], str]:
-        normalized_arxiv_id = self._normalize_arxiv_id(arxiv_id)
-        if normalized_arxiv_id == "":
-            return [], ""
-
-        cached = self.semantic_scholar_cache.get(normalized_arxiv_id)
-        if cached is not None:
-            return cached
-
-        url = self.SEMANTIC_SCHOLAR_API_TEMPLATE.format(arxiv_id=normalized_arxiv_id)
-
+        url = self.S2_API_URL.format(arxiv_id=arxiv_id)
         try:
-            resp = requests.get(
+            response = requests.get(
                 url,
-                params={"fields": self.SEMANTIC_SCHOLAR_FIELDS},
-                headers=self._build_semantic_scholar_headers(),
-                timeout=10,
+                params={"fields": self.S2_FIELDS},
+                timeout=15,
+                headers={"User-Agent": "MentorFinder/1.0"},
             )
-            if resp.status_code == 404:
-                result = ([], "")
-                self.semantic_scholar_cache[normalized_arxiv_id] = result
-                return result
+            if response.status_code != 200:
+                return "", ""
 
-            resp.raise_for_status()
-            payload = resp.json()
-        except requests.RequestException as exc:
-            self.stdout.write(
-                self.style.WARNING(
-                    f"    [Semantic Scholar 请求失败] {normalized_arxiv_id}: {exc}"
-                )
-            )
-            result = ([], "")
-            self.semantic_scholar_cache[normalized_arxiv_id] = result
-            return result
-        except ValueError as exc:
-            self.stdout.write(
-                self.style.WARNING(
-                    f"    [Semantic Scholar 响应解析失败] {normalized_arxiv_id}: {exc}"
-                )
-            )
-            result = ([], "")
-            self.semantic_scholar_cache[normalized_arxiv_id] = result
-            return result
+            payload = response.json()
 
-        fields = []
-        for item in payload.get("s2FieldsOfStudy") or []:
-            if not isinstance(item, dict):
-                continue
-            category = str(item.get("category", "")).strip()
-            if category:
-                fields.append(category)
+            fields = payload.get("s2FieldsOfStudy") or []
+            field_names = []
+            for field_item in fields:
+                category = str(field_item.get("category", "")).strip()
+                if category:
+                    field_names.append(category)
+            # 去重并保留顺序
+            unique_field_names = list(dict.fromkeys(field_names))
+            subjects_str = ", ".join(unique_field_names)
 
-        fields = self._deduplicate_terms(fields)
-
-        tldr_text = ""
-        tldr = payload.get("tldr")
-        if isinstance(tldr, dict):
-            tldr_text = str(tldr.get("text", "")).strip()
-
-        result = (fields, tldr_text)
-        self.semantic_scholar_cache[normalized_arxiv_id] = result
-        return result
+            tldr_data = payload.get("tldr") or {}
+            tldr_text = str(tldr_data.get("text", "")).strip()
+            return subjects_str, tldr_text
+        except Exception:
+            return "", ""
 
     def fetch_from_arxiv(self, mentor):
         self.stdout.write(f"  -> 正在 arXiv 搜索: {mentor.English_name}...")
@@ -179,51 +104,79 @@ class Command(BaseCommand):
                 abstract = result.summary.replace('\n', ' ').strip()
                 publish_date = result.published.date()
                 authors = ", ".join([author.name for author in result.authors])
-                arxiv_categories = list(result.categories)
-                arxiv_id = self._extract_arxiv_id(result)
-                s2_fields, s2_tldr = self.fetch_semantic_scholar_metadata(arxiv_id)
+                arxiv_id = self._extract_arxiv_id(result.entry_id)
+                arxiv_url = self._build_arxiv_url(arxiv_id)
+                arxiv_subjects = ", ".join(result.categories)
+                s2_subjects, s2_tldr = self._fetch_s2_metadata(arxiv_id)
+                subjects_str = s2_subjects or arxiv_subjects
 
-                if not abstract and s2_tldr:
-                    abstract = s2_tldr
-
-                subjects_str = self._merge_subjects(arxiv_categories, s2_fields)
                 # 使用 get_or_create 防止论文重复录入数据库
-                paper, created = Paper.objects.get_or_create(
-                    title=title,
-                    defaults={
-                        'abstract': abstract,
-                        'publish_date': publish_date,
-                        'author_names': authors,
-                        'subjects': subjects_str
-                    }
-                )
+                paper = None
+                created = False
+                if arxiv_id:
+                    paper = Paper.objects.filter(arxiv_id=arxiv_id).first()
+
+                if paper is None:
+                    paper, created = Paper.objects.get_or_create(
+                        title=title,
+                        defaults={
+                            "abstract": abstract,
+                            "publish_date": publish_date,
+                            "author_names": authors,
+                            "subjects": subjects_str,
+                            "arxiv_id": arxiv_id,
+                            "arxiv_url": arxiv_url or None,
+                            "tldr": s2_tldr or None,
+                        },
+                    )
+                else:
+                    changed = False
+                    if paper.title != title:
+                        paper.title = title
+                        changed = True
+                    if not paper.abstract and abstract:
+                        paper.abstract = abstract
+                        changed = True
+                    if paper.publish_date is None and publish_date:
+                        paper.publish_date = publish_date
+                        changed = True
+                    if not paper.author_names and authors:
+                        paper.author_names = authors
+                        changed = True
+                    if not paper.subjects and subjects_str:
+                        paper.subjects = subjects_str
+                        changed = True
+                    if not paper.arxiv_id and arxiv_id:
+                        paper.arxiv_id = arxiv_id
+                        changed = True
+                    if not paper.arxiv_url and arxiv_url:
+                        paper.arxiv_url = arxiv_url
+                        changed = True
+                    if not paper.tldr and s2_tldr:
+                        paper.tldr = s2_tldr
+                        changed = True
+                    if changed:
+                        paper.save()
 
                 if created:
                     self.stdout.write(self.style.SUCCESS(f"    [新增论文] {title} (分类: {subjects_str})"))
                 else:
-                    changed = False
-                    existing_subjects = self._split_subjects(paper.subjects)
-                    merged_subjects = self._merge_subjects(existing_subjects, arxiv_categories, s2_fields)
-
-                    if merged_subjects and merged_subjects != paper.subjects:
-                        paper.subjects = merged_subjects
-                        changed = True
-
-                    if not paper.abstract and abstract:
-                        paper.abstract = abstract
-                        changed = True
-
-                    if paper.publish_date is None and publish_date is not None:
-                        paper.publish_date = publish_date
-                        changed = True
-
-                    if not paper.author_names and authors:
-                        paper.author_names = authors
-                        changed = True
-
-                    if changed:
+                    updated = False
+                    if not paper.subjects and subjects_str:
+                        paper.subjects = subjects_str
+                        updated = True
+                    if not paper.tldr and s2_tldr:
+                        paper.tldr = s2_tldr
+                        updated = True
+                    if not paper.arxiv_id and arxiv_id:
+                        paper.arxiv_id = arxiv_id
+                        updated = True
+                    if not paper.arxiv_url and arxiv_url:
+                        paper.arxiv_url = arxiv_url
+                        updated = True
+                    if updated:
                         paper.save()
-                        self.stdout.write(self.style.SUCCESS(f"    [更新旧论文] {title} (分类: {paper.subjects})"))
+                        self.stdout.write(self.style.SUCCESS(f"    [更新论文元数据] {title} (分类: {subjects_str})"))
                 
                 paper.bind_to_mentors_by_authors()
         except Exception as e:
