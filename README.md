@@ -113,6 +113,42 @@ JSON 文件格式示例：
 - 没有做邮箱验证。
 - 没有接入真实 SMTP 配置。
 
+## 周报定时推送
+
+后端当前提供了一个正式的周报发送命令 `send_weekly_push`，它会读取 `data/mock_weekly_papers.json` 中记录的七天增量论文，向有邮箱的用户发送周报。成功发送后，会先把本周记录备份到 `data/weekly_push_archive/`，再清空当前周记录文件。
+
+本地预览周报结果，不发送邮件也不清空记录：
+
+```bash
+python manage.py send_weekly_push --dry-run
+```
+
+只预览某个用户的周报：
+
+```bash
+python manage.py send_weekly_push --user <username> --dry-run
+```
+
+触发正式发送：
+
+```bash
+python manage.py send_weekly_push
+```
+
+后端还提供了 `run_weekly_push_scheduler` 命令，会在指定时刻执行 `send_weekly_push`。默认配置是每周四 `12:00`（`Asia/Shanghai`）。
+
+本地手动运行：
+
+```bash
+python manage.py run_weekly_push_scheduler
+```
+
+在 Docker 启动脚本中会直接后台拉起该任务：
+
+```bash
+python3 manage.py run_weekly_push_scheduler &
+```
+
 ## 爬虫定时任务
 
 后端已提供 `run_daily_sync` 命令，会在指定时刻执行 `sync_dataset`（即先抓导师再抓论文）。默认配置是每天 `04:00`（`Asia/Shanghai`）。

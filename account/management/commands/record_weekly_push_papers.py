@@ -3,20 +3,8 @@ from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
 
+from account.services.weekly_push_files import DAY_KEYS, DEFAULT_PAPER_FILE
 from dataset.models import Paper
-
-
-DAY_KEYS = [
-    "thursday",
-    "friday",
-    "saturday",
-    "sunday",
-    "monday",
-    "tuesday",
-    "wednesday",
-]
-
-DEFAULT_PAPER_FILE = "data/mock_weekly_papers.json"
 
 
 class Command(BaseCommand):

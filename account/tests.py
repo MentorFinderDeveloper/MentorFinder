@@ -3,6 +3,7 @@ import tempfile
 from io import StringIO
 from datetime import date
 from unittest.mock import patch
+from pathlib import Path
 
 from django.contrib.auth.hashers import check_password
 from django.core.management import call_command
@@ -1260,6 +1261,184 @@ class MockWeeklyPushCommandTests(TestCase):
                 "/tmp/not-found-weekly-papers.json",
                 stdout=StringIO(),
             )
+
+
+class WeeklyPushCommandTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="weekly_user",
+            email="weekly_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.other_user = User.objects.create_user(
+            username="other_weekly_user",
+            email="other_weekly_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.mentor = Mentor.objects.create(
+            Chinese_name="正式周报导师",
+            English_name="Formal Weekly Mentor",
+            research_direction="自然语言处理",
+        )
+        MentorFollow.objects.create(student=self.user, mentor=self.mentor)
+        self.paper = Paper.objects.create(
+            title="正式周报论文",
+            abstract="正式周报摘要",
+            publish_date=date(2026, 4, 22),
+            author_names="正式周报导师",
+            subjects="cs.CL",
+        )
+        self.mentor.add_paper(self.paper.id)
+
+    @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
+    def test_weekly_push_command_sends_and_resets_after_archive(self, mock_send_weekly_push_email):
+        mock_send_weekly_push_email.return_value = {
+            "sent": True,
+            "digest": {
+                "totalPaperCount": 1,
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paper_file = Path(tmpdir) / "weekly_papers.json"
+            archive_dir = Path(tmpdir) / "archive"
+            with paper_file.open("w", encoding="utf-8") as fp:
+                json.dump(
+                    {
+                        "thursday": [self.paper.id],
+                        "friday": [],
+                        "saturday": [],
+                        "sunday": [],
+                        "monday": [],
+                        "tuesday": [],
+                        "wednesday": [],
+                    },
+                    fp,
+                )
+
+            out = StringIO()
+            call_command(
+                "send_weekly_push",
+                "--paper-file",
+                str(paper_file),
+                "--archive-dir",
+                str(archive_dir),
+                stdout=out,
+            )
+
+            self.assertEqual(mock_send_weekly_push_email.call_count, 2)
+            archive_files = list(archive_dir.glob("weekly_push_*.json"))
+            self.assertEqual(len(archive_files), 1)
+
+            with archive_files[0].open("r", encoding="utf-8") as fp:
+                archive_payload = json.load(fp)
+            self.assertEqual(archive_payload["thursday"], [self.paper.id])
+
+            with paper_file.open("r", encoding="utf-8") as fp:
+                reset_payload = json.load(fp)
+            self.assertTrue(all(day_payload == [] for day_payload in reset_payload.values()))
+
+            self.assertIn("Loaded 7 recorded daily paper lists with 1 paper ID(s).", out.getvalue())
+            self.assertIn("Archived weekly push paper records", out.getvalue())
+
+    @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
+    def test_weekly_push_command_dry_run_keeps_weekly_file(self, mock_send_weekly_push_email):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paper_file = Path(tmpdir) / "weekly_papers.json"
+            archive_dir = Path(tmpdir) / "archive"
+            original_payload = {
+                "thursday": [self.paper.id],
+                "friday": [],
+                "saturday": [],
+                "sunday": [],
+                "monday": [],
+                "tuesday": [],
+                "wednesday": [],
+            }
+            with paper_file.open("w", encoding="utf-8") as fp:
+                json.dump(original_payload, fp)
+
+            out = StringIO()
+            call_command(
+                "send_weekly_push",
+                "--paper-file",
+                str(paper_file),
+                "--archive-dir",
+                str(archive_dir),
+                "--dry-run",
+                stdout=out,
+            )
+
+            mock_send_weekly_push_email.assert_not_called()
+            with paper_file.open("r", encoding="utf-8") as fp:
+                current_payload = json.load(fp)
+            self.assertEqual(current_payload, original_payload)
+            self.assertFalse(archive_dir.exists())
+            self.assertIn("[DRY RUN] weekly_user: 1 matched paper(s).", out.getvalue())
+
+    @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
+    def test_weekly_push_command_stops_when_send_fails(self, mock_send_weekly_push_email):
+        mock_send_weekly_push_email.return_value = {
+            "sent": False,
+            "digest": {
+                "totalPaperCount": 0,
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paper_file = Path(tmpdir) / "weekly_papers.json"
+            archive_dir = Path(tmpdir) / "archive"
+            with paper_file.open("w", encoding="utf-8") as fp:
+                json.dump(
+                    {
+                        "thursday": [self.paper.id],
+                        "friday": [],
+                        "saturday": [],
+                        "sunday": [],
+                        "monday": [],
+                        "tuesday": [],
+                        "wednesday": [],
+                    },
+                    fp,
+                )
+
+            with self.assertRaises(CommandError):
+                call_command(
+                    "send_weekly_push",
+                    "--user",
+                    "weekly_user",
+                    "--paper-file",
+                    str(paper_file),
+                    "--archive-dir",
+                    str(archive_dir),
+                    stdout=StringIO(),
+                )
+
+            with paper_file.open("r", encoding="utf-8") as fp:
+                payload = json.load(fp)
+            self.assertEqual(payload["thursday"], [self.paper.id])
+            self.assertFalse(archive_dir.exists())
+
+
+class WeeklyPushSchedulerCommandTests(TestCase):
+    @patch("account.management.commands.run_weekly_push_scheduler.BlockingScheduler")
+    def test_run_weekly_push_scheduler_uses_default_thursday_noon(self, mock_scheduler_cls):
+        mock_scheduler = mock_scheduler_cls.return_value
+        out = StringIO()
+
+        call_command("run_weekly_push_scheduler", stdout=out)
+
+        mock_scheduler.add_job.assert_called_once()
+        add_job_kwargs = mock_scheduler.add_job.call_args.kwargs
+        self.assertEqual(add_job_kwargs["id"], "weekly_push_job")
+        self.assertEqual(add_job_kwargs["replace_existing"], True)
+        self.assertEqual(add_job_kwargs["coalesce"], True)
+        self.assertEqual(add_job_kwargs["max_instances"], 1)
+        self.assertEqual(add_job_kwargs["misfire_grace_time"], 3600)
+        self.assertIn("已启动每周周报推送任务：每周 thu 12:00", out.getvalue())
+        mock_scheduler.start.assert_called_once()
 
 
 class RecordWeeklyPushPapersCommandTests(TestCase):

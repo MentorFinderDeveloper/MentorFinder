@@ -3,7 +3,7 @@ from pathlib import Path
 
 from django.core.management.base import BaseCommand
 
-from account.management.commands.record_weekly_push_papers import DAY_KEYS, DEFAULT_PAPER_FILE
+from account.services.weekly_push_files import DAY_KEYS, DEFAULT_PAPER_FILE
 
 
 class Command(BaseCommand):
