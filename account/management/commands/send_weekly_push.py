@@ -1,4 +1,3 @@
-from datetime import datetime
 from pathlib import Path
 
 from django.core.management.base import BaseCommand
@@ -9,10 +8,12 @@ from account.management.commands.send_weekly_push_mock import _get_target_users,
 from account.services.weekly_push import build_weekly_push_digest, send_weekly_push_email
 from account.services.weekly_push_files import (
     DEFAULT_ARCHIVE_DIR,
+    DEFAULT_NEXT_PAPER_FILE,
     DEFAULT_PAPER_FILE,
     archive_weekly_push_payload,
     create_empty_weekly_push_payload,
     load_weekly_push_payload,
+    promote_staged_weekly_push_payload,
     write_weekly_push_payload,
 )
 
@@ -35,6 +36,11 @@ class Command(BaseCommand):
             "--archive-dir",
             default=DEFAULT_ARCHIVE_DIR,
             help=f"Archive directory for sent weekly push paper files, defaults to {DEFAULT_ARCHIVE_DIR}",
+        )
+        parser.add_argument(
+            "--next-paper-file",
+            default=DEFAULT_NEXT_PAPER_FILE,
+            help=f"Staging weekly push JSON file path for the next cycle, defaults to {DEFAULT_NEXT_PAPER_FILE}",
         )
         parser.add_argument(
             "--dry-run",
@@ -82,12 +88,19 @@ class Command(BaseCommand):
             archive_dir=Path(options["archive_dir"]),
             archive_name=_build_archive_file_name(),
         )
-        write_weekly_push_payload(
-            paper_file_path,
-            create_empty_weekly_push_payload(),
-        )
+        next_paper_file_path = Path(options["next_paper_file"])
+        if not promote_staged_weekly_push_payload(paper_file_path, next_paper_file_path):
+            write_weekly_push_payload(
+                paper_file_path,
+                create_empty_weekly_push_payload(),
+            )
+            self.stdout.write(
+                f"Archived weekly push paper records to {archive_path} and reset {paper_file_path}."
+            )
+            return
+
         self.stdout.write(
-            f"Archived weekly push paper records to {archive_path} and reset {paper_file_path}."
+            f"Archived weekly push paper records to {archive_path} and promoted staged records from {next_paper_file_path} to {paper_file_path}."
         )
 
 

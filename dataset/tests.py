@@ -2,8 +2,10 @@ from django.test import TestCase, Client
 from django.contrib.auth.models import User
 from django.utils import timezone
 from unittest.mock import patch, MagicMock
-from datetime import date
+from datetime import date, datetime
+from pathlib import Path
 import json
+import tempfile
 
 from dataset.models import Paper, Mentor
 from dataset.management.commands.fetch_papers import Command as FetchPapersCommand
@@ -632,6 +634,101 @@ class FetchPapersCommandTest(TestCase):
 
     def setUp(self):
         self.command = FetchPapersCommand()
+
+    @patch.object(FetchPapersCommand, "_fetch_s2_metadata")
+    @patch("dataset.management.commands.fetch_papers.arxiv.Client")
+    def test_fetch_from_arxiv_tracks_created_paper_ids(self, mock_arxiv_client_cls, mock_fetch_s2_metadata):
+        mentor = Mentor.objects.create(
+            Chinese_name="测试导师",
+            English_name="Test Mentor",
+            research_direction="人工智能",
+        )
+        result = MagicMock()
+        result.title = "测试新增论文"
+        result.summary = "测试摘要"
+        result.published = datetime(2026, 4, 25, 12, 0, 0)
+        author_1 = MagicMock()
+        author_1.name = "Test Mentor"
+        author_2 = MagicMock()
+        author_2.name = "Other Author"
+        result.authors = [author_1, author_2]
+        result.entry_id = "http://arxiv.org/abs/2504.12345v1"
+        result.categories = ["cs.AI"]
+        mock_arxiv_client_cls.return_value.results.return_value = [result]
+        mock_fetch_s2_metadata.return_value = ("cs.AI", "TLDR")
+
+        self.command.fetch_from_arxiv(mentor)
+
+        self.assertEqual(Paper.objects.count(), 1)
+        self.assertEqual(len(self.command.created_paper_ids), 1)
+        self.assertEqual(list(self.command.created_paper_ids)[0], Paper.objects.first().id)
+
+    def test_record_new_papers_for_weekly_push_writes_to_current_cycle_file(self):
+        paper = Paper.objects.create(
+            title="周报当前周期论文",
+            abstract="摘要",
+            publish_date=date(2026, 4, 24),
+            author_names="Author",
+            subjects="cs.AI",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paper_file = Path(tmpdir) / "weekly_papers.json"
+            next_paper_file = Path(tmpdir) / "weekly_papers_next.json"
+
+            self.command._record_new_papers_for_weekly_push(
+                paper_ids=[paper.id],
+                paper_file=str(paper_file),
+                next_paper_file=str(next_paper_file),
+                now=datetime(2026, 4, 24, 13, 0, 0),
+            )
+
+            with paper_file.open("r", encoding="utf-8") as fp:
+                payload = json.load(fp)
+
+            self.assertEqual(payload["friday"], [paper.id])
+            self.assertFalse(next_paper_file.exists())
+
+    def test_record_new_papers_for_weekly_push_routes_thursday_morning_to_next_cycle(self):
+        paper = Paper.objects.create(
+            title="周报下周期论文",
+            abstract="摘要",
+            publish_date=date(2026, 4, 23),
+            author_names="Author",
+            subjects="cs.CL",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paper_file = Path(tmpdir) / "weekly_papers.json"
+            next_paper_file = Path(tmpdir) / "weekly_papers_next.json"
+
+            self.command._record_new_papers_for_weekly_push(
+                paper_ids=[paper.id],
+                paper_file=str(paper_file),
+                next_paper_file=str(next_paper_file),
+                now=datetime(2026, 4, 23, 4, 0, 0),
+            )
+
+            self.assertFalse(paper_file.exists())
+            with next_paper_file.open("r", encoding="utf-8") as fp:
+                payload = json.load(fp)
+
+            self.assertEqual(payload["thursday"], [paper.id])
+
+    def test_record_new_papers_for_weekly_push_skips_empty_increment(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paper_file = Path(tmpdir) / "weekly_papers.json"
+            next_paper_file = Path(tmpdir) / "weekly_papers_next.json"
+
+            self.command._record_new_papers_for_weekly_push(
+                paper_ids=[],
+                paper_file=str(paper_file),
+                next_paper_file=str(next_paper_file),
+                now=datetime(2026, 4, 22, 4, 0, 0),
+            )
+
+            self.assertFalse(paper_file.exists())
+            self.assertFalse(next_paper_file.exists())
 
 
     

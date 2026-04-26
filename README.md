@@ -81,6 +81,8 @@ python manage.py reset_weekly_push_papers --paper-file data/mock_weekly_papers.j
 
 默认邮件后端是 Django console backend，所以本地发送时邮件内容会打印到控制台，不会真正发出。若需要接入真实 SMTP，可以通过环境变量覆盖 `EMAIL_BACKEND` 和 `DEFAULT_FROM_EMAIL`。
 
+当前每日论文爬虫在发现新增 `Paper` 后，会自动把对应 `Paper.id` 写入周报增量文件。为了避免周四中午发送周报前把新周期的周四数据混入旧周期，系统会在周四 `12:00` 之前把新增论文先写入 `data/mock_weekly_papers_next.json`，待本周周报发送完成后再自动提升为新的当前周期文件。
+
 mock 数据说明：
 
 - 命令会从数据库最近的论文中取 `--paper-limit` 篇，默认 `20` 篇。
@@ -90,6 +92,7 @@ mock 数据说明：
 - `record_weekly_push_papers` 会把当天增量论文 ID 追加到对应星期，并自动跳过重复 ID。
 - `reset_weekly_push_papers` 会把七天记录全部清空，适合在周报发送完成后开启下一周期。
 - 当前逻辑会给有邮箱的用户生成周报；周报内容只包含用户关注导师和用户私有导师关联的新论文。
+- `fetch_papers` 在默认情况下会自动维护周报增量文件；如需只抓论文不记录周报增量，可传 `--disable-weekly-record`。
 
 JSON 文件格式示例：
 

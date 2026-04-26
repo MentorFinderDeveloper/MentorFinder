@@ -1,10 +1,18 @@
-import os
 import re
 import arxiv
 import time
 import requests
+from pathlib import Path
 from scholarly import scholarly
 from django.core.management.base import BaseCommand
+
+from account.services.weekly_push_files import (
+    DEFAULT_NEXT_PAPER_FILE,
+    DEFAULT_PAPER_FILE,
+    append_weekly_push_paper_ids,
+    get_weekly_push_day_key,
+    resolve_weekly_push_record_target_path,
+)
 from dataset.models import Mentor, Paper
 
 
@@ -20,8 +28,27 @@ class Command(BaseCommand):
     def __init__(self):
         super().__init__()
         self.semantic_scholar_cache: dict[str, tuple[list[str], str]] = {}
+        self.created_paper_ids: set[int] = set()
 
-    def handle(self, *args, **kwargs):
+    def add_arguments(self, parser):
+        parser.add_argument(
+            "--disable-weekly-record",
+            action="store_true",
+            help="Do not record newly discovered paper IDs into the weekly push JSON files",
+        )
+        parser.add_argument(
+            "--paper-file",
+            default=DEFAULT_PAPER_FILE,
+            help=f"Current-cycle weekly push JSON file path, defaults to {DEFAULT_PAPER_FILE}",
+        )
+        parser.add_argument(
+            "--next-paper-file",
+            default=DEFAULT_NEXT_PAPER_FILE,
+            help=f"Next-cycle weekly push JSON file path, defaults to {DEFAULT_NEXT_PAPER_FILE}",
+        )
+
+    def handle(self, *args, **options):
+        self.created_paper_ids = set()
         mentors = Mentor.objects.all()
 
         for mentor in mentors:
@@ -38,6 +65,13 @@ class Command(BaseCommand):
             # 2. 从 Google Scholar 获取论文 (取消注释以启用，但注意可能被Google暂时封IP)
             # self.fetch_from_scholar(mentor)
             time.sleep(3)
+
+        if not options["disable_weekly_record"]:
+            self._record_new_papers_for_weekly_push(
+                paper_ids=sorted(self.created_paper_ids),
+                paper_file=options["paper_file"],
+                next_paper_file=options["next_paper_file"],
+            )
 
     def _extract_arxiv_id(self, entry_id: str) -> str:
         # arXiv entry_id examples:
@@ -160,6 +194,8 @@ class Command(BaseCommand):
 
                 if created:
                     self.stdout.write(self.style.SUCCESS(f"    [新增论文] {title} (分类: {subjects_str})"))
+                    if paper.id is not None:
+                        self.created_paper_ids.add(paper.id)
                 else:
                     updated = False
                     if not paper.subjects and subjects_str:
@@ -218,3 +254,31 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING(f"    在 Scholar 未找到该作者"))
         except Exception as e:
             self.stdout.write(self.style.ERROR(f"  Scholar 抓取报错: {e}"))
+
+    def _record_new_papers_for_weekly_push(
+        self,
+        paper_ids: list[int],
+        paper_file: str = DEFAULT_PAPER_FILE,
+        next_paper_file: str = DEFAULT_NEXT_PAPER_FILE,
+        now=None,
+    ):
+        if not paper_ids:
+            self.stdout.write("本次未发现新增论文，未更新周报增量文件。")
+            return
+
+        day_key = get_weekly_push_day_key(now)
+        target_path = resolve_weekly_push_record_target_path(
+            paper_file=Path(paper_file),
+            next_paper_file=Path(next_paper_file),
+            now=now,
+        )
+        added_count = append_weekly_push_paper_ids(
+            file_path=target_path,
+            day_key=day_key,
+            paper_ids=paper_ids,
+        )
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"已将 {added_count} 篇新增论文记录到 {target_path} 的 {day_key} 列表。"
+            )
+        )

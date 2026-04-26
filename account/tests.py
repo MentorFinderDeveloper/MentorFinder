@@ -1421,6 +1421,65 @@ class WeeklyPushCommandTests(TestCase):
             self.assertEqual(payload["thursday"], [self.paper.id])
             self.assertFalse(archive_dir.exists())
 
+    @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
+    def test_weekly_push_command_promotes_staged_next_cycle_file(self, mock_send_weekly_push_email):
+        mock_send_weekly_push_email.return_value = {
+            "sent": True,
+            "digest": {
+                "totalPaperCount": 1,
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paper_file = Path(tmpdir) / "weekly_papers.json"
+            next_paper_file = Path(tmpdir) / "weekly_papers_next.json"
+            archive_dir = Path(tmpdir) / "archive"
+            with paper_file.open("w", encoding="utf-8") as fp:
+                json.dump(
+                    {
+                        "thursday": [self.paper.id],
+                        "friday": [],
+                        "saturday": [],
+                        "sunday": [],
+                        "monday": [],
+                        "tuesday": [],
+                        "wednesday": [],
+                    },
+                    fp,
+                )
+            with next_paper_file.open("w", encoding="utf-8") as fp:
+                json.dump(
+                    {
+                        "thursday": [],
+                        "friday": [self.paper.id],
+                        "saturday": [],
+                        "sunday": [],
+                        "monday": [],
+                        "tuesday": [],
+                        "wednesday": [],
+                    },
+                    fp,
+                )
+
+            out = StringIO()
+            call_command(
+                "send_weekly_push",
+                "--paper-file",
+                str(paper_file),
+                "--next-paper-file",
+                str(next_paper_file),
+                "--archive-dir",
+                str(archive_dir),
+                stdout=out,
+            )
+
+            with paper_file.open("r", encoding="utf-8") as fp:
+                current_payload = json.load(fp)
+
+            self.assertEqual(current_payload["friday"], [self.paper.id])
+            self.assertFalse(next_paper_file.exists())
+            self.assertIn("promoted staged records", out.getvalue())
+
 
 class WeeklyPushSchedulerCommandTests(TestCase):
     @patch("account.management.commands.run_weekly_push_scheduler.BlockingScheduler")
