@@ -1,6 +1,7 @@
 from django.contrib.auth.models import AbstractUser, UserManager
 from django.db import models
 from dataset.models import Mentor
+from dataset.models import Paper
 from django.utils.timezone import localtime
 
 
@@ -145,3 +146,38 @@ class MentorFollow(models.Model):
 
     def __str__(self):
         return f"{self.student.username} follows {self.mentor.Chinese_name}"
+
+
+class WeeklyPushPaperBucket(models.Model):
+    CYCLE_CURRENT = "current"
+    CYCLE_NEXT = "next"
+    CYCLE_ARCHIVED = "archived"
+
+    CYCLE_CHOICES = (
+        (CYCLE_CURRENT, "当前周期"),
+        (CYCLE_NEXT, "下一个周期"),
+        (CYCLE_ARCHIVED, "已归档周期"),
+    )
+
+    cycle = models.CharField(max_length=20, choices=CYCLE_CHOICES, verbose_name="周期类型")
+    day_key = models.CharField(max_length=20, verbose_name="星期键")
+    paper = models.ForeignKey(
+        Paper,
+        on_delete=models.CASCADE,
+        related_name="weekly_push_buckets",
+    )
+    archive_batch = models.CharField(max_length=64, blank=True, default="", verbose_name="归档批次")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["cycle", "day_key", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["cycle", "day_key", "paper"],
+                name="unique_weekly_push_cycle_day_paper",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        archive_suffix = f" [{self.archive_batch}]" if self.archive_batch else ""
+        return f"{self.cycle}:{self.day_key}:{self.paper_id}{archive_suffix}"

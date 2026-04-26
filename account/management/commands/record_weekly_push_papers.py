@@ -1,13 +1,11 @@
 import json
-from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
 
+from account.models import WeeklyPushPaperBucket
 from account.services.weekly_push_files import (
     DAY_KEYS,
-    DEFAULT_PAPER_FILE,
-    append_unique_paper_ids,
-    load_or_create_weekly_push_payload,
+    append_weekly_push_paper_ids,
 )
 from dataset.models import Paper
 
@@ -29,28 +27,30 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             "--paper-file",
-            default=DEFAULT_PAPER_FILE,
-            help=f"Weekly push JSON file path, defaults to {DEFAULT_PAPER_FILE}",
+            default="",
+            help="Deprecated JSON file argument kept for backward compatibility and ignored by the database-backed implementation",
+        )
+        parser.add_argument(
+            "--cycle",
+            default=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            choices=[
+                WeeklyPushPaperBucket.CYCLE_CURRENT,
+                WeeklyPushPaperBucket.CYCLE_NEXT,
+            ],
+            help="Which cycle bucket to record into, defaults to current",
         )
 
     def handle(self, *args, **options):
         paper_ids = _parse_paper_ids(options["paper_ids"])
         _ensure_papers_exist(paper_ids)
-
-        file_path = Path(options["paper_file"])
-        payload = load_or_create_weekly_push_payload(file_path)
         day_key = options["day"]
-        existing_ids = payload[day_key]
-        payload[day_key] = append_unique_paper_ids(existing_ids, paper_ids)
-
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        with file_path.open("w", encoding="utf-8") as fp:
-            json.dump(payload, fp, ensure_ascii=False, indent=2)
-            fp.write("\n")
-
-        added_count = len(payload[day_key]) - len(existing_ids)
+        added_count = append_weekly_push_paper_ids(
+            cycle=options["cycle"],
+            day_key=day_key,
+            paper_ids=paper_ids,
+        )
         self.stdout.write(
-            f"Recorded {added_count} new paper ID(s) for {day_key} in {file_path}."
+            f"Recorded {added_count} new paper ID(s) for {day_key} in cycle [{options['cycle']}]."
         )
 
 

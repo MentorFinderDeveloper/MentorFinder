@@ -6,12 +6,11 @@ from pathlib import Path
 from scholarly import scholarly
 from django.core.management.base import BaseCommand
 
+from account.models import WeeklyPushPaperBucket
 from account.services.weekly_push_files import (
-    DEFAULT_NEXT_PAPER_FILE,
-    DEFAULT_PAPER_FILE,
     append_weekly_push_paper_ids,
     get_weekly_push_day_key,
-    resolve_weekly_push_record_target_path,
+    resolve_weekly_push_record_target_cycle,
 )
 from dataset.models import Mentor, Paper
 
@@ -34,17 +33,13 @@ class Command(BaseCommand):
         parser.add_argument(
             "--disable-weekly-record",
             action="store_true",
-            help="Do not record newly discovered paper IDs into the weekly push JSON files",
+            help="Do not record newly discovered paper IDs into the weekly push bucket table",
         )
         parser.add_argument(
-            "--paper-file",
-            default=DEFAULT_PAPER_FILE,
-            help=f"Current-cycle weekly push JSON file path, defaults to {DEFAULT_PAPER_FILE}",
-        )
-        parser.add_argument(
-            "--next-paper-file",
-            default=DEFAULT_NEXT_PAPER_FILE,
-            help=f"Next-cycle weekly push JSON file path, defaults to {DEFAULT_NEXT_PAPER_FILE}",
+            "--record-cycle",
+            default="auto",
+            choices=["auto", WeeklyPushPaperBucket.CYCLE_CURRENT, WeeklyPushPaperBucket.CYCLE_NEXT],
+            help="Which weekly push cycle to record into, defaults to auto",
         )
 
     def handle(self, *args, **options):
@@ -69,8 +64,7 @@ class Command(BaseCommand):
         if not options["disable_weekly_record"]:
             self._record_new_papers_for_weekly_push(
                 paper_ids=sorted(self.created_paper_ids),
-                paper_file=options["paper_file"],
-                next_paper_file=options["next_paper_file"],
+                record_cycle=options["record_cycle"],
             )
 
     def _extract_arxiv_id(self, entry_id: str) -> str:
@@ -258,8 +252,7 @@ class Command(BaseCommand):
     def _record_new_papers_for_weekly_push(
         self,
         paper_ids: list[int],
-        paper_file: str = DEFAULT_PAPER_FILE,
-        next_paper_file: str = DEFAULT_NEXT_PAPER_FILE,
+        record_cycle: str = "auto",
         now=None,
     ):
         if not paper_ids:
@@ -267,18 +260,18 @@ class Command(BaseCommand):
             return
 
         day_key = get_weekly_push_day_key(now)
-        target_path = resolve_weekly_push_record_target_path(
-            paper_file=Path(paper_file),
-            next_paper_file=Path(next_paper_file),
-            now=now,
+        target_cycle = (
+            resolve_weekly_push_record_target_cycle(now)
+            if record_cycle == "auto"
+            else record_cycle
         )
         added_count = append_weekly_push_paper_ids(
-            file_path=target_path,
+            cycle=target_cycle,
             day_key=day_key,
             paper_ids=paper_ids,
         )
         self.stdout.write(
             self.style.SUCCESS(
-                f"已将 {added_count} 篇新增论文记录到 {target_path} 的 {day_key} 列表。"
+                f"已将 {added_count} 篇新增论文记录到周期 [{target_cycle}] 的 {day_key} 列表。"
             )
         )

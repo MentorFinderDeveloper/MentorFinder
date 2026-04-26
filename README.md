@@ -81,7 +81,7 @@ python manage.py reset_weekly_push_papers --paper-file data/mock_weekly_papers.j
 
 默认邮件后端是 Django console backend，所以本地发送时邮件内容会打印到控制台，不会真正发出。若需要接入真实 SMTP，可以通过环境变量覆盖 `EMAIL_BACKEND` 和 `DEFAULT_FROM_EMAIL`。
 
-当前每日论文爬虫在发现新增 `Paper` 后，会自动把对应 `Paper.id` 写入周报增量文件。为了避免周四中午发送周报前把新周期的周四数据混入旧周期，系统会在周四 `12:00` 之前把新增论文先写入 `data/mock_weekly_papers_next.json`，待本周周报发送完成后再自动提升为新的当前周期文件。
+当前每日论文爬虫在发现新增 `Paper` 后，会自动把对应 `Paper.id` 写入 `db.sqlite3` 中的周报增量表。为了避免周四中午发送周报前把新周期的周四数据混入旧周期，系统会在周四 `12:00` 之前把新增论文先写入 `next` 周期桶，待本周周报发送完成后再自动提升为新的当前周期桶。
 
 mock 数据说明：
 
@@ -89,10 +89,10 @@ mock 数据说明：
 - 这些论文会被轮流分配到 7 个 list，模拟上周四到本周三每天爬虫发现的新论文。
 - 如果传入 `--paper-file`，命令会优先使用 JSON 文件中的论文 ID 列表，而不是 `--paper-limit`。
 - JSON 文件中的 ID 必须是数据库里已经存在的 `Paper.id`；如果 ID 不存在，命令会报错。
-- `record_weekly_push_papers` 会把当天增量论文 ID 追加到对应星期，并自动跳过重复 ID。
-- `reset_weekly_push_papers` 会把七天记录全部清空，适合在周报发送完成后开启下一周期。
+- `record_weekly_push_papers` 会把当天增量论文 ID 追加到数据库中的对应周期/星期桶，并自动跳过重复 ID。
+- `reset_weekly_push_papers` 会把数据库中指定周期的七天记录清空，适合在周报发送完成后开启下一周期。
 - 当前逻辑会给有邮箱的用户生成周报；周报内容只包含用户关注导师和用户私有导师关联的新论文。
-- `fetch_papers` 在默认情况下会自动维护周报增量文件；如需只抓论文不记录周报增量，可传 `--disable-weekly-record`。
+- `fetch_papers` 在默认情况下会自动维护数据库中的周报增量桶；如需只抓论文不记录周报增量，可传 `--disable-weekly-record`。
 
 JSON 文件格式示例：
 
@@ -108,7 +108,7 @@ JSON 文件格式示例：
 }
 ```
 
-其中 7 个字段分别对应上周四、上周五、上周六、上周日、本周一、本周二、本周三。`data/mock_weekly_papers.json` 可以作为本地测试文件使用，但里面的论文 ID 依赖本地数据库，不一定适合其他环境直接复用。
+其中 7 个字段分别对应上周四、上周五、上周六、上周日、本周一、本周二、本周三。`data/mock_weekly_papers.json` 现在主要用于 `send_weekly_push_mock` 的模拟输入；正式周报链路已经切到数据库表。
 
 当前还没有实现的内容：
 
@@ -118,7 +118,7 @@ JSON 文件格式示例：
 
 ## 周报定时推送
 
-后端当前提供了一个正式的周报发送命令 `send_weekly_push`，它会读取 `data/mock_weekly_papers.json` 中记录的七天增量论文，向有邮箱的用户发送周报。成功发送后，会先把本周记录备份到 `data/weekly_push_archive/`，再清空当前周记录文件。
+后端当前提供了一个正式的周报发送命令 `send_weekly_push`，它会读取数据库中的当前周期七天增量论文桶，向有邮箱的用户发送周报。成功发送后，会把当前周期桶归档到数据库中的 `archived` 记录，并在存在 `next` 周期桶时自动提升。
 
 本地预览周报结果，不发送邮件也不清空记录：
 

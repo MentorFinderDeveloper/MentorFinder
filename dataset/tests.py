@@ -10,7 +10,7 @@ import tempfile
 from dataset.models import Paper, Mentor
 from dataset.management.commands.fetch_papers import Command as FetchPapersCommand
 from dataset.services.thu_crawler import get_english_name, parse_mentor_detail, parse_mentor_list
-from account.models import User as AccountUser
+from account.models import User as AccountUser, WeeklyPushPaperBucket
 from utils.utils_jwt import generate_jwt_token
 
 
@@ -672,22 +672,19 @@ class FetchPapersCommandTest(TestCase):
             subjects="cs.AI",
         )
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            paper_file = Path(tmpdir) / "weekly_papers.json"
-            next_paper_file = Path(tmpdir) / "weekly_papers_next.json"
+        self.command._record_new_papers_for_weekly_push(
+            paper_ids=[paper.id],
+            now=datetime(2026, 4, 24, 13, 0, 0),
+        )
 
-            self.command._record_new_papers_for_weekly_push(
-                paper_ids=[paper.id],
-                paper_file=str(paper_file),
-                next_paper_file=str(next_paper_file),
-                now=datetime(2026, 4, 24, 13, 0, 0),
-            )
-
-            with paper_file.open("r", encoding="utf-8") as fp:
-                payload = json.load(fp)
-
-            self.assertEqual(payload["friday"], [paper.id])
-            self.assertFalse(next_paper_file.exists())
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(
+                cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+                day_key="friday",
+                paper=paper,
+            ).count(),
+            1,
+        )
 
     def test_record_new_papers_for_weekly_push_routes_thursday_morning_to_next_cycle(self):
         paper = Paper.objects.create(
@@ -698,37 +695,27 @@ class FetchPapersCommandTest(TestCase):
             subjects="cs.CL",
         )
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            paper_file = Path(tmpdir) / "weekly_papers.json"
-            next_paper_file = Path(tmpdir) / "weekly_papers_next.json"
+        self.command._record_new_papers_for_weekly_push(
+            paper_ids=[paper.id],
+            now=datetime(2026, 4, 23, 4, 0, 0),
+        )
 
-            self.command._record_new_papers_for_weekly_push(
-                paper_ids=[paper.id],
-                paper_file=str(paper_file),
-                next_paper_file=str(next_paper_file),
-                now=datetime(2026, 4, 23, 4, 0, 0),
-            )
-
-            self.assertFalse(paper_file.exists())
-            with next_paper_file.open("r", encoding="utf-8") as fp:
-                payload = json.load(fp)
-
-            self.assertEqual(payload["thursday"], [paper.id])
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(
+                cycle=WeeklyPushPaperBucket.CYCLE_NEXT,
+                day_key="thursday",
+                paper=paper,
+            ).count(),
+            1,
+        )
 
     def test_record_new_papers_for_weekly_push_skips_empty_increment(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            paper_file = Path(tmpdir) / "weekly_papers.json"
-            next_paper_file = Path(tmpdir) / "weekly_papers_next.json"
+        self.command._record_new_papers_for_weekly_push(
+            paper_ids=[],
+            now=datetime(2026, 4, 22, 4, 0, 0),
+        )
 
-            self.command._record_new_papers_for_weekly_push(
-                paper_ids=[],
-                paper_file=str(paper_file),
-                next_paper_file=str(next_paper_file),
-                now=datetime(2026, 4, 22, 4, 0, 0),
-            )
-
-            self.assertFalse(paper_file.exists())
-            self.assertFalse(next_paper_file.exists())
+        self.assertEqual(WeeklyPushPaperBucket.objects.count(), 0)
 
 
     
