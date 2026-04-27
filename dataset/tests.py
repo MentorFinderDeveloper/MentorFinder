@@ -575,6 +575,72 @@ class MentorViewTest(TestCase):
         )
         self.assertEqual(owner_res.status_code, 200)
 
+    def test_owner_can_update_private_mentor(self):
+        private_mentor = Mentor.objects.create(
+            Chinese_name="私有导师",
+            English_name="Private Mentor",
+            research_direction="系统安全",
+            owner=self.normal_user,
+        )
+
+        response = self.client.put(
+            f"/dataset/mentors/{private_mentor.id}",
+            data=json.dumps({
+                "Chinese_name": "私有导师",
+                "English_name": "Private Mentor",
+                "research_direction": "可信人工智能",
+                "email": "private@example.com",
+                "profile": "用户维护的私有导师档案",
+            }),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.normal_token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        private_mentor.refresh_from_db()
+        self.assertEqual(private_mentor.research_direction, "可信人工智能")
+        self.assertEqual(private_mentor.email, "private@example.com")
+        self.assertEqual(response.json()["mentor"]["is_private"], True)
+
+    def test_non_owner_cannot_update_private_mentor(self):
+        private_mentor = Mentor.objects.create(
+            Chinese_name="私有导师",
+            English_name="Private Mentor",
+            research_direction="系统安全",
+            owner=self.normal_user,
+        )
+
+        response = self.client.put(
+            f"/dataset/mentors/{private_mentor.id}",
+            data=json.dumps({
+                "Chinese_name": "私有导师",
+                "English_name": "Private Mentor",
+                "research_direction": "不应被写入",
+            }),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.other_token}",
+        )
+
+        self.assertEqual(response.status_code, 404)
+        private_mentor.refresh_from_db()
+        self.assertEqual(private_mentor.research_direction, "系统安全")
+
+    def test_admin_can_delete_private_mentor(self):
+        private_mentor = Mentor.objects.create(
+            Chinese_name="私有导师",
+            English_name="Private Mentor",
+            research_direction="系统安全",
+            owner=self.normal_user,
+        )
+
+        response = self.client.delete(
+            f"/dataset/mentors/{private_mentor.id}",
+            HTTP_AUTHORIZATION=f"Bearer {self.admin_token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Mentor.objects.filter(id=private_mentor.id).exists())
+
     def test_get_mentor_without_auth(self):
         """测试未登录也可以获取导师详情"""
         response = self.client.get(f"/dataset/mentors/{self.mentor.id}")
