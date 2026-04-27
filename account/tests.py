@@ -1142,6 +1142,33 @@ class WeeklyPushDigestTests(TestCase):
         self.assertEqual(result["sent"], False)
         self.assertEqual(result["sentCount"], 0)
         self.assertEqual(result["digest"]["hasUpdates"], False)
+        self.assertEqual(
+            result["errorMessage"],
+            "Email backend reported zero successful deliveries.",
+        )
+        mock_send_mail.assert_called_once()
+
+    @patch("account.services.weekly_push.send_mail")
+    def test_send_weekly_push_email_captures_send_exception_reason(self, mock_send_mail):
+        mock_send_mail.side_effect = RuntimeError("smtp timeout")
+
+        result = send_weekly_push_email(
+            self.user,
+            [
+                [self.followed_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        self.assertEqual(result["sent"], False)
+        self.assertEqual(result["sentCount"], 0)
+        self.assertEqual(result["digest"]["totalPaperCount"], 1)
+        self.assertEqual(result["errorMessage"], "RuntimeError: smtp timeout")
         mock_send_mail.assert_called_once()
 
 
@@ -1362,16 +1389,21 @@ class WeeklyPushCommandTests(TestCase):
             "digest": {
                 "totalPaperCount": 0,
             },
+            "errorMessage": "smtp timeout",
         }
 
+        out = StringIO()
         with self.assertRaises(CommandError):
             call_command(
                 "send_weekly_push",
                 "--user",
                 "weekly_user",
-                stdout=StringIO(),
+                stdout=out,
             )
 
+        push_record = PushRecord.objects.get(user=self.user, period_key=self.current_period_key)
+        self.assertEqual(push_record.status, PushRecord.STATUS_FAILED)
+        self.assertEqual(push_record.error_message, "smtp timeout")
         self.assertEqual(
             WeeklyPushPaperBucket.objects.filter(
                 cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
@@ -1383,6 +1415,28 @@ class WeeklyPushCommandTests(TestCase):
         self.assertEqual(
             WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_ARCHIVED).count(),
             0,
+        )
+        self.assertIn("weekly_user: failure reason: smtp timeout", out.getvalue())
+
+    @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
+    def test_weekly_push_command_captures_delivery_exception_reason(self, mock_send_weekly_push_email):
+        mock_send_weekly_push_email.side_effect = RuntimeError("smtp offline")
+
+        out = StringIO()
+        with self.assertRaises(CommandError):
+            call_command(
+                "send_weekly_push",
+                "--user",
+                "weekly_user",
+                stdout=out,
+            )
+
+        push_record = PushRecord.objects.get(user=self.user, period_key=self.current_period_key)
+        self.assertEqual(push_record.status, PushRecord.STATUS_FAILED)
+        self.assertEqual(push_record.error_message, "RuntimeError: smtp offline")
+        self.assertIn(
+            "weekly_user: failure reason: RuntimeError: smtp offline",
+            out.getvalue(),
         )
 
     @patch("account.management.commands.send_weekly_push.send_weekly_push_email")

@@ -241,18 +241,35 @@ def _deliver_weekly_push_for_user(
         )
         return True
 
-    result = send_weekly_push_email(user, daily_paper_lists)
+    try:
+        result = send_weekly_push_email(user, daily_paper_lists)
+    except Exception as exc:
+        error_message = _format_weekly_push_failure_reason(exc)
+        _mark_push_record_failed(push_record, error_message)
+        stdout.write(f"{user.username}: failed before email delivery completed.")
+        stdout.write(f"{user.username}: failure reason: {error_message}")
+        raise CommandError(
+            f"Weekly push email failed for user {user.username}: {error_message}"
+        ) from exc
+
     status = "sent" if result["sent"] else "failed"
     if result["sent"]:
         _mark_push_record_sent(push_record)
     else:
-        _mark_push_record_failed(push_record, "Weekly push email failed")
+        error_message = (
+            str(result.get("errorMessage") or "").strip()
+            or "Weekly push email failed"
+        )
+        _mark_push_record_failed(push_record, error_message)
     stdout.write(
         f"{user.username}: {status}, "
         f"{result['digest']['totalPaperCount']} matched paper(s)."
     )
     if not result["sent"]:
-        raise CommandError(f"Weekly push email failed for user {user.username}")
+        stdout.write(f"{user.username}: failure reason: {error_message}")
+        raise CommandError(
+            f"Weekly push email failed for user {user.username}: {error_message}"
+        )
 
     return False
 
@@ -268,3 +285,10 @@ def _mark_push_record_failed(push_record: PushRecord, error_message: str):
     push_record.status = PushRecord.STATUS_FAILED
     push_record.error_message = error_message
     push_record.save(update_fields=["status", "error_message", "updated_at"])
+
+
+def _format_weekly_push_failure_reason(exc: Exception) -> str:
+    message = str(exc).strip()
+    if message:
+        return f"{exc.__class__.__name__}: {message}"
+    return exc.__class__.__name__

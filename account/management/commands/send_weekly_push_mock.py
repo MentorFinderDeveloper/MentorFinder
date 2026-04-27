@@ -69,12 +69,23 @@ class Command(BaseCommand):
                 )
                 continue
 
-            result = send_weekly_push_email(user, daily_paper_lists)
+            try:
+                result = send_weekly_push_email(user, daily_paper_lists)
+            except Exception as exc:
+                error_message = _format_mock_weekly_push_failure_reason(exc)
+                self.stdout.write(f"{user.username}: failed before email delivery completed.")
+                self.stdout.write(f"{user.username}: failure reason: {error_message}")
+                continue
+
             status = "sent" if result["sent"] else "failed"
             self.stdout.write(
                 f"{user.username}: {status}, "
                 f"{result['digest']['totalPaperCount']} matched paper(s)."
             )
+            if not result["sent"] and result.get("errorMessage"):
+                self.stdout.write(
+                    f"{user.username}: failure reason: {result['errorMessage']}"
+                )
 
 
 def _build_mock_daily_paper_lists(paper_limit: int) -> list[list[Paper]]:
@@ -136,3 +147,10 @@ def _get_target_users(username: str | None):
     if username:
         users = users.filter(username=username)
     return users.order_by("id")
+
+
+def _format_mock_weekly_push_failure_reason(exc: Exception) -> str:
+    message = str(exc).strip()
+    if message:
+        return f"{exc.__class__.__name__}: {message}"
+    return exc.__class__.__name__
