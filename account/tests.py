@@ -12,6 +12,7 @@ from django.test import TestCase
 from django.utils import timezone
 
 from account.models import MentorVerificationRequest, PushRecord, User, MentorFollow, WeeklyPushPaperBucket
+from account.management.commands.send_weekly_push import _build_weekly_period_metadata
 from account.services.weekly_push import (
     build_weekly_push_digest,
     render_weekly_push_email,
@@ -1520,6 +1521,36 @@ class WeeklyPushCommandTests(TestCase):
                 "20260401_20260407",
                 stdout=StringIO(),
             )
+
+    def test_build_weekly_period_metadata_matches_thursday_cycle_on_delivery_day(self):
+        period_key, period_start, period_end = _build_weekly_period_metadata(
+            timezone.datetime(2026, 4, 23, 12, 0, tzinfo=timezone.get_current_timezone())
+        )
+
+        self.assertEqual(period_key, "20260416_20260422")
+        self.assertEqual(
+            period_start,
+            timezone.datetime(2026, 4, 16, 0, 0, tzinfo=timezone.get_current_timezone()),
+        )
+        self.assertEqual(
+            period_end,
+            timezone.datetime(2026, 4, 22, 23, 59, 59, tzinfo=timezone.get_current_timezone()),
+        )
+
+    def test_build_weekly_period_metadata_keeps_same_cycle_for_friday_retry(self):
+        period_key, period_start, period_end = _build_weekly_period_metadata(
+            timezone.datetime(2026, 4, 24, 9, 30, tzinfo=timezone.get_current_timezone())
+        )
+
+        self.assertEqual(period_key, "20260416_20260422")
+        self.assertEqual(
+            period_start,
+            timezone.datetime(2026, 4, 16, 0, 0, tzinfo=timezone.get_current_timezone()),
+        )
+        self.assertEqual(
+            period_end,
+            timezone.datetime(2026, 4, 22, 23, 59, 59, tzinfo=timezone.get_current_timezone()),
+        )
 
 
 class WeeklyPushSchedulerCommandTests(TestCase):

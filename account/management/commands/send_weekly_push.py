@@ -15,6 +15,8 @@ from account.services.weekly_push_files import (
     promote_staged_weekly_push_payload,
 )
 
+WEEKLY_PUSH_DELIVERY_WEEKDAY = 3
+
 
 class Command(BaseCommand):
     help = "Send weekly push emails from the database-backed weekly push buckets"
@@ -131,9 +133,15 @@ def _load_weekly_delivery_context(
 
 def _build_weekly_period_metadata(now: datetime | None = None) -> tuple[str, datetime, datetime]:
     local_now = timezone.localtime(now) if now is not None else timezone.localtime()
-    start_of_today = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
-    period_end = start_of_today - timedelta(seconds=1)
-    period_start = (start_of_today - timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
+    days_since_delivery_thursday = (
+        local_now.weekday() - WEEKLY_PUSH_DELIVERY_WEEKDAY
+    ) % 7
+    delivery_day_start = (
+        local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        - timedelta(days=days_since_delivery_thursday)
+    )
+    period_end = delivery_day_start - timedelta(seconds=1)
+    period_start = delivery_day_start - timedelta(days=7)
     period_key = f"{period_start.strftime('%Y%m%d')}_{period_end.strftime('%Y%m%d')}"
     return period_key, period_start, period_end
 
