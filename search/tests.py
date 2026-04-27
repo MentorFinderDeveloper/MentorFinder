@@ -303,6 +303,96 @@ class SearchTests(TestCase):
             ["大语言模型在问答系统中的应用", "机器学习方法研究"],
         )
 
+    def test_search_mentors_supports_pagination(self):
+        Mentor.objects.create(
+            Chinese_name="张六",
+            English_name="Zhang Liu",
+            research_direction="机器学习工程",
+            email="zhangliu@example.com",
+            profile="用于分页测试",
+        )
+
+        page1 = self.client.get(
+            "/search/mentors",
+            {
+                "keyword": "学习",
+                "search_mode": "fuzzy",
+                "page": 1,
+                "page_size": 1,
+            },
+        )
+        page2 = self.client.get(
+            "/search/mentors",
+            {
+                "keyword": "学习",
+                "search_mode": "fuzzy",
+                "page": 2,
+                "page_size": 1,
+            },
+        )
+
+        self.assertEqual(page1.status_code, 200)
+        self.assertEqual(page2.status_code, 200)
+
+        page1_data = page1.json()
+        page2_data = page2.json()
+
+        self.assertEqual(page1_data["total"], 2)
+        self.assertEqual(page1_data["total_pages"], 2)
+        self.assertEqual(page1_data["page"], 1)
+        self.assertTrue(page1_data["has_next"])
+        self.assertFalse(page1_data["has_previous"])
+        self.assertEqual(len(page1_data["mentors"]), 1)
+
+        self.assertEqual(page2_data["total"], 2)
+        self.assertEqual(page2_data["total_pages"], 2)
+        self.assertEqual(page2_data["page"], 2)
+        self.assertFalse(page2_data["has_next"])
+        self.assertTrue(page2_data["has_previous"])
+        self.assertEqual(len(page2_data["mentors"]), 1)
+
+    def test_search_papers_supports_pagination(self):
+        page1 = self.client.get(
+            "/search/papers",
+            {
+                "keyword": "张",
+                "search_mode": "fuzzy",
+                "sort_mode": "early",
+                "page": 1,
+                "page_size": 1,
+            },
+        )
+        page2 = self.client.get(
+            "/search/papers",
+            {
+                "keyword": "张",
+                "search_mode": "fuzzy",
+                "sort_mode": "early",
+                "page": 2,
+                "page_size": 1,
+            },
+        )
+
+        self.assertEqual(page1.status_code, 200)
+        self.assertEqual(page2.status_code, 200)
+
+        page1_data = page1.json()
+        page2_data = page2.json()
+
+        self.assertEqual(page1_data["total"], 2)
+        self.assertEqual(page1_data["total_pages"], 2)
+        self.assertEqual(page1_data["page"], 1)
+        self.assertEqual(page1_data["papers"][0]["title"], "机器学习方法研究")
+        self.assertTrue(page1_data["has_next"])
+        self.assertFalse(page1_data["has_previous"])
+
+        self.assertEqual(page2_data["total"], 2)
+        self.assertEqual(page2_data["total_pages"], 2)
+        self.assertEqual(page2_data["page"], 2)
+        self.assertEqual(page2_data["papers"][0]["title"], "大语言模型在问答系统中的应用")
+        self.assertFalse(page2_data["has_next"])
+        self.assertTrue(page2_data["has_previous"])
+
     def test_search_api_invalid_search_mode(self):
         res = self.client.get("/search/papers", {"keyword": "机器学习", "search_mode": "partial"})
 
