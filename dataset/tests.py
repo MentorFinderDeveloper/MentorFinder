@@ -270,6 +270,77 @@ class PaperViewTest(TestCase):
             HTTP_AUTHORIZATION=f"Bearer {self.admin_token}"
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_create_paper_binds_existing_mentor_by_author_name(self):
+        mentor = Mentor.objects.create(
+            Chinese_name="张三",
+            English_name="San Zhang",
+            research_direction="人工智能",
+        )
+
+        response = self.client.post(
+            "/dataset/papers",
+            data=json.dumps({
+                "title": "导师绑定论文",
+                "abstract": "摘要",
+                "author_names": "张三, 其他作者",
+            }),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.admin_token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        mentor.refresh_from_db()
+        created_paper_id = response.json()["paper"]["id"]
+        self.assertIn(created_paper_id, mentor.get_paper_id_list())
+
+    def test_create_paper_rejects_title_that_is_too_long(self):
+        response = self.client.post(
+            "/dataset/papers",
+            data=json.dumps({
+                "title": "x" * 256,
+                "abstract": "摘要",
+                "author_names": "张三",
+            }),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.admin_token}",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], -2)
+        self.assertEqual(response.json()["info"], "Invalid parameters. [title] is too long")
+
+    def test_create_paper_rejects_abstract_that_is_too_long(self):
+        response = self.client.post(
+            "/dataset/papers",
+            data=json.dumps({
+                "title": "摘要过长论文",
+                "abstract": "x" * 5001,
+                "author_names": "张三",
+            }),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.admin_token}",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], -2)
+        self.assertEqual(response.json()["info"], "Invalid parameters. [abstract] is too long")
+
+    def test_create_paper_rejects_author_names_that_are_too_long(self):
+        response = self.client.post(
+            "/dataset/papers",
+            data=json.dumps({
+                "title": "作者过长论文",
+                "abstract": "摘要",
+                "author_names": "x" * 5001,
+            }),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.admin_token}",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], -2)
+        self.assertEqual(response.json()["info"], "Invalid parameters. [author_names] is too long")
     
     def test_update_paper_as_admin(self):
         """测试管理员更新论文"""
@@ -337,6 +408,66 @@ class PaperViewTest(TestCase):
         self.assertEqual(response.status_code, 200)
         zhang_mentor.refresh_from_db()
         self.assertNotIn(self.paper.id, zhang_mentor.get_paper_id_list())
+
+    def test_update_paper_requires_admin(self):
+        response = self.client.put(
+            f"/dataset/papers/{self.paper.id}",
+            data=json.dumps({
+                "title": "普通用户修改",
+                "abstract": "摘要",
+                "author_names": "张三",
+            }),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.normal_token}",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.paper.refresh_from_db()
+        self.assertEqual(self.paper.title, "测试论文")
+
+    def test_update_paper_returns_404_for_missing_paper(self):
+        response = self.client.put(
+            "/dataset/papers/999999",
+            data=json.dumps({
+                "title": "不存在论文",
+                "abstract": "摘要",
+                "author_names": "张三",
+            }),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.admin_token}",
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["code"], 2)
+        self.assertEqual(response.json()["info"], "Paper not found")
+
+    def test_delete_paper_requires_admin(self):
+        response = self.client.delete(
+            f"/dataset/papers/{self.paper.id}",
+            HTTP_AUTHORIZATION=f"Bearer {self.normal_token}",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(Paper.objects.filter(id=self.paper.id).exists())
+
+    def test_delete_paper_returns_404_for_missing_paper(self):
+        response = self.client.delete(
+            "/dataset/papers/999999",
+            HTTP_AUTHORIZATION=f"Bearer {self.admin_token}",
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["code"], 2)
+        self.assertEqual(response.json()["info"], "Paper not found")
+
+    def test_paper_detail_rejects_bad_method(self):
+        response = self.client.get(
+            f"/dataset/papers/{self.paper.id}",
+            HTTP_AUTHORIZATION=f"Bearer {self.admin_token}",
+        )
+
+        self.assertEqual(response.status_code, 405)
+        self.assertEqual(response.json()["code"], -3)
     
     def test_delete_paper_as_admin(self):
         """测试管理员删除论文"""
@@ -546,6 +677,35 @@ class MentorViewTest(TestCase):
         self.assertEqual(response.status_code, 401)
 
     @patch("dataset.views.crawl_mentor_by_name")
+    def test_create_custom_mentor_rejects_duplicate_private_mentor(self, mock_crawler):
+        Mentor.objects.create(
+            Chinese_name="王五",
+            English_name="Wang Wu",
+            research_direction="强化学习",
+            owner=self.normal_user,
+        )
+        mock_crawler.return_value = {
+            "Chinese_name": "王五",
+            "English_name": "Wang Wu",
+            "research_direction": "强化学习",
+            "email": "wangwu@example.com",
+            "profile": "测试私有导师",
+        }
+
+        response = self.client.post(
+            "/dataset/mentors/custom",
+            data=json.dumps({
+                "Chinese_name": "王五",
+            }),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.normal_token}",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["code"], 3)
+        self.assertEqual(response.json()["info"], "Mentor already exists in your private library")
+
+    @patch("dataset.views.crawl_mentor_by_name")
     def test_create_custom_mentor_rejects_when_reaching_limit(self, mock_crawler):
         for idx in range(10):
             Mentor.objects.create(
@@ -691,6 +851,38 @@ class MentorViewTest(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(Mentor.objects.filter(id=private_mentor.id).exists())
+
+    def test_owner_can_delete_private_mentor(self):
+        private_mentor = Mentor.objects.create(
+            Chinese_name="私有导师",
+            English_name="Private Mentor",
+            research_direction="系统安全",
+            owner=self.normal_user,
+        )
+
+        response = self.client.delete(
+            f"/dataset/mentors/{private_mentor.id}",
+            HTTP_AUTHORIZATION=f"Bearer {self.normal_token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Mentor.objects.filter(id=private_mentor.id).exists())
+
+    def test_non_owner_cannot_delete_private_mentor(self):
+        private_mentor = Mentor.objects.create(
+            Chinese_name="私有导师",
+            English_name="Private Mentor",
+            research_direction="系统安全",
+            owner=self.normal_user,
+        )
+
+        response = self.client.delete(
+            f"/dataset/mentors/{private_mentor.id}",
+            HTTP_AUTHORIZATION=f"Bearer {self.other_token}",
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(Mentor.objects.filter(id=private_mentor.id).exists())
 
     def test_get_mentor_without_auth(self):
         """测试未登录也可以获取导师详情"""
@@ -940,6 +1132,94 @@ class TimelineViewTest(TestCase):
         self.assertEqual(data["total_papers"], 1)
         self.assertEqual(data["papers"][0]["id"], self.paper_other.id)
 
+    def test_timeline_rejects_bad_method(self):
+        response = self.client.post(
+            "/timeline/",
+            data=json.dumps({}),
+            content_type="application/json",
+        )
 
-    
-   
+        self.assertEqual(response.status_code, 405)
+        self.assertEqual(response.json()["code"], -3)
+
+    def test_timeline_page_number_below_one_is_clamped(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "人工智能 (Artificial Intelligence)",
+                "page": 0,
+                "page_size": 1,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["page"], 1)
+        self.assertEqual(data["papers"][0]["id"], self.paper_ai_new.id)
+
+    def test_timeline_non_numeric_page_uses_default(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "人工智能 (Artificial Intelligence)",
+                "page": "not-number",
+                "page_size": 1,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["page"], 1)
+        self.assertEqual(data["page_size"], 1)
+
+    def test_timeline_non_numeric_page_size_uses_default(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "人工智能 (Artificial Intelligence)",
+                "page": 1,
+                "page_size": "not-number",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["page_size"], 20)
+        self.assertEqual(data["total_papers"], 2)
+
+    def test_timeline_page_above_total_pages_returns_last_page(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "人工智能 (Artificial Intelligence)",
+                "page": 999,
+                "page_size": 1,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["page"], 2)
+        self.assertFalse(data["has_next"])
+        self.assertTrue(data["has_previous"])
+        self.assertEqual(data["papers"][0]["id"], self.paper_ai_old.id)
+
+    def test_timeline_unknown_direction_returns_empty_page(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "不存在方向",
+                "page": 1,
+                "page_size": 5,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["direction"], "不存在方向")
+        self.assertEqual(data["total_papers"], 0)
+        self.assertEqual(data["total_pages"], 0)
+        self.assertEqual(data["page"], 1)
+        self.assertFalse(data["has_previous"])
+        self.assertFalse(data["has_next"])
+        self.assertEqual(data["papers"], [])
