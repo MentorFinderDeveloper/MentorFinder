@@ -2,6 +2,7 @@ import json
 
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
+from django.db.models import Q
 from django.http import HttpRequest
 
 from account.models import User
@@ -15,6 +16,9 @@ from collections import defaultdict
 
 
 PRIVATE_MENTOR_LIMIT = 10
+TIMELINE_DEFAULT_PAGE_SIZE = 20
+TIMELINE_MAX_PAGE_SIZE = 100
+TIMELINE_OTHER_DIRECTION = "其他/未分类"
 
 
 def _extract_token(req: HttpRequest) -> str:
@@ -498,30 +502,123 @@ ARXIV_SUBJECT_MAPPING = {
     'stat.ME': '统计方法论 (Methodology)',
 }
 
-#把论文按研究方向分类并按时间排序
+def _parse_positive_int(raw_value, default_value: int, minimum: int = 1, maximum: int | None = None) -> int:
+    try:
+        parsed = int(str(raw_value).strip())
+    except (TypeError, ValueError):
+        return default_value
+
+    if parsed < minimum:
+        parsed = minimum
+    if maximum is not None and parsed > maximum:
+        parsed = maximum
+    return parsed
+
+
+def _split_subjects(subjects: str | None) -> list[str]:
+    if not subjects:
+        return []
+    return [subject.strip() for subject in subjects.split(",") if subject.strip()]
+
+
+def _build_direction_code_mapping() -> dict[str, set[str]]:
+    direction_to_codes: dict[str, set[str]] = defaultdict(set)
+    for subject_code, direction in ARXIV_SUBJECT_MAPPING.items():
+        direction_to_codes[direction].add(subject_code)
+    return direction_to_codes
+
+
+TIMELINE_DIRECTION_TO_CODES = _build_direction_code_mapping()
+
+
+def _build_timeline_direction_summaries() -> list[tuple[str, int]]:
+    direction_counts: dict[str, int] = defaultdict(int)
+    subjects_query = (
+        Paper.objects.exclude(publish_date__isnull=True)
+        .values_list("subjects", flat=True)
+        .iterator(chunk_size=500)
+    )
+
+    for subjects in subjects_query:
+        parsed_subjects = _split_subjects(subjects)
+        if not parsed_subjects:
+            direction_counts[TIMELINE_OTHER_DIRECTION] += 1
+            continue
+
+        for subject in parsed_subjects:
+            readable_name = ARXIV_SUBJECT_MAPPING.get(subject, subject)
+            direction_counts[readable_name] += 1
+
+    return sorted(direction_counts.items(), key=lambda item: (-item[1], item[0]))
+
+
+def _filter_timeline_papers_by_direction(direction: str):
+    base_query = Paper.objects.exclude(publish_date__isnull=True)
+
+    if direction == TIMELINE_OTHER_DIRECTION:
+        return base_query.filter(Q(subjects__isnull=True) | Q(subjects=""))
+
+    mapped_codes = TIMELINE_DIRECTION_TO_CODES.get(direction)
+    if mapped_codes:
+        query_condition = Q()
+        for code in mapped_codes:
+            query_condition |= Q(subjects__icontains=code)
+        return base_query.filter(query_condition)
+
+    # Fallback: support querying unknown raw subject labels returned by overview.
+    return base_query.filter(subjects__icontains=direction)
+
+
+# 把论文按研究方向分类，先返回方向概览，再按方向分页拉取论文
 def paper_timeline_view(request):
     if request.method != "GET":
         return BAD_METHOD
 
-    papers = Paper.objects.exclude(publish_date__isnull=True).order_by("-publish_date")
-    direction_groups = defaultdict(list)
+    direction = str(request.GET.get("direction", "")).strip()
+    page = _parse_positive_int(request.GET.get("page"), 1)
+    page_size = _parse_positive_int(
+        request.GET.get("page_size"),
+        TIMELINE_DEFAULT_PAGE_SIZE,
+        maximum=TIMELINE_MAX_PAGE_SIZE,
+    )
 
-    for paper in papers:
-        if paper.subjects:
-            raw_subjects = [s.strip() for s in paper.subjects.split(",")]
-            for sub in raw_subjects:
-                readable_name = ARXIV_SUBJECT_MAPPING.get(sub, sub)
-                direction_groups[readable_name].append({
-                    "id": paper.id,
-                    "title": paper.title,
-                    "publish_date": str(paper.publish_date) if paper.publish_date else None,
-                    "author_names": paper.author_names,
-                    "abstract": paper.abstract,
-                    "arxiv_url": paper.arxiv_url,
-                    "tldr": paper.tldr,
-                })
-        else:
-            direction_groups["其他/未分类"].append({
+    if direction == "":
+        direction_summaries = _build_timeline_direction_summaries()
+        return request_success({
+            "directions": [
+                {
+                    "direction": item_direction,
+                    "paper_count": item_count,
+                }
+                for item_direction, item_count in direction_summaries
+            ],
+            "default_direction": direction_summaries[0][0] if direction_summaries else "",
+            "page_size_default": TIMELINE_DEFAULT_PAGE_SIZE,
+            "page_size_max": TIMELINE_MAX_PAGE_SIZE,
+        })
+
+    papers_query = _filter_timeline_papers_by_direction(direction).order_by("-publish_date", "-id")
+    total_papers = papers_query.count()
+    total_pages = (total_papers + page_size - 1) // page_size if total_papers > 0 else 0
+
+    if total_pages > 0:
+        page = min(page, total_pages)
+        start = (page - 1) * page_size
+        paged_papers = papers_query[start:start + page_size]
+    else:
+        page = 1
+        paged_papers = []
+
+    return request_success({
+        "direction": direction,
+        "page": page,
+        "page_size": page_size,
+        "total_papers": total_papers,
+        "total_pages": total_pages,
+        "has_previous": total_pages > 0 and page > 1,
+        "has_next": total_pages > 0 and page < total_pages,
+        "papers": [
+            {
                 "id": paper.id,
                 "title": paper.title,
                 "publish_date": str(paper.publish_date) if paper.publish_date else None,
@@ -529,17 +626,7 @@ def paper_timeline_view(request):
                 "abstract": paper.abstract,
                 "arxiv_url": paper.arxiv_url,
                 "tldr": paper.tldr,
-            })
-
-    timeline = [
-        {
-            "direction": direction,
-            "papers": papers_list,
-        }
-        for direction, papers_list in sorted(
-            direction_groups.items(),
-            key=lambda item: (-len(item[1]), item[0]),
-        )
-    ]
-
-    return request_success({"timeline": timeline})
+            }
+            for paper in paged_papers
+        ],
+    })
