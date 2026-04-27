@@ -22,6 +22,7 @@ from account.services.weekly_push import (
     send_weekly_push_email,
 )
 from dataset.models import Mentor, Paper
+from utils.startup_config import load_startup_config
 from utils.utils_jwt import generate_jwt_token
 
 
@@ -2002,4 +2003,54 @@ class ResetWeeklyPushPapersCommandTests(TestCase):
         self.assertEqual(
             WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_NEXT).count(),
             0,
+        )
+
+
+class StartupConfigTests(TestCase):
+    def test_load_startup_config_returns_defaults_for_missing_file(self):
+        missing_path = Path(tempfile.gettempdir()) / "missing-backend-config.yaml"
+        if missing_path.exists():
+            missing_path.unlink()
+
+        config = load_startup_config(missing_path)
+
+        self.assertEqual(
+            config,
+            {
+                "startup": {
+                    "run_initial_sync": True,
+                    "run_daily_sync_scheduler": True,
+                    "run_weekly_push_scheduler": True,
+                }
+            },
+        )
+
+    def test_load_startup_config_reads_startup_switches(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", encoding="utf-8", delete=False) as fp:
+            fp.write(
+                "\n".join(
+                    [
+                        "startup:",
+                        "  run_initial_sync: false",
+                        "  run_daily_sync_scheduler: true",
+                        "  run_weekly_push_scheduler: false",
+                    ]
+                )
+            )
+            config_path = Path(fp.name)
+
+        try:
+            config = load_startup_config(config_path)
+        finally:
+            config_path.unlink(missing_ok=True)
+
+        self.assertEqual(
+            config,
+            {
+                "startup": {
+                    "run_initial_sync": False,
+                    "run_daily_sync_scheduler": True,
+                    "run_weekly_push_scheduler": False,
+                }
+            },
         )

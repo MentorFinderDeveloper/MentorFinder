@@ -153,6 +153,8 @@ python manage.py run_weekly_push_scheduler
 python3 manage.py run_weekly_push_scheduler &
 ```
 
+如果不希望服务启动时自动拉起它，可以把 [config.yaml](/mnt/d/My_Files/TsingHua/大二下/软件工程/Project/找导师/backend/config.yaml) 中的 `startup.run_weekly_push_scheduler` 改成 `false`。
+
 ## 周报发送记录
 
 后端当前会把正式周报的发送状态写入 `PushRecord`。你可以在 Django Admin 中查看，也可以通过管理命令查询和重试失败记录。
@@ -208,6 +210,23 @@ python manage.py run_daily_sync
 ```bash
 python3 manage.py run_daily_sync &
 ```
+
+如果不希望服务启动时自动拉起它，可以把 [config.yaml](/mnt/d/My_Files/TsingHua/大二下/软件工程/Project/找导师/backend/config.yaml) 中的 `startup.run_daily_sync_scheduler` 改成 `false`。
+
+## 启动配置
+
+后端根目录下的 [config.yaml](/mnt/d/My_Files/TsingHua/大二下/软件工程/Project/找导师/backend/config.yaml) 可以控制启动脚本是否执行启动期任务：
+
+```yaml
+startup:
+  run_initial_sync: true
+  run_daily_sync_scheduler: true
+  run_weekly_push_scheduler: true
+```
+
+- `run_initial_sync`: 是否在服务启动时先执行一次 `python3 manage.py sync_dataset`
+- `run_daily_sync_scheduler`: 是否在服务启动时后台拉起 `run_daily_sync`
+- `run_weekly_push_scheduler`: 是否在服务启动时后台拉起 `run_weekly_push_scheduler`
 
 
 ## 代码阅读
