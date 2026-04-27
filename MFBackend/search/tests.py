@@ -363,8 +363,11 @@ class SearchTests(TestCase):
     def test_search_keyword_empty(self):
         res = self.client.get("/search/papers", {"keyword": "   "})
 
-        self.assertEqual(res.status_code, 400)
-        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["keyword"], "")
+        self.assertEqual(res.json()["total"], 3)
+        self.assertEqual(len(res.json()["papers"]), 3)
 
     def test_search_keyword_too_long_for_mentors(self):
         res = self.client.get("/search/mentors", {"keyword": "x" * 256})

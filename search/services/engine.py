@@ -77,6 +77,9 @@ def _paginate_queryset(queryset, page, page_size):
 
 
 def search_mentors_queryset(keyword: str, user=None, fuzzy: bool = False):
+    if keyword.strip() == "":
+        return _visible_mentors(user).distinct()
+
     lookup = "icontains" if fuzzy else "iexact"
     return _visible_mentors(user).filter(
         Q(**{f"Chinese_name__{lookup}": keyword}) |
@@ -86,6 +89,9 @@ def search_mentors_queryset(keyword: str, user=None, fuzzy: bool = False):
 
 
 def _search_papers_exact_queryset(keyword: str, user=None):
+    if keyword.strip() == "":
+        return Paper.objects.all().distinct()
+
     # keyword is title
     papers = Paper.objects.filter(Q(title__iexact=keyword) | Q(subjects__iexact=keyword)).distinct()
 
@@ -107,6 +113,9 @@ def _search_papers_exact_queryset(keyword: str, user=None):
 
 
 def _search_papers_fuzzy_queryset(keyword: str, user=None):
+    if keyword.strip() == "":
+        return Paper.objects.all().distinct()
+
     # keyword is title (use subquery instead of collecting IDs in Python)
     title_match_ids_subquery = (
         Paper.objects

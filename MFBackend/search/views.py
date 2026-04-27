@@ -29,7 +29,6 @@ def _get_keyword(req: HttpRequest) -> str:
         "string",
         err_msg="Missing or error type of [keyword]",
     ).strip()
-    assert keyword != "", "Invalid parameters. [keyword] cannot be empty"
     assert len(keyword) <= MAX_CHAR_LENGTH, "Invalid parameters. [keyword] is too long"
     return keyword
 
