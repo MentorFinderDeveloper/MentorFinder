@@ -70,16 +70,18 @@ python manage.py send_weekly_push_mock --paper-file data/mock_weekly_papers.json
 记录某一天爬虫新增的论文 ID：
 
 ```bash
-python manage.py record_weekly_push_papers --day monday --paper-ids 1,2,3 --paper-file data/mock_weekly_papers.json
+python manage.py record_weekly_push_papers --day monday --paper-ids 1,2,3
 ```
 
 周报发送完成后，重置七天新增论文记录：
 
 ```bash
-python manage.py reset_weekly_push_papers --paper-file data/mock_weekly_papers.json
+python manage.py reset_weekly_push_papers
 ```
 
 默认邮件后端是 Django console backend，所以本地发送时邮件内容会打印到控制台，不会真正发出。若需要接入真实 SMTP，可以通过环境变量覆盖 `EMAIL_BACKEND` 和 `DEFAULT_FROM_EMAIL`。
+
+当前每日论文爬虫在发现新增 `Paper` 后，会自动把对应 `Paper.id` 写入 `db.sqlite3` 中的周报增量表。为了避免周四中午发送周报前把新周期的周四数据混入旧周期，系统会在周四 `12:00` 之前把新增论文先写入 `next` 周期桶，待本周周报发送完成后再自动提升为新的当前周期桶。
 
 mock 数据说明：
 
@@ -87,9 +89,11 @@ mock 数据说明：
 - 这些论文会被轮流分配到 7 个 list，模拟上周四到本周三每天爬虫发现的新论文。
 - 如果传入 `--paper-file`，命令会优先使用 JSON 文件中的论文 ID 列表，而不是 `--paper-limit`。
 - JSON 文件中的 ID 必须是数据库里已经存在的 `Paper.id`；如果 ID 不存在，命令会报错。
-- `record_weekly_push_papers` 会把当天增量论文 ID 追加到对应星期，并自动跳过重复 ID。
-- `reset_weekly_push_papers` 会把七天记录全部清空，适合在周报发送完成后开启下一周期。
+- `record_weekly_push_papers` 和 `reset_weekly_push_papers` 已经切到数据库桶实现，不再依赖 JSON 文件；其中 `--paper-file` 只在 `send_weekly_push_mock` 里作为 mock 输入使用。
+- `record_weekly_push_papers` 会把当天增量论文 ID 追加到数据库中的对应周期/星期桶，并自动跳过重复 ID。
+- `reset_weekly_push_papers` 会把数据库中指定周期的七天记录清空，适合在周报发送完成后开启下一周期。
 - 当前逻辑会给有邮箱的用户生成周报；周报内容只包含用户关注导师和用户私有导师关联的新论文。
+- `fetch_papers` 在默认情况下会自动维护数据库中的周报增量桶；如需只抓论文不记录周报增量，可传 `--disable-weekly-record`。
 
 JSON 文件格式示例：
 
@@ -105,13 +109,91 @@ JSON 文件格式示例：
 }
 ```
 
-其中 7 个字段分别对应上周四、上周五、上周六、上周日、本周一、本周二、本周三。`data/mock_weekly_papers.json` 可以作为本地测试文件使用，但里面的论文 ID 依赖本地数据库，不一定适合其他环境直接复用。
+其中 7 个字段分别对应上周四、上周五、上周六、上周日、本周一、本周二、本周三。`data/mock_weekly_papers.json` 现在主要用于 `send_weekly_push_mock` 的模拟输入；正式周报链路已经切到数据库表。
 
 当前还没有实现的内容：
 
 - 没有使用 `Paper.discovered_at` 判定真实发现时间。
 - 没有做邮箱验证。
 - 没有接入真实 SMTP 配置。
+
+## 周报定时推送
+
+后端当前提供了一个正式的周报发送命令 `send_weekly_push`，它会读取数据库中的当前周期七天增量论文桶，向有邮箱的用户发送周报。成功发送后，会把当前周期桶归档到数据库中的 `archived` 记录，并在存在 `next` 周期桶时自动提升。
+
+本地预览周报结果，不发送邮件也不清空记录：
+
+```bash
+python manage.py send_weekly_push --dry-run
+```
+
+只预览某个用户的周报：
+
+```bash
+python manage.py send_weekly_push --user <username> --dry-run
+```
+
+触发正式发送：
+
+```bash
+python manage.py send_weekly_push
+```
+
+后端还提供了 `run_weekly_push_scheduler` 命令，会在指定时刻执行 `send_weekly_push`。默认配置是每周四 `12:00`（`Asia/Shanghai`）。
+
+本地手动运行：
+
+```bash
+python manage.py run_weekly_push_scheduler
+```
+
+在 Docker 启动脚本中会直接后台拉起该任务：
+
+```bash
+python3 manage.py run_weekly_push_scheduler &
+```
+
+如果不希望服务启动时自动拉起它，可以把 [config.yaml](/mnt/d/My_Files/TsingHua/大二下/软件工程/Project/找导师/backend/config.yaml) 中的 `startup.run_weekly_push_scheduler` 改成 `false`。
+
+## 周报发送记录
+
+后端当前会把正式周报的发送状态写入 `PushRecord`。你可以在 Django Admin 中查看，也可以通过管理命令查询和重试失败记录。
+
+查看最近的周报发送记录：
+
+```bash
+python manage.py show_weekly_push_records
+```
+
+按周期查看：
+
+```bash
+python manage.py show_weekly_push_records --period-key 20260416_20260422
+```
+
+只看失败记录：
+
+```bash
+python manage.py show_weekly_push_records --period-key 20260416_20260422 --status failed
+```
+
+只预览将要重试的失败用户：
+
+```bash
+python manage.py retry_failed_weekly_push --period-key 20260416_20260422 --dry-run
+```
+
+正式重试某个周期失败的周报发送：
+
+```bash
+python manage.py retry_failed_weekly_push --period-key 20260416_20260422
+```
+
+如果需要人工补发历史某一周，也可以在正式发送命令中显式指定周期：
+
+```bash
+python manage.py send_weekly_push --user alice --period-key 20260401_20260407 --period-start 2026-04-01T00:00:00+08:00 --period-end 2026-04-07T23:59:59+08:00
+```
 
 ## 爬虫定时任务
 
@@ -128,6 +210,23 @@ python manage.py run_daily_sync
 ```bash
 python3 manage.py run_daily_sync &
 ```
+
+如果不希望服务启动时自动拉起它，可以把 [config.yaml](/mnt/d/My_Files/TsingHua/大二下/软件工程/Project/找导师/backend/config.yaml) 中的 `startup.run_daily_sync_scheduler` 改成 `false`。
+
+## 启动配置
+
+后端根目录下的 [config.yaml](/mnt/d/My_Files/TsingHua/大二下/软件工程/Project/找导师/backend/config.yaml) 可以控制启动脚本是否执行启动期任务：
+
+```yaml
+startup:
+  run_initial_sync: true
+  run_daily_sync_scheduler: true
+  run_weekly_push_scheduler: true
+```
+
+- `run_initial_sync`: 是否在服务启动时先执行一次 `python3 manage.py sync_dataset`
+- `run_daily_sync_scheduler`: 是否在服务启动时后台拉起 `run_daily_sync`
+- `run_weekly_push_scheduler`: 是否在服务启动时后台拉起 `run_weekly_push_scheduler`
 
 
 ## 代码阅读

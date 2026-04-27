@@ -15,6 +15,7 @@ arxiv
 scholarly
 pypinyin
 apscheduler
+PyYAML
 # TODO Start: [Student] Add dependency on uWSGI
 
 # TODO End: [Student] Add dependency on uWSGI

@@ -126,20 +126,36 @@ def send_weekly_push_email(
     digest = build_weekly_push_digest(user, daily_paper_lists)
     email_content = render_weekly_push_email(digest)
 
-    sent_count = send_mail(
-        subject=email_content["subject"],
-        message=email_content["body"],
-        from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None),
-        recipient_list=[user.email],
-        fail_silently=False,
-    )
+    sent_count = 0
+    error_message = ""
+    try:
+        sent_count = send_mail(
+            subject=email_content["subject"],
+            message=email_content["body"],
+            from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None),
+            recipient_list=[user.email],
+            fail_silently=False,
+        )
+    except Exception as exc:
+        error_message = _format_email_send_error(exc)
+
+    if sent_count == 0 and error_message == "":
+        error_message = "Email backend reported zero successful deliveries."
 
     return {
         "digest": digest,
         "email": email_content,
         "sent": sent_count > 0,
         "sentCount": sent_count,
+        "errorMessage": error_message,
     }
+
+
+def _format_email_send_error(exc: Exception) -> str:
+    message = str(exc).strip()
+    if message:
+        return f"{exc.__class__.__name__}: {message}"
+    return exc.__class__.__name__
 
 
 def _collect_unique_papers(daily_paper_lists: Iterable[Iterable[Paper]]) -> dict[int, Paper]:

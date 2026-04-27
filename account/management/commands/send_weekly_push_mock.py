@@ -8,6 +8,16 @@ from account.models import User
 from account.services.weekly_push import build_weekly_push_digest, send_weekly_push_email
 from dataset.models import Paper
 
+DAY_KEYS = [
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+]
+
 
 class Command(BaseCommand):
     help = "Send weekly push emails with mocked seven-day crawler paper lists"
@@ -59,12 +69,23 @@ class Command(BaseCommand):
                 )
                 continue
 
-            result = send_weekly_push_email(user, daily_paper_lists)
+            try:
+                result = send_weekly_push_email(user, daily_paper_lists)
+            except Exception as exc:
+                error_message = _format_mock_weekly_push_failure_reason(exc)
+                self.stdout.write(f"{user.username}: failed before email delivery completed.")
+                self.stdout.write(f"{user.username}: failure reason: {error_message}")
+                continue
+
             status = "sent" if result["sent"] else "failed"
             self.stdout.write(
                 f"{user.username}: {status}, "
                 f"{result['digest']['totalPaperCount']} matched paper(s)."
             )
+            if not result["sent"] and result.get("errorMessage"):
+                self.stdout.write(
+                    f"{user.username}: failure reason: {result['errorMessage']}"
+                )
 
 
 def _build_mock_daily_paper_lists(paper_limit: int) -> list[list[Paper]]:
@@ -99,38 +120,24 @@ def _load_mock_daily_paper_lists_from_file(paper_file: str) -> list[list[Paper]]
     if not isinstance(payload, dict):
         raise CommandError("Paper file must contain a JSON object.")
 
-    day_keys = [
-        "thursday",
-        "friday",
-        "saturday",
-        "sunday",
-        "monday",
-        "tuesday",
-        "wednesday",
-    ]
-
     daily_paper_lists = []
-    for day_key in day_keys:
+    for day_key in DAY_KEYS:
         paper_ids = payload.get(day_key, [])
         if not isinstance(paper_ids, list):
             raise CommandError(f"Paper IDs for [{day_key}] must be a list.")
+        if not all(isinstance(paper_id, int) for paper_id in paper_ids):
+            raise CommandError(f"Paper IDs for [{day_key}] must be integers.")
 
-        normalized_ids = []
-        for paper_id in paper_ids:
-            if not isinstance(paper_id, int):
-                raise CommandError(f"Paper IDs for [{day_key}] must be integers.")
-            normalized_ids.append(paper_id)
-
-        papers = list(Paper.objects.filter(id__in=normalized_ids))
+        papers = list(Paper.objects.filter(id__in=paper_ids))
         paper_map = {paper.id: paper for paper in papers}
 
-        missing_ids = [paper_id for paper_id in normalized_ids if paper_id not in paper_map]
+        missing_ids = [paper_id for paper_id in paper_ids if paper_id not in paper_map]
         if missing_ids:
             raise CommandError(
                 f"Paper IDs not found for [{day_key}]: {', '.join(str(pid) for pid in missing_ids)}"
             )
 
-        daily_paper_lists.append([paper_map[paper_id] for paper_id in normalized_ids])
+        daily_paper_lists.append([paper_map[paper_id] for paper_id in paper_ids])
 
     return daily_paper_lists
 
@@ -140,3 +147,10 @@ def _get_target_users(username: str | None):
     if username:
         users = users.filter(username=username)
     return users.order_by("id")
+
+
+def _format_mock_weekly_push_failure_reason(exc: Exception) -> str:
+    message = str(exc).strip()
+    if message:
+        return f"{exc.__class__.__name__}: {message}"
+    return exc.__class__.__name__

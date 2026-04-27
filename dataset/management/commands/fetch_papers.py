@@ -1,10 +1,18 @@
-import os
 import re
 import arxiv
 import time
 import requests
+from pathlib import Path
 from scholarly import scholarly
 from django.core.management.base import BaseCommand
+
+from account.models import WeeklyPushPaperBucket
+from account.services.weekly_push_files import (
+    append_weekly_push_paper_ids,
+    build_weekly_push_bucket_period_key,
+    get_weekly_push_day_key,
+    resolve_weekly_push_record_target_cycle,
+)
 from dataset.models import Mentor, Paper
 
 
@@ -20,8 +28,23 @@ class Command(BaseCommand):
     def __init__(self):
         super().__init__()
         self.semantic_scholar_cache: dict[str, tuple[list[str], str]] = {}
+        self.created_paper_ids: set[int] = set()
 
-    def handle(self, *args, **kwargs):
+    def add_arguments(self, parser):
+        parser.add_argument(
+            "--disable-weekly-record",
+            action="store_true",
+            help="Do not record newly discovered paper IDs into the weekly push bucket table",
+        )
+        parser.add_argument(
+            "--record-cycle",
+            default="auto",
+            choices=["auto", WeeklyPushPaperBucket.CYCLE_CURRENT, WeeklyPushPaperBucket.CYCLE_NEXT],
+            help="Which weekly push cycle to record into, defaults to auto",
+        )
+
+    def handle(self, *args, **options):
+        self.created_paper_ids = set()
         mentors = Mentor.objects.all()
 
         for mentor in mentors:
@@ -38,6 +61,12 @@ class Command(BaseCommand):
             # 2. 从 Google Scholar 获取论文 (取消注释以启用，但注意可能被Google暂时封IP)
             # self.fetch_from_scholar(mentor)
             time.sleep(3)
+
+        if not options["disable_weekly_record"]:
+            self._record_new_papers_for_weekly_push(
+                paper_ids=sorted(self.created_paper_ids),
+                record_cycle=options["record_cycle"],
+            )
 
     def _extract_arxiv_id(self, entry_id: str) -> str:
         # arXiv entry_id examples:
@@ -160,6 +189,8 @@ class Command(BaseCommand):
 
                 if created:
                     self.stdout.write(self.style.SUCCESS(f"    [新增论文] {title} (分类: {subjects_str})"))
+                    if paper.id is not None:
+                        self.created_paper_ids.add(paper.id)
                 else:
                     updated = False
                     if not paper.subjects and subjects_str:
@@ -218,3 +249,35 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING(f"    在 Scholar 未找到该作者"))
         except Exception as e:
             self.stdout.write(self.style.ERROR(f"  Scholar 抓取报错: {e}"))
+
+    def _record_new_papers_for_weekly_push(
+        self,
+        paper_ids: list[int],
+        record_cycle: str = "auto",
+        now=None,
+    ):
+        if not paper_ids:
+            self.stdout.write("本次未发现新增论文，未更新周报增量文件。")
+            return
+
+        day_key = get_weekly_push_day_key(now)
+        target_cycle = (
+            resolve_weekly_push_record_target_cycle(now)
+            if record_cycle == "auto"
+            else record_cycle
+        )
+        period_key = build_weekly_push_bucket_period_key(
+            now=now,
+            cycle=target_cycle,
+        )
+        added_count = append_weekly_push_paper_ids(
+            cycle=target_cycle,
+            period_key=period_key,
+            day_key=day_key,
+            paper_ids=paper_ids,
+        )
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"已将 {added_count} 篇新增论文记录到周期 [{target_cycle}] / [{period_key}] 的 {day_key} 列表。"
+            )
+        )

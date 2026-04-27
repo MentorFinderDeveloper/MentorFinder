@@ -2,13 +2,16 @@ from django.test import TestCase, Client
 from django.contrib.auth.models import User
 from django.utils import timezone
 from unittest.mock import patch, MagicMock
-from datetime import date
+from datetime import date, datetime
+from pathlib import Path
 import json
+import tempfile
 
 from dataset.models import Paper, Mentor
 from dataset.management.commands.fetch_papers import Command as FetchPapersCommand
 from dataset.services.thu_crawler import get_english_name, parse_mentor_detail, parse_mentor_list
-from account.models import User as AccountUser
+from account.models import User as AccountUser, WeeklyPushPaperBucket
+from account.services.weekly_push_files import build_weekly_push_bucket_period_key
 from utils.utils_jwt import generate_jwt_token
 
 
@@ -632,6 +635,90 @@ class FetchPapersCommandTest(TestCase):
 
     def setUp(self):
         self.command = FetchPapersCommand()
+
+    @patch.object(FetchPapersCommand, "_fetch_s2_metadata")
+    @patch("dataset.management.commands.fetch_papers.arxiv.Client")
+    def test_fetch_from_arxiv_tracks_created_paper_ids(self, mock_arxiv_client_cls, mock_fetch_s2_metadata):
+        mentor = Mentor.objects.create(
+            Chinese_name="测试导师",
+            English_name="Test Mentor",
+            research_direction="人工智能",
+        )
+        result = MagicMock()
+        result.title = "测试新增论文"
+        result.summary = "测试摘要"
+        result.published = datetime(2026, 4, 25, 12, 0, 0)
+        author_1 = MagicMock()
+        author_1.name = "Test Mentor"
+        author_2 = MagicMock()
+        author_2.name = "Other Author"
+        result.authors = [author_1, author_2]
+        result.entry_id = "http://arxiv.org/abs/2504.12345v1"
+        result.categories = ["cs.AI"]
+        mock_arxiv_client_cls.return_value.results.return_value = [result]
+        mock_fetch_s2_metadata.return_value = ("cs.AI", "TLDR")
+
+        self.command.fetch_from_arxiv(mentor)
+
+        self.assertEqual(Paper.objects.count(), 1)
+        self.assertEqual(len(self.command.created_paper_ids), 1)
+        self.assertEqual(list(self.command.created_paper_ids)[0], Paper.objects.first().id)
+
+    def test_record_new_papers_for_weekly_push_writes_to_current_cycle_file(self):
+        paper = Paper.objects.create(
+            title="周报当前周期论文",
+            abstract="摘要",
+            publish_date=date(2026, 4, 24),
+            author_names="Author",
+            subjects="cs.AI",
+        )
+
+        self.command._record_new_papers_for_weekly_push(
+            paper_ids=[paper.id],
+            now=datetime(2026, 4, 24, 13, 0, 0),
+        )
+
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(
+                cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+                period_key="20260423_20260429",
+                day_key="friday",
+                paper=paper,
+            ).count(),
+            1,
+        )
+
+    def test_record_new_papers_for_weekly_push_routes_thursday_morning_to_next_cycle(self):
+        paper = Paper.objects.create(
+            title="周报下周期论文",
+            abstract="摘要",
+            publish_date=date(2026, 4, 23),
+            author_names="Author",
+            subjects="cs.CL",
+        )
+
+        self.command._record_new_papers_for_weekly_push(
+            paper_ids=[paper.id],
+            now=datetime(2026, 4, 23, 4, 0, 0),
+        )
+
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(
+                cycle=WeeklyPushPaperBucket.CYCLE_NEXT,
+                period_key="20260423_20260429",
+                day_key="thursday",
+                paper=paper,
+            ).count(),
+            1,
+        )
+
+    def test_record_new_papers_for_weekly_push_skips_empty_increment(self):
+        self.command._record_new_papers_for_weekly_push(
+            paper_ids=[],
+            now=datetime(2026, 4, 22, 4, 0, 0),
+        )
+
+        self.assertEqual(WeeklyPushPaperBucket.objects.count(), 0)
 
 
 class TimelineViewTest(TestCase):

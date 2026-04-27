@@ -3,19 +3,26 @@ import tempfile
 from io import StringIO
 from datetime import date
 from unittest.mock import patch
+from pathlib import Path
 
 from django.contrib.auth.hashers import check_password
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase
+from django.utils import timezone
 
-from account.models import MentorVerificationRequest, User, MentorFollow
+from account.models import MentorVerificationRequest, PushRecord, User, MentorFollow, WeeklyPushPaperBucket
+from account.management.commands.send_weekly_push import _build_weekly_period_metadata
+from account.services.weekly_push_files import (
+    build_weekly_push_bucket_period_key,
+)
 from account.services.weekly_push import (
     build_weekly_push_digest,
     render_weekly_push_email,
     send_weekly_push_email,
 )
 from dataset.models import Mentor, Paper
+from utils.startup_config import load_startup_config
 from utils.utils_jwt import generate_jwt_token
 
 
@@ -1136,6 +1143,33 @@ class WeeklyPushDigestTests(TestCase):
         self.assertEqual(result["sent"], False)
         self.assertEqual(result["sentCount"], 0)
         self.assertEqual(result["digest"]["hasUpdates"], False)
+        self.assertEqual(
+            result["errorMessage"],
+            "Email backend reported zero successful deliveries.",
+        )
+        mock_send_mail.assert_called_once()
+
+    @patch("account.services.weekly_push.send_mail")
+    def test_send_weekly_push_email_captures_send_exception_reason(self, mock_send_mail):
+        mock_send_mail.side_effect = RuntimeError("smtp timeout")
+
+        result = send_weekly_push_email(
+            self.user,
+            [
+                [self.followed_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        self.assertEqual(result["sent"], False)
+        self.assertEqual(result["sentCount"], 0)
+        self.assertEqual(result["digest"]["totalPaperCount"], 1)
+        self.assertEqual(result["errorMessage"], "RuntimeError: smtp timeout")
         mock_send_mail.assert_called_once()
 
 
@@ -1262,6 +1296,571 @@ class MockWeeklyPushCommandTests(TestCase):
             )
 
 
+class WeeklyPushCommandTests(TestCase):
+    def setUp(self):
+        self.current_period_key = "20260416_20260422"
+        self.next_period_key = "20260423_20260429"
+        self.user = User.objects.create_user(
+            username="weekly_user",
+            email="weekly_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.other_user = User.objects.create_user(
+            username="other_weekly_user",
+            email="other_weekly_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.mentor = Mentor.objects.create(
+            Chinese_name="正式周报导师",
+            English_name="Formal Weekly Mentor",
+            research_direction="自然语言处理",
+        )
+        MentorFollow.objects.create(student=self.user, mentor=self.mentor)
+        self.paper = Paper.objects.create(
+            title="正式周报论文",
+            abstract="正式周报摘要",
+            publish_date=date(2026, 4, 22),
+            author_names="正式周报导师",
+            subjects="cs.CL",
+        )
+        self.mentor.add_paper(self.paper.id)
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key=self.current_period_key,
+            day_key="thursday",
+            paper=self.paper,
+        )
+
+    @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
+    def test_weekly_push_command_sends_and_resets_after_archive(self, mock_send_weekly_push_email):
+        mock_send_weekly_push_email.return_value = {
+            "sent": True,
+            "digest": {
+                "totalPaperCount": 1,
+            },
+        }
+
+        out = StringIO()
+        call_command(
+            "send_weekly_push",
+            stdout=out,
+        )
+
+        self.assertEqual(mock_send_weekly_push_email.call_count, 2)
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT).count(),
+            0,
+        )
+        archived_rows = WeeklyPushPaperBucket.objects.filter(
+            cycle=WeeklyPushPaperBucket.CYCLE_ARCHIVED,
+            period_key=self.current_period_key,
+            day_key="thursday",
+            paper=self.paper,
+        )
+        self.assertEqual(archived_rows.count(), 1)
+        self.assertIn("Loaded 7 recorded daily paper lists with 1 paper ID(s).", out.getvalue())
+        self.assertIn("Archived 1 weekly push paper record(s)", out.getvalue())
+
+    @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
+    def test_weekly_push_command_dry_run_keeps_weekly_file(self, mock_send_weekly_push_email):
+        out = StringIO()
+        call_command(
+            "send_weekly_push",
+            "--dry-run",
+            stdout=out,
+        )
+
+        mock_send_weekly_push_email.assert_not_called()
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT).count(),
+            1,
+        )
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_ARCHIVED).count(),
+            0,
+        )
+        self.assertIn("[DRY RUN] weekly_user: 1 matched paper(s).", out.getvalue())
+
+    @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
+    def test_weekly_push_command_stops_when_send_fails(self, mock_send_weekly_push_email):
+        mock_send_weekly_push_email.return_value = {
+            "sent": False,
+            "digest": {
+                "totalPaperCount": 0,
+            },
+            "errorMessage": "smtp timeout",
+        }
+
+        out = StringIO()
+        with self.assertRaises(CommandError):
+            call_command(
+                "send_weekly_push",
+                "--user",
+                "weekly_user",
+                stdout=out,
+            )
+
+        push_record = PushRecord.objects.get(user=self.user, period_key=self.current_period_key)
+        self.assertEqual(push_record.status, PushRecord.STATUS_FAILED)
+        self.assertEqual(push_record.error_message, "smtp timeout")
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(
+                cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+                day_key="thursday",
+                paper=self.paper,
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_ARCHIVED).count(),
+            0,
+        )
+        self.assertIn("weekly_user: failure reason: smtp timeout", out.getvalue())
+
+    @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
+    def test_weekly_push_command_captures_delivery_exception_reason(self, mock_send_weekly_push_email):
+        mock_send_weekly_push_email.side_effect = RuntimeError("smtp offline")
+
+        out = StringIO()
+        with self.assertRaises(CommandError):
+            call_command(
+                "send_weekly_push",
+                "--user",
+                "weekly_user",
+                stdout=out,
+            )
+
+        push_record = PushRecord.objects.get(user=self.user, period_key=self.current_period_key)
+        self.assertEqual(push_record.status, PushRecord.STATUS_FAILED)
+        self.assertEqual(push_record.error_message, "RuntimeError: smtp offline")
+        self.assertIn(
+            "weekly_user: failure reason: RuntimeError: smtp offline",
+            out.getvalue(),
+        )
+
+    @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
+    def test_weekly_push_command_promotes_staged_next_cycle_file(self, mock_send_weekly_push_email):
+        mock_send_weekly_push_email.return_value = {
+            "sent": True,
+            "digest": {
+                "totalPaperCount": 1,
+            },
+        }
+
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_NEXT,
+            period_key=self.next_period_key,
+            day_key="friday",
+            paper=self.paper,
+        )
+
+        out = StringIO()
+        call_command(
+            "send_weekly_push",
+            stdout=out,
+        )
+
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(
+                cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+                period_key=self.next_period_key,
+                day_key="friday",
+                paper=self.paper,
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_NEXT).count(),
+            0,
+        )
+        self.assertIn("promoted staged next-cycle records", out.getvalue())
+
+    @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
+    def test_weekly_push_command_skips_users_already_sent_in_same_period(self, mock_send_weekly_push_email):
+        mock_send_weekly_push_email.return_value = {
+            "sent": True,
+            "digest": {
+                "totalPaperCount": 1,
+            },
+        }
+        push_record = PushRecord.objects.create(
+            user=self.user,
+            type=PushRecord.TYPE_WEEKLY,
+            period_key="20260416_20260422",
+            period_start=timezone.datetime(2026, 4, 16, 0, 0, tzinfo=timezone.get_current_timezone()),
+            period_end=timezone.datetime(2026, 4, 22, 23, 59, 59, tzinfo=timezone.get_current_timezone()),
+            status=PushRecord.STATUS_SENT,
+            sent_at=timezone.now(),
+        )
+
+        with patch("account.management.commands.send_weekly_push._build_weekly_period_metadata") as mock_period:
+            mock_period.return_value = (
+                push_record.period_key,
+                push_record.period_start,
+                push_record.period_end,
+            )
+            out = StringIO()
+            call_command("send_weekly_push", stdout=out)
+
+        self.assertEqual(mock_send_weekly_push_email.call_count, 1)
+        self.assertIn("weekly_user: skipped, already sent for weekly period 20260416_20260422.", out.getvalue())
+
+    @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
+    def test_weekly_push_command_retries_failed_user_without_duplicate_success(self, mock_send_weekly_push_email):
+        mock_send_weekly_push_email.return_value = {
+            "sent": True,
+            "digest": {
+                "totalPaperCount": 1,
+            },
+        }
+        sent_record = PushRecord.objects.create(
+            user=self.user,
+            type=PushRecord.TYPE_WEEKLY,
+            period_key="20260416_20260422",
+            period_start=timezone.datetime(2026, 4, 16, 0, 0, tzinfo=timezone.get_current_timezone()),
+            period_end=timezone.datetime(2026, 4, 22, 23, 59, 59, tzinfo=timezone.get_current_timezone()),
+            status=PushRecord.STATUS_SENT,
+            sent_at=timezone.now(),
+        )
+        failed_record = PushRecord.objects.create(
+            user=self.other_user,
+            type=PushRecord.TYPE_WEEKLY,
+            period_key="20260416_20260422",
+            period_start=sent_record.period_start,
+            period_end=sent_record.period_end,
+            status=PushRecord.STATUS_FAILED,
+            error_message="previous failure",
+        )
+
+        with patch("account.management.commands.send_weekly_push._build_weekly_period_metadata") as mock_period:
+            mock_period.return_value = (
+                sent_record.period_key,
+                sent_record.period_start,
+                sent_record.period_end,
+            )
+            call_command("send_weekly_push", stdout=StringIO())
+
+        self.assertEqual(mock_send_weekly_push_email.call_count, 1)
+        failed_record.refresh_from_db()
+        self.assertEqual(failed_record.status, PushRecord.STATUS_SENT)
+        self.assertEqual(PushRecord.objects.filter(period_key="20260416_20260422").count(), 2)
+
+    @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
+    def test_weekly_push_command_accepts_explicit_period_override(self, mock_send_weekly_push_email):
+        mock_send_weekly_push_email.return_value = {
+            "sent": True,
+            "digest": {
+                "totalPaperCount": 1,
+            },
+        }
+
+        call_command(
+            "send_weekly_push",
+            "--user",
+            "weekly_user",
+            "--period-key",
+            "20260401_20260407",
+            "--period-start",
+            "2026-04-01T00:00:00+08:00",
+            "--period-end",
+            "2026-04-07T23:59:59+08:00",
+            stdout=StringIO(),
+        )
+
+        self.assertTrue(
+            PushRecord.objects.filter(
+                user=self.user,
+                period_key="20260401_20260407",
+                status=PushRecord.STATUS_SENT,
+            ).exists()
+        )
+
+    def test_weekly_push_command_rejects_partial_period_override(self):
+        with self.assertRaises(CommandError):
+            call_command(
+                "send_weekly_push",
+                "--period-key",
+                "20260401_20260407",
+                stdout=StringIO(),
+            )
+
+    def test_build_weekly_period_metadata_matches_thursday_cycle_on_delivery_day(self):
+        period_key, period_start, period_end = _build_weekly_period_metadata(
+            timezone.datetime(2026, 4, 23, 12, 0, tzinfo=timezone.get_current_timezone())
+        )
+
+        self.assertEqual(period_key, "20260416_20260422")
+        self.assertEqual(
+            period_start,
+            timezone.datetime(2026, 4, 16, 0, 0, tzinfo=timezone.get_current_timezone()),
+        )
+        self.assertEqual(
+            period_end,
+            timezone.datetime(2026, 4, 22, 23, 59, 59, tzinfo=timezone.get_current_timezone()),
+        )
+
+    @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
+    def test_weekly_push_command_uses_archived_period_data_for_late_retry(self, mock_send_weekly_push_email):
+        mock_send_weekly_push_email.return_value = {
+            "sent": True,
+            "digest": {
+                "totalPaperCount": 1,
+            },
+        }
+        WeeklyPushPaperBucket.objects.filter(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key=self.current_period_key,
+        ).delete()
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_ARCHIVED,
+            period_key=self.current_period_key,
+            day_key="thursday",
+            paper=self.paper,
+            archive_batch="20260423_120000",
+        )
+
+        out = StringIO()
+        call_command(
+            "send_weekly_push",
+            "--user",
+            "weekly_user",
+            "--period-key",
+            self.current_period_key,
+            "--period-start",
+            "2026-04-16T00:00:00+08:00",
+            "--period-end",
+            "2026-04-22T23:59:59+08:00",
+            stdout=out,
+        )
+
+        self.assertEqual(mock_send_weekly_push_email.call_count, 1)
+        self.assertIn("reused archived records, skipped bucket rotation", out.getvalue())
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(
+                cycle=WeeklyPushPaperBucket.CYCLE_ARCHIVED,
+                period_key=self.current_period_key,
+            ).count(),
+            1,
+        )
+
+    def test_build_weekly_period_metadata_keeps_same_cycle_for_friday_retry(self):
+        period_key, period_start, period_end = _build_weekly_period_metadata(
+            timezone.datetime(2026, 4, 24, 9, 30, tzinfo=timezone.get_current_timezone())
+        )
+
+        self.assertEqual(period_key, "20260416_20260422")
+        self.assertEqual(
+            period_start,
+            timezone.datetime(2026, 4, 16, 0, 0, tzinfo=timezone.get_current_timezone()),
+        )
+        self.assertEqual(
+            period_end,
+            timezone.datetime(2026, 4, 22, 23, 59, 59, tzinfo=timezone.get_current_timezone()),
+        )
+
+
+class WeeklyPushSchedulerCommandTests(TestCase):
+    @patch("account.management.commands.run_weekly_push_scheduler.BlockingScheduler")
+    def test_run_weekly_push_scheduler_uses_default_thursday_noon(self, mock_scheduler_cls):
+        mock_scheduler = mock_scheduler_cls.return_value
+        out = StringIO()
+
+        call_command("run_weekly_push_scheduler", stdout=out)
+
+        mock_scheduler.add_job.assert_called_once()
+        add_job_kwargs = mock_scheduler.add_job.call_args.kwargs
+        self.assertEqual(add_job_kwargs["id"], "weekly_push_job")
+        self.assertEqual(add_job_kwargs["replace_existing"], True)
+        self.assertEqual(add_job_kwargs["coalesce"], True)
+        self.assertEqual(add_job_kwargs["max_instances"], 1)
+        self.assertEqual(add_job_kwargs["misfire_grace_time"], 3600)
+        self.assertIn("已启动每周周报推送任务：每周 thu 12:00", out.getvalue())
+        mock_scheduler.start.assert_called_once()
+
+
+class PushRecordCommandTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="record_user",
+            email="record_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.failed_user = User.objects.create_user(
+            username="failed_user",
+            email="failed_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.period_key = "20260416_20260422"
+        self.period_start = timezone.datetime(2026, 4, 16, 0, 0, tzinfo=timezone.get_current_timezone())
+        self.period_end = timezone.datetime(2026, 4, 22, 23, 59, 59, tzinfo=timezone.get_current_timezone())
+        PushRecord.objects.create(
+            user=self.user,
+            type=PushRecord.TYPE_WEEKLY,
+            period_key=self.period_key,
+            period_start=self.period_start,
+            period_end=self.period_end,
+            status=PushRecord.STATUS_SENT,
+            sent_at=timezone.now(),
+        )
+        PushRecord.objects.create(
+            user=self.failed_user,
+            type=PushRecord.TYPE_WEEKLY,
+            period_key=self.period_key,
+            period_start=self.period_start,
+            period_end=self.period_end,
+            status=PushRecord.STATUS_FAILED,
+            error_message="smtp timeout",
+        )
+
+    def test_show_weekly_push_records_filters_by_status(self):
+        out = StringIO()
+
+        call_command(
+            "show_weekly_push_records",
+            "--period-key",
+            self.period_key,
+            "--status",
+            PushRecord.STATUS_FAILED,
+            stdout=out,
+        )
+
+        output = out.getvalue()
+        self.assertIn("failed_user | 20260416_20260422 | failed", output)
+        self.assertNotIn("record_user | 20260416_20260422 | sent", output)
+
+    @patch("account.management.commands.retry_failed_weekly_push._deliver_weekly_push_for_user")
+    def test_retry_failed_weekly_push_dry_run_reports_target_users(self, mock_deliver_for_user):
+        out = StringIO()
+
+        call_command(
+            "retry_failed_weekly_push",
+            "--period-key",
+            self.period_key,
+            "--dry-run",
+            stdout=out,
+        )
+
+        mock_deliver_for_user.assert_not_called()
+        self.assertIn("[DRY RUN] Would retry 1 failed weekly push user(s)", out.getvalue())
+
+    @patch("account.management.commands.retry_failed_weekly_push._deliver_weekly_push_for_user")
+    def test_retry_failed_weekly_push_retries_each_failed_user(self, mock_deliver_for_user):
+        def fake_retry(*args, **kwargs):
+            record = PushRecord.objects.get(user=self.failed_user, period_key=self.period_key)
+            record.status = PushRecord.STATUS_SENT
+            record.sent_at = timezone.now()
+            record.error_message = ""
+            record.save(update_fields=["status", "sent_at", "error_message", "updated_at"])
+
+        mock_deliver_for_user.side_effect = fake_retry
+        out = StringIO()
+
+        call_command(
+            "retry_failed_weekly_push",
+            "--period-key",
+            self.period_key,
+            stdout=out,
+        )
+
+        mock_deliver_for_user.assert_called_once()
+        self.assertIn("Retrying weekly push for failed_user", out.getvalue())
+        self.assertIn("Retried 1 failed weekly push user(s)", out.getvalue())
+
+    @patch("account.management.commands.retry_failed_weekly_push._deliver_weekly_push_for_user")
+    def test_retry_failed_weekly_push_does_not_archive_weekly_bucket(self, mock_deliver_for_user):
+        mentor = Mentor.objects.create(
+            Chinese_name="重试导师",
+            English_name="Retry Mentor",
+            research_direction="软件工程",
+        )
+        paper = Paper.objects.create(
+            title="重试周报论文",
+            abstract="摘要",
+            publish_date=date(2026, 4, 20),
+            author_names="重试导师",
+            subjects="cs.SE",
+        )
+        mentor.add_paper(paper.id)
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key=self.period_key,
+            day_key="monday",
+            paper=paper,
+        )
+
+        def fake_retry(*args, **kwargs):
+            record = PushRecord.objects.get(user=self.failed_user, period_key=self.period_key)
+            record.status = PushRecord.STATUS_SENT
+            record.sent_at = timezone.now()
+            record.error_message = ""
+            record.save(update_fields=["status", "sent_at", "error_message", "updated_at"])
+
+        mock_deliver_for_user.side_effect = fake_retry
+
+        call_command(
+            "retry_failed_weekly_push",
+            "--period-key",
+            self.period_key,
+            stdout=StringIO(),
+        )
+
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT, day_key="monday", paper=paper).count(),
+            1,
+        )
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_ARCHIVED, paper=paper).count(),
+            0,
+        )
+
+    @patch("account.management.commands.retry_failed_weekly_push._deliver_weekly_push_for_user")
+    def test_retry_failed_weekly_push_loads_archived_period_data(self, mock_deliver_for_user):
+        mentor = Mentor.objects.create(
+            Chinese_name="归档导师",
+            English_name="Archived Retry Mentor",
+            research_direction="软件工程",
+        )
+        paper = Paper.objects.create(
+            title="归档周报论文",
+            abstract="摘要",
+            publish_date=date(2026, 4, 20),
+            author_names="归档导师",
+            subjects="cs.SE",
+        )
+        mentor.add_paper(paper.id)
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_ARCHIVED,
+            period_key=self.period_key,
+            day_key="monday",
+            paper=paper,
+            archive_batch="20260423_120000",
+        )
+
+        def fake_retry(*args, **kwargs):
+            delivered_lists = kwargs["daily_paper_lists"]
+            self.assertEqual([[p.id for p in paper_list] for paper_list in delivered_lists][4], [paper.id])
+            record = PushRecord.objects.get(user=self.failed_user, period_key=self.period_key)
+            record.status = PushRecord.STATUS_SENT
+            record.sent_at = timezone.now()
+            record.error_message = ""
+            record.save(update_fields=["status", "sent_at", "error_message", "updated_at"])
+
+        mock_deliver_for_user.side_effect = fake_retry
+
+        call_command(
+            "retry_failed_weekly_push",
+            "--period-key",
+            self.period_key,
+            stdout=StringIO(),
+        )
+
+        mock_deliver_for_user.assert_called_once()
+
+
 class RecordWeeklyPushPapersCommandTests(TestCase):
     def setUp(self):
         self.paper = Paper.objects.create(
@@ -1279,58 +1878,57 @@ class RecordWeeklyPushPapersCommandTests(TestCase):
             subjects="cs.LG",
         )
 
-    def test_record_weekly_push_papers_creates_weekly_json_file(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            file_path = f"{tmpdir}/weekly_papers.json"
-            out = StringIO()
+    def test_record_weekly_push_papers_creates_current_cycle_rows(self):
+        out = StringIO()
 
-            call_command(
-                "record_weekly_push_papers",
-                "--day",
-                "monday",
-                "--paper-ids",
-                f"{self.paper.id},{self.other_paper.id}",
-                "--paper-file",
-                file_path,
-                stdout=out,
-            )
+        call_command(
+            "record_weekly_push_papers",
+            "--day",
+            "monday",
+            "--paper-ids",
+            f"{self.paper.id},{self.other_paper.id}",
+            stdout=out,
+        )
 
-            with open(file_path, "r", encoding="utf-8") as fp:
-                payload = json.load(fp)
-
-            self.assertEqual(payload["monday"], [self.paper.id, self.other_paper.id])
-            self.assertEqual(payload["thursday"], [])
-            self.assertIn("Recorded 2 new paper ID(s) for monday", out.getvalue())
+        monday_ids = list(
+            WeeklyPushPaperBucket.objects
+            .filter(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT, day_key="monday")
+            .values_list("paper_id", flat=True)
+        )
+        self.assertEqual(sorted(monday_ids), sorted([self.paper.id, self.other_paper.id]))
+        self.assertIn("Recorded 2 new paper ID(s) for monday in cycle [current]", out.getvalue())
+        self.assertTrue(
+            WeeklyPushPaperBucket.objects.filter(
+                cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+                period_key=build_weekly_push_bucket_period_key(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT),
+                day_key="monday",
+            ).exists()
+        )
 
     def test_record_weekly_push_papers_appends_unique_ids(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            file_path = f"{tmpdir}/weekly_papers.json"
+        call_command(
+            "record_weekly_push_papers",
+            "--day",
+            "friday",
+            "--paper-ids",
+            str(self.paper.id),
+            stdout=StringIO(),
+        )
+        call_command(
+            "record_weekly_push_papers",
+            "--day",
+            "friday",
+            "--paper-ids",
+            f"{self.paper.id},{self.other_paper.id}",
+            stdout=StringIO(),
+        )
 
-            call_command(
-                "record_weekly_push_papers",
-                "--day",
-                "friday",
-                "--paper-ids",
-                str(self.paper.id),
-                "--paper-file",
-                file_path,
-                stdout=StringIO(),
-            )
-            call_command(
-                "record_weekly_push_papers",
-                "--day",
-                "friday",
-                "--paper-ids",
-                f"{self.paper.id},{self.other_paper.id}",
-                "--paper-file",
-                file_path,
-                stdout=StringIO(),
-            )
-
-            with open(file_path, "r", encoding="utf-8") as fp:
-                payload = json.load(fp)
-
-            self.assertEqual(payload["friday"], [self.paper.id, self.other_paper.id])
+        friday_ids = list(
+            WeeklyPushPaperBucket.objects
+            .filter(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT, day_key="friday")
+            .values_list("paper_id", flat=True)
+        )
+        self.assertEqual(sorted(friday_ids), sorted([self.paper.id, self.other_paper.id]))
 
     def test_record_weekly_push_papers_rejects_unknown_paper_id(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1348,60 +1946,111 @@ class RecordWeeklyPushPapersCommandTests(TestCase):
 
 
 class ResetWeeklyPushPapersCommandTests(TestCase):
-    def test_reset_weekly_push_papers_creates_empty_weekly_json_file(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            file_path = f"{tmpdir}/weekly_papers.json"
-            out = StringIO()
+    def setUp(self):
+        self.paper = Paper.objects.create(
+            title="待清空周报论文",
+            abstract="摘要",
+            publish_date=date(2026, 4, 18),
+            author_names="Crawler",
+            subjects="cs.AI",
+        )
 
-            call_command(
-                "reset_weekly_push_papers",
-                "--paper-file",
-                file_path,
-                stdout=out,
-            )
+    def test_reset_weekly_push_papers_clears_current_cycle_rows(self):
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key=build_weekly_push_bucket_period_key(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT),
+            day_key="thursday",
+            paper=self.paper,
+        )
+        out = StringIO()
 
-            with open(file_path, "r", encoding="utf-8") as fp:
-                payload = json.load(fp)
+        call_command(
+            "reset_weekly_push_papers",
+            stdout=out,
+        )
 
-            self.assertEqual(
-                payload,
-                {
-                    "thursday": [],
-                    "friday": [],
-                    "saturday": [],
-                    "sunday": [],
-                    "monday": [],
-                    "tuesday": [],
-                    "wednesday": [],
-                },
-            )
-            self.assertIn("Reset weekly push paper records", out.getvalue())
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT).count(),
+            0,
+        )
+        self.assertIn("Reset weekly push paper records in cycle [current].", out.getvalue())
 
-    def test_reset_weekly_push_papers_overwrites_existing_weekly_json_file(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            file_path = f"{tmpdir}/weekly_papers.json"
-            with open(file_path, "w", encoding="utf-8") as fp:
-                json.dump(
-                    {
-                        "thursday": [1, 2],
-                        "friday": [3],
-                        "saturday": [],
-                        "sunday": [],
-                        "monday": [4],
-                        "tuesday": [],
-                        "wednesday": [5],
-                    },
-                    fp,
+    def test_reset_weekly_push_papers_only_clears_selected_cycle(self):
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key=build_weekly_push_bucket_period_key(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT),
+            day_key="thursday",
+            paper=self.paper,
+        )
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_NEXT,
+            period_key=build_weekly_push_bucket_period_key(cycle=WeeklyPushPaperBucket.CYCLE_NEXT),
+            day_key="friday",
+            paper=self.paper,
+        )
+
+        call_command(
+            "reset_weekly_push_papers",
+            "--cycle",
+            WeeklyPushPaperBucket.CYCLE_NEXT,
+            stdout=StringIO(),
+        )
+
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT).count(),
+            1,
+        )
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_NEXT).count(),
+            0,
+        )
+
+
+class StartupConfigTests(TestCase):
+    def test_load_startup_config_returns_defaults_for_missing_file(self):
+        missing_path = Path(tempfile.gettempdir()) / "missing-backend-config.yaml"
+        if missing_path.exists():
+            missing_path.unlink()
+
+        config = load_startup_config(missing_path)
+
+        self.assertEqual(
+            config,
+            {
+                "startup": {
+                    "run_initial_sync": True,
+                    "run_daily_sync_scheduler": True,
+                    "run_weekly_push_scheduler": True,
+                }
+            },
+        )
+
+    def test_load_startup_config_reads_startup_switches(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", encoding="utf-8", delete=False) as fp:
+            fp.write(
+                "\n".join(
+                    [
+                        "startup:",
+                        "  run_initial_sync: false",
+                        "  run_daily_sync_scheduler: true",
+                        "  run_weekly_push_scheduler: false",
+                    ]
                 )
-
-            call_command(
-                "reset_weekly_push_papers",
-                "--paper-file",
-                file_path,
-                stdout=StringIO(),
             )
+            config_path = Path(fp.name)
 
-            with open(file_path, "r", encoding="utf-8") as fp:
-                payload = json.load(fp)
+        try:
+            config = load_startup_config(config_path)
+        finally:
+            config_path.unlink(missing_ok=True)
 
-            self.assertTrue(all(paper_ids == [] for paper_ids in payload.values()))
+        self.assertEqual(
+            config,
+            {
+                "startup": {
+                    "run_initial_sync": False,
+                    "run_daily_sync_scheduler": True,
+                    "run_weekly_push_scheduler": False,
+                }
+            },
+        )
