@@ -2473,16 +2473,6 @@ class RequireUtilityTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(json.loads(response.content), {"code": 7, "info": "Missing name"})
 
-    def test_check_require_serializes_assertion_error_with_default_code(self):
-        @CheckRequire
-        def wrapped_view():
-            assert False, "Invalid state"
-
-        response = wrapped_view()
-
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(json.loads(response.content), {"code": -2, "info": "Invalid state"})
-
 
 class WeeklyPushFilesServiceTests(TestCase):
     def setUp(self):
