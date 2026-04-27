@@ -286,6 +286,57 @@ class PaperViewTest(TestCase):
         self.assertEqual(response.status_code, 200)
         self.paper.refresh_from_db()
         self.assertEqual(self.paper.title, "更新后的论文")
+
+    def test_update_paper_rebinds_mentor_paper_ids(self):
+        zhang_mentor = Mentor.objects.create(
+            Chinese_name="张三",
+            English_name="San Zhang",
+            research_direction="人工智能",
+        )
+        li_mentor = Mentor.objects.create(
+            Chinese_name="李四",
+            English_name="Si Li",
+            research_direction="机器学习",
+        )
+        self.paper.bind_to_mentors_by_authors()
+        zhang_mentor.refresh_from_db()
+        self.assertIn(self.paper.id, zhang_mentor.get_paper_id_list())
+
+        response = self.client.put(
+            f"/dataset/papers/{self.paper.id}",
+            data=json.dumps({
+                "title": "更新后的论文",
+                "abstract": "更新后的摘要",
+                "author_names": "李四",
+            }),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.admin_token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        zhang_mentor.refresh_from_db()
+        li_mentor.refresh_from_db()
+        self.assertNotIn(self.paper.id, zhang_mentor.get_paper_id_list())
+        self.assertIn(self.paper.id, li_mentor.get_paper_id_list())
+
+    def test_delete_paper_detaches_from_mentor_paper_ids(self):
+        zhang_mentor = Mentor.objects.create(
+            Chinese_name="张三",
+            English_name="San Zhang",
+            research_direction="人工智能",
+        )
+        self.paper.bind_to_mentors_by_authors()
+        zhang_mentor.refresh_from_db()
+        self.assertIn(self.paper.id, zhang_mentor.get_paper_id_list())
+
+        response = self.client.delete(
+            f"/dataset/papers/{self.paper.id}",
+            HTTP_AUTHORIZATION=f"Bearer {self.admin_token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        zhang_mentor.refresh_from_db()
+        self.assertNotIn(self.paper.id, zhang_mentor.get_paper_id_list())
     
     def test_delete_paper_as_admin(self):
         """测试管理员删除论文"""
