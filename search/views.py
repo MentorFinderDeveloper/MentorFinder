@@ -2,14 +2,17 @@ from django.http import HttpRequest
 
 from account.models import User
 from search.services.engine import (
-    search_mentors,
-    search_mentors_fuzzy,
-    search_papers,
-    search_papers_fuzzy,
+    search_mentors_page,
+    search_papers_page,
 )
 from utils.utils_jwt import check_jwt_token
 from utils.utils_require import CheckRequire, MAX_CHAR_LENGTH, require
 from utils.utils_request import BAD_METHOD, request_success
+
+
+DEFAULT_SEARCH_PAGE = 1
+DEFAULT_SEARCH_PAGE_SIZE = 10
+MAX_SEARCH_PAGE_SIZE = 100
 
 
 def health(req: HttpRequest):
@@ -46,6 +49,29 @@ def _get_sort_mode(req: HttpRequest) -> str:
     return sort_mode
 
 
+def _parse_positive_int(raw_value, default_value: int, minimum: int = 1, maximum: int | None = None) -> int:
+    try:
+        parsed = int(str(raw_value).strip())
+    except (TypeError, ValueError):
+        return default_value
+
+    if parsed < minimum:
+        parsed = minimum
+    if maximum is not None and parsed > maximum:
+        parsed = maximum
+    return parsed
+
+
+def _get_pagination(req: HttpRequest) -> tuple[int, int]:
+    page = _parse_positive_int(req.GET.get("page"), DEFAULT_SEARCH_PAGE)
+    page_size = _parse_positive_int(
+        req.GET.get("page_size"),
+        DEFAULT_SEARCH_PAGE_SIZE,
+        maximum=MAX_SEARCH_PAGE_SIZE,
+    )
+    return page, page_size
+
+
 def _resolve_user(req: HttpRequest):
     auth_header = req.headers.get("Authorization", "").strip()
     if auth_header == "":
@@ -73,11 +99,19 @@ def mentors(req: HttpRequest):
 
     keyword = _get_keyword(req)
     search_mode = _get_search_mode(req)
+    page, page_size = _get_pagination(req)
     user = _resolve_user(req)
-    mentors = search_mentors_fuzzy(keyword, user=user) if search_mode == "fuzzy" else search_mentors(keyword, user=user)
+    mentors, pagination = search_mentors_page(
+        keyword,
+        user=user,
+        fuzzy=(search_mode == "fuzzy"),
+        page=page,
+        page_size=page_size,
+    )
     return request_success({
         "keyword": keyword,
         "search_mode": search_mode,
+        **pagination,
         "mentors": mentors,
     })
 
@@ -90,11 +124,20 @@ def papers(req: HttpRequest):
     keyword = _get_keyword(req)
     search_mode = _get_search_mode(req)
     sort_mode = _get_sort_mode(req)
+    page, page_size = _get_pagination(req)
     user = _resolve_user(req)
-    papers = search_papers_fuzzy(keyword, user=user, sort_mode=sort_mode) if search_mode == "fuzzy" else search_papers(keyword, user=user, sort_mode=sort_mode)
+    papers, pagination = search_papers_page(
+        keyword,
+        user=user,
+        search_mode=search_mode,
+        sort_mode=sort_mode,
+        page=page,
+        page_size=page_size,
+    )
     return request_success({
         "keyword": keyword,
         "search_mode": search_mode,
         "sort_mode": sort_mode,
+        **pagination,
         "papers": papers,
     })

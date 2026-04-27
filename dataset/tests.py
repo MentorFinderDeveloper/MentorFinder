@@ -634,5 +634,108 @@ class FetchPapersCommandTest(TestCase):
         self.command = FetchPapersCommand()
 
 
+class TimelineViewTest(TestCase):
+    """测试时间线接口的方向概览与分页加载"""
+
+    def setUp(self):
+        self.client = Client()
+
+        self.paper_ai_old = Paper.objects.create(
+            title="AI 早期论文",
+            abstract="摘要1",
+            publish_date=date(2024, 1, 10),
+            author_names="张三",
+            subjects="cs.AI",
+            arxiv_url="https://arxiv.org/abs/1111.1111",
+            tldr="tldr1",
+        )
+        self.paper_ai_new = Paper.objects.create(
+            title="AI 最新论文",
+            abstract="摘要2",
+            publish_date=date(2024, 2, 12),
+            author_names="李四",
+            subjects="cs.AI, cs.LG",
+            arxiv_url="https://arxiv.org/abs/2222.2222",
+            tldr="tldr2",
+        )
+        self.paper_other = Paper.objects.create(
+            title="未分类论文",
+            abstract="摘要3",
+            publish_date=date(2024, 3, 18),
+            author_names="王五",
+            subjects="",
+            arxiv_url="https://arxiv.org/abs/3333.3333",
+            tldr="tldr3",
+        )
+        Paper.objects.create(
+            title="无发表日期论文",
+            abstract="摘要4",
+            publish_date=None,
+            author_names="赵六",
+            subjects="cs.AI",
+        )
+
+    def test_timeline_overview_returns_direction_counts(self):
+        response = self.client.get("/timeline/")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+
+        self.assertIn("directions", data)
+        self.assertIn("default_direction", data)
+        self.assertIn("page_size_default", data)
+        self.assertIn("page_size_max", data)
+
+        directions = data["directions"]
+        direction_counts = {
+            item["direction"]: item["paper_count"]
+            for item in directions
+        }
+
+        self.assertEqual(direction_counts["人工智能 (Artificial Intelligence)"], 2)
+        self.assertEqual(direction_counts["机器学习 (Machine Learning)"], 1)
+        self.assertEqual(direction_counts["其他/未分类"], 1)
+        self.assertEqual(data["default_direction"], "人工智能 (Artificial Intelligence)")
+
+    def test_timeline_direction_response_is_paginated(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "人工智能 (Artificial Intelligence)",
+                "page": 1,
+                "page_size": 1,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+
+        self.assertEqual(data["direction"], "人工智能 (Artificial Intelligence)")
+        self.assertEqual(data["page"], 1)
+        self.assertEqual(data["page_size"], 1)
+        self.assertEqual(data["total_papers"], 2)
+        self.assertEqual(data["total_pages"], 2)
+        self.assertFalse(data["has_previous"])
+        self.assertTrue(data["has_next"])
+        self.assertEqual(len(data["papers"]), 1)
+        self.assertEqual(data["papers"][0]["id"], self.paper_ai_new.id)
+
+    def test_timeline_page_size_has_upper_bound(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "其他/未分类",
+                "page": 1,
+                "page_size": 999,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["page_size"], 100)
+        self.assertEqual(data["total_papers"], 1)
+        self.assertEqual(data["papers"][0]["id"], self.paper_other.id)
+
+
     
    

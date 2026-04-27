@@ -27,7 +27,7 @@ exec uwsgi --module=MFBackend.wsgi:application \
     --env DJANGO_SETTINGS_MODULE=MFBackend.settings \
     --master \
     --http=0.0.0.0:80 \
-    --processes=5 \
+    --processes=1 \
     --harakiri=20 \
     --max-requests=5000 \
     --vacuum

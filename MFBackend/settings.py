@@ -25,7 +25,7 @@ SECRET_KEY = 'django-insecure-xvv16d@^4vu6-_^8w73_wt+xqf-wfppqevn)_zgye!#7l^6=p$
 
 # SECURITY WARNING: don't run with debug turned on in production!
 # TODO Start: [Student] Disable debug mode in production
-DEBUG = True
+DEBUG = False
 # TODO End: [Student] Disable debug mode in production
 
 
