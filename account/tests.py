@@ -13,6 +13,9 @@ from django.utils import timezone
 
 from account.models import MentorVerificationRequest, PushRecord, User, MentorFollow, WeeklyPushPaperBucket
 from account.management.commands.send_weekly_push import _build_weekly_period_metadata
+from account.services.weekly_push_files import (
+    build_weekly_push_bucket_period_key,
+)
 from account.services.weekly_push import (
     build_weekly_push_digest,
     render_weekly_push_email,
@@ -1267,6 +1270,8 @@ class MockWeeklyPushCommandTests(TestCase):
 
 class WeeklyPushCommandTests(TestCase):
     def setUp(self):
+        self.current_period_key = "20260416_20260422"
+        self.next_period_key = "20260423_20260429"
         self.user = User.objects.create_user(
             username="weekly_user",
             email="weekly_user@example.com",
@@ -1295,6 +1300,7 @@ class WeeklyPushCommandTests(TestCase):
         self.mentor.add_paper(self.paper.id)
         WeeklyPushPaperBucket.objects.create(
             cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key=self.current_period_key,
             day_key="thursday",
             paper=self.paper,
         )
@@ -1321,6 +1327,7 @@ class WeeklyPushCommandTests(TestCase):
         )
         archived_rows = WeeklyPushPaperBucket.objects.filter(
             cycle=WeeklyPushPaperBucket.CYCLE_ARCHIVED,
+            period_key=self.current_period_key,
             day_key="thursday",
             paper=self.paper,
         )
@@ -1389,6 +1396,7 @@ class WeeklyPushCommandTests(TestCase):
 
         WeeklyPushPaperBucket.objects.create(
             cycle=WeeklyPushPaperBucket.CYCLE_NEXT,
+            period_key=self.next_period_key,
             day_key="friday",
             paper=self.paper,
         )
@@ -1402,6 +1410,7 @@ class WeeklyPushCommandTests(TestCase):
         self.assertEqual(
             WeeklyPushPaperBucket.objects.filter(
                 cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+                period_key=self.next_period_key,
                 day_key="friday",
                 paper=self.paper,
             ).count(),
@@ -1535,6 +1544,50 @@ class WeeklyPushCommandTests(TestCase):
         self.assertEqual(
             period_end,
             timezone.datetime(2026, 4, 22, 23, 59, 59, tzinfo=timezone.get_current_timezone()),
+        )
+
+    @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
+    def test_weekly_push_command_uses_archived_period_data_for_late_retry(self, mock_send_weekly_push_email):
+        mock_send_weekly_push_email.return_value = {
+            "sent": True,
+            "digest": {
+                "totalPaperCount": 1,
+            },
+        }
+        WeeklyPushPaperBucket.objects.filter(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key=self.current_period_key,
+        ).delete()
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_ARCHIVED,
+            period_key=self.current_period_key,
+            day_key="thursday",
+            paper=self.paper,
+            archive_batch="20260423_120000",
+        )
+
+        out = StringIO()
+        call_command(
+            "send_weekly_push",
+            "--user",
+            "weekly_user",
+            "--period-key",
+            self.current_period_key,
+            "--period-start",
+            "2026-04-16T00:00:00+08:00",
+            "--period-end",
+            "2026-04-22T23:59:59+08:00",
+            stdout=out,
+        )
+
+        self.assertEqual(mock_send_weekly_push_email.call_count, 1)
+        self.assertIn("reused archived records, skipped bucket rotation", out.getvalue())
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(
+                cycle=WeeklyPushPaperBucket.CYCLE_ARCHIVED,
+                period_key=self.current_period_key,
+            ).count(),
+            1,
         )
 
     def test_build_weekly_period_metadata_keeps_same_cycle_for_friday_retry(self):
@@ -1679,6 +1732,7 @@ class PushRecordCommandTests(TestCase):
         mentor.add_paper(paper.id)
         WeeklyPushPaperBucket.objects.create(
             cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key=self.period_key,
             day_key="monday",
             paper=paper,
         )
@@ -1707,6 +1761,49 @@ class PushRecordCommandTests(TestCase):
             WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_ARCHIVED, paper=paper).count(),
             0,
         )
+
+    @patch("account.management.commands.retry_failed_weekly_push._deliver_weekly_push_for_user")
+    def test_retry_failed_weekly_push_loads_archived_period_data(self, mock_deliver_for_user):
+        mentor = Mentor.objects.create(
+            Chinese_name="归档导师",
+            English_name="Archived Retry Mentor",
+            research_direction="软件工程",
+        )
+        paper = Paper.objects.create(
+            title="归档周报论文",
+            abstract="摘要",
+            publish_date=date(2026, 4, 20),
+            author_names="归档导师",
+            subjects="cs.SE",
+        )
+        mentor.add_paper(paper.id)
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_ARCHIVED,
+            period_key=self.period_key,
+            day_key="monday",
+            paper=paper,
+            archive_batch="20260423_120000",
+        )
+
+        def fake_retry(*args, **kwargs):
+            delivered_lists = kwargs["daily_paper_lists"]
+            self.assertEqual([[p.id for p in paper_list] for paper_list in delivered_lists][4], [paper.id])
+            record = PushRecord.objects.get(user=self.failed_user, period_key=self.period_key)
+            record.status = PushRecord.STATUS_SENT
+            record.sent_at = timezone.now()
+            record.error_message = ""
+            record.save(update_fields=["status", "sent_at", "error_message", "updated_at"])
+
+        mock_deliver_for_user.side_effect = fake_retry
+
+        call_command(
+            "retry_failed_weekly_push",
+            "--period-key",
+            self.period_key,
+            stdout=StringIO(),
+        )
+
+        mock_deliver_for_user.assert_called_once()
 
 
 class RecordWeeklyPushPapersCommandTests(TestCase):
@@ -1744,7 +1841,14 @@ class RecordWeeklyPushPapersCommandTests(TestCase):
             .values_list("paper_id", flat=True)
         )
         self.assertEqual(sorted(monday_ids), sorted([self.paper.id, self.other_paper.id]))
-        self.assertIn("Recorded 2 new paper ID(s) for monday in cycle [current].", out.getvalue())
+        self.assertIn("Recorded 2 new paper ID(s) for monday in cycle [current]", out.getvalue())
+        self.assertTrue(
+            WeeklyPushPaperBucket.objects.filter(
+                cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+                period_key=build_weekly_push_bucket_period_key(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT),
+                day_key="monday",
+            ).exists()
+        )
 
     def test_record_weekly_push_papers_appends_unique_ids(self):
         call_command(
@@ -1799,6 +1903,7 @@ class ResetWeeklyPushPapersCommandTests(TestCase):
     def test_reset_weekly_push_papers_clears_current_cycle_rows(self):
         WeeklyPushPaperBucket.objects.create(
             cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key=build_weekly_push_bucket_period_key(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT),
             day_key="thursday",
             paper=self.paper,
         )
@@ -1818,11 +1923,13 @@ class ResetWeeklyPushPapersCommandTests(TestCase):
     def test_reset_weekly_push_papers_only_clears_selected_cycle(self):
         WeeklyPushPaperBucket.objects.create(
             cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key=build_weekly_push_bucket_period_key(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT),
             day_key="thursday",
             paper=self.paper,
         )
         WeeklyPushPaperBucket.objects.create(
             cycle=WeeklyPushPaperBucket.CYCLE_NEXT,
+            period_key=build_weekly_push_bucket_period_key(cycle=WeeklyPushPaperBucket.CYCLE_NEXT),
             day_key="friday",
             paper=self.paper,
         )

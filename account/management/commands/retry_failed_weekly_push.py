@@ -39,7 +39,13 @@ class Command(BaseCommand):
             )
             return
 
-        _, daily_paper_lists, _, _, _ = _load_weekly_delivery_context("current")
+        delivery_context = _load_weekly_delivery_context(
+            "current",
+            period_key=period_key,
+            period_start_raw=failed_records[0].period_start.isoformat(),
+            period_end_raw=failed_records[0].period_end.isoformat(),
+        )
+        daily_paper_lists = delivery_context["daily_paper_lists"]
         for username in usernames:
             self.stdout.write(f"Retrying weekly push for {username} in period {period_key}...")
             record = next(record for record in failed_records if record.user.username == username)

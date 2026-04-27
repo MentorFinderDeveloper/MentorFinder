@@ -11,6 +11,7 @@ from dataset.models import Paper, Mentor
 from dataset.management.commands.fetch_papers import Command as FetchPapersCommand
 from dataset.services.thu_crawler import get_english_name, parse_mentor_detail, parse_mentor_list
 from account.models import User as AccountUser, WeeklyPushPaperBucket
+from account.services.weekly_push_files import build_weekly_push_bucket_period_key
 from utils.utils_jwt import generate_jwt_token
 
 
@@ -680,6 +681,7 @@ class FetchPapersCommandTest(TestCase):
         self.assertEqual(
             WeeklyPushPaperBucket.objects.filter(
                 cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+                period_key="20260423_20260429",
                 day_key="friday",
                 paper=paper,
             ).count(),
@@ -703,6 +705,7 @@ class FetchPapersCommandTest(TestCase):
         self.assertEqual(
             WeeklyPushPaperBucket.objects.filter(
                 cycle=WeeklyPushPaperBucket.CYCLE_NEXT,
+                period_key="20260423_20260429",
                 day_key="thursday",
                 paper=paper,
             ).count(),

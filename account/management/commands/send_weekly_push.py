@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from django.core.management.base import BaseCommand
 from django.core.management.base import CommandError
@@ -10,12 +10,12 @@ from account.management.commands.send_weekly_push_mock import _get_target_users
 from account.services.weekly_push import build_weekly_push_digest, send_weekly_push_email
 from account.services.weekly_push_files import (
     archive_weekly_push_payload,
+    build_weekly_push_delivery_period_key,
+    get_weekly_push_delivery_period_bounds,
     load_weekly_push_payload,
     load_daily_paper_lists_from_cycle,
     promote_staged_weekly_push_payload,
 )
-
-WEEKLY_PUSH_DELIVERY_WEEKDAY = 3
 
 
 class Command(BaseCommand):
@@ -51,12 +51,17 @@ class Command(BaseCommand):
             help="Override weekly period end datetime in ISO format, for example 2026-04-22T23:59:59+08:00",
         )
     def handle(self, *args, **options):
-        payload, daily_paper_lists, period_key, period_start, period_end = _load_weekly_delivery_context(
+        delivery_context = _load_weekly_delivery_context(
             options["cycle"],
             period_key=options.get("period_key"),
             period_start_raw=options.get("period_start"),
             period_end_raw=options.get("period_end"),
         )
+        payload = delivery_context["payload"]
+        daily_paper_lists = delivery_context["daily_paper_lists"]
+        period_key = delivery_context["period_key"]
+        period_start = delivery_context["period_start"]
+        period_end = delivery_context["period_end"]
         users = _get_target_users(options.get("username"))
 
         if not users.exists():
@@ -98,16 +103,25 @@ class Command(BaseCommand):
                 f"Weekly push period {period_key}: completed delivery attempts for {len(pending_users)} user(s)."
             )
 
+        if not delivery_context["uses_current_cycle"]:
+            self.stdout.write(
+                f"Weekly push period {period_key}: reused archived records, skipped bucket rotation."
+            )
+            return
+
         archive_batch = _build_archive_batch()
-        archived_count = archive_weekly_push_payload(archive_batch)
+        archived_count = archive_weekly_push_payload(
+            archive_batch=archive_batch,
+            period_key=period_key,
+        )
         promoted = promote_staged_weekly_push_payload()
         if not promoted:
             self.stdout.write(
-                f"Archived {archived_count} weekly push paper record(s) into batch {archive_batch} and reset current cycle."
+                f"Archived {archived_count} weekly push paper record(s) for period {period_key} into batch {archive_batch} and reset current cycle."
             )
             return
         self.stdout.write(
-            f"Archived {archived_count} weekly push paper record(s) into batch {archive_batch} and promoted staged next-cycle records."
+            f"Archived {archived_count} weekly push paper record(s) for period {period_key} into batch {archive_batch} and promoted staged next-cycle records."
         )
 
 
@@ -120,29 +134,38 @@ def _load_weekly_delivery_context(
     period_key: str | None = None,
     period_start_raw: str | None = None,
     period_end_raw: str | None = None,
-) -> tuple[dict, list, str, datetime, datetime]:
-    payload = load_weekly_push_payload(cycle)
-    daily_paper_lists = load_daily_paper_lists_from_cycle(cycle)
+) -> dict:
     period_key, period_start, period_end = _resolve_weekly_period_metadata(
         period_key=period_key,
         period_start_raw=period_start_raw,
         period_end_raw=period_end_raw,
     )
-    return payload, daily_paper_lists, period_key, period_start, period_end
+    payload = load_weekly_push_payload(cycle=cycle, period_key=period_key)
+    daily_paper_lists = load_daily_paper_lists_from_cycle(cycle=cycle, period_key=period_key)
+    uses_current_cycle = True
+    if sum(len(paper_ids) for paper_ids in payload.values()) == 0:
+        payload = load_weekly_push_payload(
+            cycle=WeeklyPushPaperBucket.CYCLE_ARCHIVED,
+            period_key=period_key,
+        )
+        daily_paper_lists = load_daily_paper_lists_from_cycle(
+            cycle=WeeklyPushPaperBucket.CYCLE_ARCHIVED,
+            period_key=period_key,
+        )
+        uses_current_cycle = False
+    return {
+        "payload": payload,
+        "daily_paper_lists": daily_paper_lists,
+        "period_key": period_key,
+        "period_start": period_start,
+        "period_end": period_end,
+        "uses_current_cycle": uses_current_cycle,
+    }
 
 
 def _build_weekly_period_metadata(now: datetime | None = None) -> tuple[str, datetime, datetime]:
-    local_now = timezone.localtime(now) if now is not None else timezone.localtime()
-    days_since_delivery_thursday = (
-        local_now.weekday() - WEEKLY_PUSH_DELIVERY_WEEKDAY
-    ) % 7
-    delivery_day_start = (
-        local_now.replace(hour=0, minute=0, second=0, microsecond=0)
-        - timedelta(days=days_since_delivery_thursday)
-    )
-    period_end = delivery_day_start - timedelta(seconds=1)
-    period_start = delivery_day_start - timedelta(days=7)
-    period_key = f"{period_start.strftime('%Y%m%d')}_{period_end.strftime('%Y%m%d')}"
+    period_start, period_end = get_weekly_push_delivery_period_bounds(now=now)
+    period_key = build_weekly_push_delivery_period_key(now=now)
     return period_key, period_start, period_end
 
 

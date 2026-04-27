@@ -160,6 +160,7 @@ class WeeklyPushPaperBucket(models.Model):
     )
 
     cycle = models.CharField(max_length=20, choices=CYCLE_CHOICES, verbose_name="周期类型")
+    period_key = models.CharField(max_length=64, blank=True, default="", verbose_name="周期键")
     day_key = models.CharField(max_length=20, verbose_name="星期键")
     paper = models.ForeignKey(
         Paper,
@@ -170,17 +171,18 @@ class WeeklyPushPaperBucket(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ["cycle", "day_key", "id"]
+        ordering = ["cycle", "period_key", "day_key", "id"]
         constraints = [
             models.UniqueConstraint(
-                fields=["cycle", "day_key", "paper"],
-                name="unique_weekly_push_cycle_day_paper",
+                fields=["cycle", "period_key", "day_key", "paper"],
+                name="unique_weekly_push_cycle_period_day_paper",
             ),
         ]
 
     def __str__(self) -> str:
         archive_suffix = f" [{self.archive_batch}]" if self.archive_batch else ""
-        return f"{self.cycle}:{self.day_key}:{self.paper_id}{archive_suffix}"
+        period_suffix = self.period_key or "no-period"
+        return f"{self.cycle}:{period_suffix}:{self.day_key}:{self.paper_id}{archive_suffix}"
 
 
 class PushRecord(models.Model):

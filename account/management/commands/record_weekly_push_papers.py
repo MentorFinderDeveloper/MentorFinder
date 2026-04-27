@@ -6,6 +6,7 @@ from account.models import WeeklyPushPaperBucket
 from account.services.weekly_push_files import (
     DAY_KEYS,
     append_weekly_push_paper_ids,
+    build_weekly_push_bucket_period_key,
 )
 from dataset.models import Paper
 
@@ -44,13 +45,15 @@ class Command(BaseCommand):
         paper_ids = _parse_paper_ids(options["paper_ids"])
         _ensure_papers_exist(paper_ids)
         day_key = options["day"]
+        period_key = build_weekly_push_bucket_period_key(cycle=options["cycle"])
         added_count = append_weekly_push_paper_ids(
             cycle=options["cycle"],
+            period_key=period_key,
             day_key=day_key,
             paper_ids=paper_ids,
         )
         self.stdout.write(
-            f"Recorded {added_count} new paper ID(s) for {day_key} in cycle [{options['cycle']}]."
+            f"Recorded {added_count} new paper ID(s) for {day_key} in cycle [{options['cycle']}] / [{period_key}]."
         )
 
 

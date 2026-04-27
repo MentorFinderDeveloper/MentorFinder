@@ -9,6 +9,7 @@ from django.core.management.base import BaseCommand
 from account.models import WeeklyPushPaperBucket
 from account.services.weekly_push_files import (
     append_weekly_push_paper_ids,
+    build_weekly_push_bucket_period_key,
     get_weekly_push_day_key,
     resolve_weekly_push_record_target_cycle,
 )
@@ -265,13 +266,18 @@ class Command(BaseCommand):
             if record_cycle == "auto"
             else record_cycle
         )
+        period_key = build_weekly_push_bucket_period_key(
+            now=now,
+            cycle=target_cycle,
+        )
         added_count = append_weekly_push_paper_ids(
             cycle=target_cycle,
+            period_key=period_key,
             day_key=day_key,
             paper_ids=paper_ids,
         )
         self.stdout.write(
             self.style.SUCCESS(
-                f"已将 {added_count} 篇新增论文记录到周期 [{target_cycle}] 的 {day_key} 列表。"
+                f"已将 {added_count} 篇新增论文记录到周期 [{target_cycle}] / [{period_key}] 的 {day_key} 列表。"
             )
         )
