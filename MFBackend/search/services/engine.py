@@ -1,6 +1,6 @@
 from search.serializers import MentorSerializer, PaperSerializer
 from dataset.models import Mentor, Paper
-from django.db.models import Q
+from django.db.models import Q, Subquery
 
 
 def _order_papers(papers, sort_mode: str):
@@ -17,6 +17,13 @@ def _visible_mentors(user):
     if getattr(user, "role", "") == "admin":
         return Mentor.objects.all()
     return Mentor.objects.filter(Q(owner__isnull=True) | Q(owner_id=user.id))
+
+
+def _collect_mentor_paper_ids(mentors) -> list[int]:
+    paper_ids: set[int] = set()
+    for mentor in mentors.iterator(chunk_size=200):
+        paper_ids.update(mentor.get_paper_id_list())
+    return list(paper_ids)
 
 
 def search_mentors(keyword: str, user=None) -> list[dict]:
@@ -63,23 +70,26 @@ def search_papers(keyword: str, user=None, sort_mode: str = "default") -> list[d
 
 def search_papers_fuzzy(keyword: str, user=None, sort_mode: str = "default") -> list[dict]:
     # fuzzy search
-    
-    # keyword is title
-    title_match_papers = Paper.objects.filter(title__icontains=keyword) # users should use exact search when searching by subjects
-    title_match_ids = set(paper.id for paper in title_match_papers)
-    
+
+    # keyword is title (use subquery instead of collecting IDs in Python)
+    title_match_ids_subquery = (
+        Paper.objects
+        .filter(title__icontains=keyword)
+        .values("id")
+    )
+
     # keyword is mentor name or research direction
-    mentor_ids: set[int] = set()
-    for mentor in _visible_mentors(user).filter(
+    mentor_ids = _collect_mentor_paper_ids(_visible_mentors(user).filter(
         Q(Chinese_name__icontains=keyword) |
         Q(English_name__icontains=keyword) |
         Q(research_direction__icontains=keyword)
-        ):
-        mentor_ids.update(mentor.get_paper_id_list())
+        ))
 
-    # combine all matching paper IDs (no garantee of order)
-    all_match_ids = list(set(title_match_ids | mentor_ids))
-    papers = Paper.objects.filter(id__in=all_match_ids).distinct()
+    paper_filters = Q(id__in=Subquery(title_match_ids_subquery))
+    if mentor_ids:
+        paper_filters |= Q(id__in=mentor_ids)
+
+    papers = Paper.objects.filter(paper_filters).distinct()
     ordered_papers = _order_papers(papers, sort_mode)
 
     return PaperSerializer(ordered_papers, many=True).data
