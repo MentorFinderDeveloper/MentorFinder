@@ -187,6 +187,15 @@ class AccountAuthTests(TestCase):
         self.assertEqual(res.status_code, 409)
         self.assertEqual(res.json()["code"], 3)
 
+    def test_register_duplicate_username_after_trimming_spaces(self):
+        res = self.post_json(
+            "/register",
+            {"username": "  Ashitemaru  ", "password": "abc12345", "email": "trimmed@example.com"},
+        )
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.json()["code"], 3)
+        self.assertFalse(User.objects.filter(email="trimmed@example.com").exists())
+
     def test_register_duplicate_email(self):
         res = self.post_json(
             "/register",

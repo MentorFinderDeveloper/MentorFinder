@@ -444,6 +444,45 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual(res.json()["mentors"], [])
 
+    def test_search_papers_by_private_mentor_name_includes_owner_results(self):
+        res = self.client.get(
+            "/search/papers",
+            {"keyword": "王五"},
+            **self.auth_headers(self.owner_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["隐私导师论文"])
+
+    def test_search_papers_by_private_mentor_name_excludes_other_user_results(self):
+        res = self.client.get(
+            "/search/papers",
+            {"keyword": "王五"},
+            **self.auth_headers(self.other_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["papers"], [])
+
+    def test_search_papers_fuzzy_private_mentor_respects_owner_visibility(self):
+        owner_res = self.client.get(
+            "/search/papers",
+            {"keyword": "王", "search_mode": "fuzzy"},
+            **self.auth_headers(self.owner_token),
+        )
+        other_res = self.client.get(
+            "/search/papers",
+            {"keyword": "王", "search_mode": "fuzzy"},
+            **self.auth_headers(self.other_token),
+        )
+
+        self.assertEqual(owner_res.status_code, 200)
+        self.assertEqual([paper["title"] for paper in owner_res.json()["papers"]], ["隐私导师论文"])
+        self.assertEqual(other_res.status_code, 200)
+        self.assertEqual(other_res.json()["papers"], [])
+
     def test_search_keyword_missing(self):
         res = self.client.get("/search/mentors")
 

@@ -677,6 +677,49 @@ class MentorViewTest(TestCase):
         self.assertEqual(response.status_code, 401)
 
     @patch("dataset.views.crawl_mentor_by_name")
+    def test_create_custom_mentor_returns_404_when_crawler_has_no_match(self, mock_crawler):
+        mock_crawler.return_value = None
+
+        response = self.client.post(
+            "/dataset/mentors/custom",
+            data=json.dumps({"Chinese_name": "不存在导师"}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.normal_token}",
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["code"], 2)
+        self.assertEqual(response.json()["info"], "Mentor not found by crawler")
+        self.assertFalse(Mentor.objects.filter(owner=self.normal_user, Chinese_name="不存在导师").exists())
+
+    def test_create_custom_mentor_requires_at_least_one_name(self):
+        response = self.client.post(
+            "/dataset/mentors/custom",
+            data=json.dumps({"Chinese_name": "   ", "English_name": "   "}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.normal_token}",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], -2)
+        self.assertEqual(
+            response.json()["info"],
+            "Invalid parameters. [Chinese_name] or [English_name] is required",
+        )
+
+    def test_create_custom_mentor_rejects_english_name_that_is_too_long(self):
+        response = self.client.post(
+            "/dataset/mentors/custom",
+            data=json.dumps({"Chinese_name": "", "English_name": "x" * 101}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.normal_token}",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], -2)
+        self.assertEqual(response.json()["info"], "Invalid parameters. [English_name] is too long")
+
+    @patch("dataset.views.crawl_mentor_by_name")
     def test_create_custom_mentor_rejects_duplicate_private_mentor(self, mock_crawler):
         Mentor.objects.create(
             Chinese_name="王五",
@@ -763,6 +806,17 @@ class MentorViewTest(TestCase):
         names = {mentor["Chinese_name"] for mentor in response.json()["mentors"]}
         self.assertEqual(names, {"王五"})
 
+    def test_my_custom_mentors_rejects_bad_method(self):
+        response = self.client.post(
+            "/dataset/mentors/mine",
+            data=json.dumps({}),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.normal_token}",
+        )
+
+        self.assertEqual(response.status_code, 405)
+        self.assertEqual(response.json()["code"], -3)
+
     def test_private_mentor_detail_only_visible_to_owner(self):
         private_mentor = Mentor.objects.create(
             Chinese_name="私有导师",
@@ -785,6 +839,23 @@ class MentorViewTest(TestCase):
             HTTP_AUTHORIZATION=f"Bearer {self.normal_token}",
         )
         self.assertEqual(owner_res.status_code, 200)
+
+    def test_admin_can_view_private_mentor_detail(self):
+        private_mentor = Mentor.objects.create(
+            Chinese_name="后台可见私有导师",
+            English_name="Admin Visible",
+            research_direction="机器学习",
+            owner=self.normal_user,
+        )
+
+        response = self.client.get(
+            f"/dataset/mentors/{private_mentor.id}",
+            HTTP_AUTHORIZATION=f"Bearer {self.admin_token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["mentor"]["Chinese_name"], "后台可见私有导师")
+        self.assertTrue(response.json()["mentor"]["is_private"])
 
     def test_owner_can_update_private_mentor(self):
         private_mentor = Mentor.objects.create(
@@ -1223,3 +1294,26 @@ class TimelineViewTest(TestCase):
         self.assertFalse(data["has_previous"])
         self.assertFalse(data["has_next"])
         self.assertEqual(data["papers"], [])
+
+    def test_timeline_unknown_raw_subject_direction_uses_subject_fallback(self):
+        raw_subject_paper = Paper.objects.create(
+            title="新分类论文",
+            abstract="摘要5",
+            publish_date=date(2024, 4, 20),
+            author_names="孙七",
+            subjects="custom.NEW",
+        )
+
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "custom.NEW",
+                "page": 1,
+                "page_size": 5,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["total_papers"], 1)
+        self.assertEqual(data["papers"][0]["id"], raw_subject_paper.id)
