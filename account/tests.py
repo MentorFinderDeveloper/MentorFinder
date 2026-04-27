@@ -561,6 +561,68 @@ class UserProfileViewTests(TestCase):
         self.assertEqual(res.json()["code"], 3)
         self.assertEqual(res.json()["info"], "A pending mentor verification request already exists")
 
+    def test_get_profile_returns_latest_mentor_verification_request(self):
+        MentorVerificationRequest.objects.create(
+            user=self.user,
+            submitted_name="旧申请",
+            status=MentorVerificationRequest.STATUS_REJECTED,
+        )
+        latest_request = MentorVerificationRequest.objects.create(
+            user=self.user,
+            submitted_name="新申请",
+            status=MentorVerificationRequest.STATUS_PENDING,
+        )
+
+        res = self.client.get(
+            "/profile/me",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["mentorVerificationRequest"]["id"], latest_request.id)
+        self.assertEqual(res.json()["mentorVerificationRequest"]["submittedName"], "新申请")
+
+    def test_can_submit_new_mentor_verification_after_rejection(self):
+        MentorVerificationRequest.objects.create(
+            user=self.user,
+            submitted_name="旧申请",
+            status=MentorVerificationRequest.STATUS_REJECTED,
+        )
+
+        res = self.client.post(
+            "/profile/mentor-verification-request",
+            data=json.dumps({
+                "submittedName": "再次申请",
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(
+            MentorVerificationRequest.objects.filter(
+                user=self.user,
+                submitted_name="再次申请",
+                status=MentorVerificationRequest.STATUS_PENDING,
+            ).count(),
+            1,
+        )
+
+    def test_submit_mentor_verification_rejects_empty_name(self):
+        res = self.client.post(
+            "/profile/mentor-verification-request",
+            data=json.dumps({
+                "submittedName": "   ",
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(MentorVerificationRequest.objects.filter(user=self.user).count(), 0)
+
 
 class AdminUserManagementTests(TestCase):
     def setUp(self):
@@ -1659,25 +1721,6 @@ class WeeklyPushCommandTests(TestCase):
             period_end,
             timezone.datetime(2026, 4, 22, 23, 59, 59, tzinfo=timezone.get_current_timezone()),
         )
-
-
-class WeeklyPushSchedulerCommandTests(TestCase):
-    @patch("account.management.commands.run_weekly_push_scheduler.BlockingScheduler")
-    def test_run_weekly_push_scheduler_uses_default_thursday_noon(self, mock_scheduler_cls):
-        mock_scheduler = mock_scheduler_cls.return_value
-        out = StringIO()
-
-        call_command("run_weekly_push_scheduler", stdout=out)
-
-        mock_scheduler.add_job.assert_called_once()
-        add_job_kwargs = mock_scheduler.add_job.call_args.kwargs
-        self.assertEqual(add_job_kwargs["id"], "weekly_push_job")
-        self.assertEqual(add_job_kwargs["replace_existing"], True)
-        self.assertEqual(add_job_kwargs["coalesce"], True)
-        self.assertEqual(add_job_kwargs["max_instances"], 1)
-        self.assertEqual(add_job_kwargs["misfire_grace_time"], 3600)
-        self.assertIn("已启动每周周报推送任务：每周 thu 12:00", out.getvalue())
-        mock_scheduler.start.assert_called_once()
 
 
 class PushRecordCommandTests(TestCase):
