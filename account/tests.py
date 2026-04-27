@@ -676,6 +676,39 @@ class AdminUserManagementTests(TestCase):
         self.assertEqual(res.status_code, 403)
         self.assertEqual(res.json()["code"], 3)
 
+    def test_admin_users_rejects_bad_method(self):
+        res = self.client.post(
+            "/management/users",
+            data=json.dumps({}),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+    def test_admin_users_rejects_invalid_role_filter(self):
+        res = self.client.get(
+            "/management/users",
+            {"role": "superuser"},
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.json()["info"], "Invalid parameters. [role] is invalid")
+
+    def test_admin_users_rejects_keyword_that_is_too_long(self):
+        res = self.client.get(
+            "/management/users",
+            {"keyword": "x" * 256},
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.json()["info"], "Invalid parameters. [keyword] is too long")
+
     def test_admin_can_promote_student_to_admin(self):
         res = self.client.put(
             f"/management/users/{self.student.id}",
@@ -783,6 +816,37 @@ class AdminUserManagementTests(TestCase):
         self.assertEqual(res.json()["code"], 3)
         self.assertEqual(res.json()["info"], "Mentor is already bound to another user")
 
+    def test_admin_update_user_rejects_private_mentor_binding(self):
+        private_mentor = Mentor.objects.create(
+            Chinese_name="私有导师",
+            English_name="Private Mentor",
+            research_direction="系统安全",
+            owner=self.student,
+        )
+
+        res = self.client.put(
+            f"/management/users/{self.student.id}",
+            data=json.dumps({"role": User.ROLE_MENTOR, "mentorId": private_mentor.id}),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], 2)
+        self.assertEqual(res.json()["info"], "Mentor not found")
+
+    def test_admin_update_user_rejects_missing_mentor(self):
+        res = self.client.put(
+            f"/management/users/{self.student.id}",
+            data=json.dumps({"role": User.ROLE_MENTOR, "mentorId": 999999}),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], 2)
+        self.assertEqual(res.json()["info"], "Mentor not found")
+
     def test_admin_can_ban_user(self):
         res = self.client.put(
             f"/management/users/{self.student.id}",
@@ -889,6 +953,15 @@ class AdminUserManagementTests(TestCase):
         self.assertEqual(verification_requests[0]["submittedName"], "待认证导师姓名")
         self.assertEqual(verification_requests[0]["status"], MentorVerificationRequest.STATUS_PENDING)
 
+    def test_admin_user_detail_rejects_bad_method(self):
+        res = self.client.get(
+            f"/management/users/{self.student.id}",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
     def test_admin_can_approve_verification_request_with_public_mentor_binding(self):
         request_obj = MentorVerificationRequest.objects.create(
             user=self.student,
@@ -932,6 +1005,68 @@ class AdminUserManagementTests(TestCase):
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.json()["code"], 3)
         self.assertEqual(res.json()["info"], "Mentor binding is required for approval")
+
+    def test_approving_verification_request_rejects_private_mentor_binding(self):
+        private_mentor = Mentor.objects.create(
+            Chinese_name="私有导师",
+            English_name="Private Mentor",
+            research_direction="系统安全",
+            owner=self.student,
+        )
+        request_obj = MentorVerificationRequest.objects.create(
+            user=self.student,
+            submitted_name="待认证导师姓名",
+            status=MentorVerificationRequest.STATUS_PENDING,
+        )
+
+        res = self.client.put(
+            f"/management/verification-requests/{request_obj.id}",
+            data=json.dumps({
+                "status": MentorVerificationRequest.STATUS_APPROVED,
+                "mentorId": private_mentor.id,
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], 2)
+        self.assertEqual(res.json()["info"], "Mentor not found")
+
+    def test_review_verification_request_rejects_invalid_status(self):
+        request_obj = MentorVerificationRequest.objects.create(
+            user=self.student,
+            submitted_name="待认证导师姓名",
+            status=MentorVerificationRequest.STATUS_PENDING,
+        )
+
+        res = self.client.put(
+            f"/management/verification-requests/{request_obj.id}",
+            data=json.dumps({
+                "status": "maybe",
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.json()["info"], "Invalid parameters. [status] is invalid")
+
+    def test_review_verification_request_rejects_bad_method(self):
+        request_obj = MentorVerificationRequest.objects.create(
+            user=self.student,
+            submitted_name="待认证导师姓名",
+            status=MentorVerificationRequest.STATUS_PENDING,
+        )
+
+        res = self.client.get(
+            f"/management/verification-requests/{request_obj.id}",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
 
     def test_admin_can_reject_verification_request(self):
         request_obj = MentorVerificationRequest.objects.create(
