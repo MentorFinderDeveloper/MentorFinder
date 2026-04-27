@@ -3,6 +3,52 @@
 import django.db.models.deletion
 from django.conf import settings
 from django.db import migrations, models
+from django.db.utils import OperationalError, ProgrammingError
+
+
+class CreateModelIfNotExists(migrations.CreateModel):
+    """Allow migration replay on DBs where the table was created previously."""
+
+    def _db_table_name(self, app_label: str) -> str:
+        return self.options.get("db_table") or f"{app_label}_{self.name.lower()}"
+
+    def _is_table_exists_error(self, exc: Exception, table_name: str) -> bool:
+        message = str(exc).lower()
+        return "already exists" in message and table_name.lower() in message
+
+    def _is_table_missing_error(self, exc: Exception, table_name: str) -> bool:
+        message = str(exc).lower()
+        return (
+            "no such table" in message
+            or "does not exist" in message
+            or "unknown table" in message
+        ) and table_name.lower() in message
+
+    def database_forwards(self, app_label, schema_editor, from_state, to_state):
+        table_name = self._db_table_name(app_label)
+        existing_tables = set(schema_editor.connection.introspection.table_names())
+        if table_name in existing_tables:
+            return
+
+        try:
+            super().database_forwards(app_label, schema_editor, from_state, to_state)
+        except (OperationalError, ProgrammingError) as exc:
+            if self._is_table_exists_error(exc, table_name):
+                return
+            raise
+
+    def database_backwards(self, app_label, schema_editor, from_state, to_state):
+        table_name = self._db_table_name(app_label)
+        existing_tables = set(schema_editor.connection.introspection.table_names())
+        if table_name not in existing_tables:
+            return
+
+        try:
+            super().database_backwards(app_label, schema_editor, from_state, to_state)
+        except (OperationalError, ProgrammingError) as exc:
+            if self._is_table_missing_error(exc, table_name):
+                return
+            raise
 
 
 class Migration(migrations.Migration):
@@ -13,7 +59,7 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.CreateModel(
+        CreateModelIfNotExists(
             name='MentorFollow',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
