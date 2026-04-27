@@ -22,7 +22,7 @@ class PaperSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Paper
-        fields = ["id", "title", "abstract", "publish_date", "author_names", "subjects", "mentorNames"]
+        fields = ["id", "title", "abstract", "publish_date", "author_names", "subjects", "arxiv_url", "mentorNames"]
 
     def get_mentorNames(self, obj):
         return obj.get_author_list()
