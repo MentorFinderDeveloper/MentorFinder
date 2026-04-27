@@ -1,7 +1,7 @@
 import json
 import tempfile
 from io import StringIO
-from datetime import date
+from datetime import date, datetime
 from unittest.mock import patch
 from pathlib import Path
 
@@ -13,6 +13,7 @@ from django.utils import timezone
 
 from account.models import MentorVerificationRequest, PushRecord, User, MentorFollow, WeeklyPushPaperBucket
 from account.management.commands.send_weekly_push import _build_weekly_period_metadata
+from account.services import weekly_push_files
 from account.services.weekly_push_files import (
     build_weekly_push_bucket_period_key,
 )
@@ -23,7 +24,14 @@ from account.services.weekly_push import (
 )
 from dataset.models import Mentor, Paper
 from utils.startup_config import load_startup_config
-from utils.utils_jwt import generate_jwt_token
+from utils.utils_jwt import (
+    EXPIRE_IN_SECONDS,
+    b64url_decode,
+    b64url_encode,
+    check_jwt_token,
+    generate_jwt_token,
+)
+from utils.utils_require import CheckRequire, require
 
 
 class AccountAuthTests(TestCase):
@@ -2331,3 +2339,411 @@ class StartupConfigTests(TestCase):
                 }
             },
         )
+
+
+class JwtUtilityTests(TestCase):
+    def test_b64url_encode_decode_round_trips_text(self):
+        encoded = b64url_encode("mentor finder")
+
+        self.assertEqual(b64url_decode(encoded), "mentor finder")
+
+    def test_b64url_encode_decode_round_trips_bytes(self):
+        raw_bytes = b"\xfb\xffmentor"
+        encoded = b64url_encode(raw_bytes)
+
+        self.assertIn("-", encoded)
+        self.assertEqual(b64url_decode(encoded, decode_to_str=False), raw_bytes)
+
+    def test_generate_jwt_token_returns_three_segments(self):
+        token = generate_jwt_token("jwt-user")
+
+        self.assertEqual(len(token.split(".")), 3)
+
+    def test_check_jwt_token_returns_username_payload(self):
+        token = generate_jwt_token("jwt-user")
+
+        self.assertEqual(check_jwt_token(token), {"username": "jwt-user"})
+
+    def test_check_jwt_token_rejects_tampered_signature(self):
+        token = generate_jwt_token("jwt-user")
+        header_b64, payload_b64, signature_b64 = token.split(".")
+        tampered_signature = signature_b64[:-1] + ("A" if signature_b64[-1] != "A" else "B")
+
+        self.assertIsNone(check_jwt_token(f"{header_b64}.{payload_b64}.{tampered_signature}"))
+
+    def test_check_jwt_token_rejects_tampered_payload(self):
+        token = generate_jwt_token("jwt-user")
+        header_b64, payload_b64, signature_b64 = token.split(".")
+        payload = json.loads(b64url_decode(payload_b64))
+        payload["data"]["username"] = "attacker"
+        tampered_payload_b64 = b64url_encode(json.dumps(payload, separators=(",", ":")))
+
+        self.assertIsNone(check_jwt_token(f"{header_b64}.{tampered_payload_b64}.{signature_b64}"))
+
+    def test_check_jwt_token_rejects_expired_token(self):
+        with patch("utils.utils_jwt.time.time", return_value=1000):
+            token = generate_jwt_token("expired-user")
+
+        with patch("utils.utils_jwt.time.time", return_value=1000 + EXPIRE_IN_SECONDS + 1):
+            self.assertIsNone(check_jwt_token(token))
+
+    def test_check_jwt_token_accepts_token_before_expiry(self):
+        with patch("utils.utils_jwt.time.time", return_value=1000):
+            token = generate_jwt_token("fresh-user")
+
+        with patch("utils.utils_jwt.time.time", return_value=1000 + EXPIRE_IN_SECONDS - 1):
+            self.assertEqual(check_jwt_token(token), {"username": "fresh-user"})
+
+    def test_check_jwt_token_rejects_wrong_segment_count(self):
+        self.assertIsNone(check_jwt_token("only.two"))
+
+    def test_check_jwt_token_rejects_empty_token(self):
+        self.assertIsNone(check_jwt_token(""))
+
+
+class RequireUtilityTests(TestCase):
+    def test_require_returns_string_value(self):
+        self.assertEqual(require({"name": "Alice"}, "name"), "Alice")
+
+    def test_require_converts_int_value(self):
+        self.assertEqual(require({"page": "3"}, "page", "int"), 3)
+
+    def test_require_converts_float_value(self):
+        self.assertEqual(require({"score": "3.5"}, "score", "float"), 3.5)
+
+    def test_require_returns_list_value(self):
+        value = ["cs.AI", "cs.LG"]
+
+        self.assertEqual(require({"subjects": value}, "subjects", "list"), value)
+
+    def test_require_missing_key_raises_key_error_with_default_message(self):
+        with self.assertRaises(KeyError) as ctx:
+            require({}, "keyword")
+
+        self.assertEqual(ctx.exception.args[0], "Invalid parameters. Expected `keyword`, but not found.")
+        self.assertEqual(ctx.exception.args[1], -2)
+
+    def test_require_missing_key_uses_custom_message_and_code(self):
+        with self.assertRaises(KeyError) as ctx:
+            require({}, "id", err_msg="Missing id", err_code=-1)
+
+        self.assertEqual(ctx.exception.args, ("Missing id", -1))
+
+    def test_require_invalid_int_raises_key_error(self):
+        with self.assertRaises(KeyError) as ctx:
+            require({"page": "abc"}, "page", "int")
+
+        self.assertEqual(ctx.exception.args[0], "Invalid parameters. Expected `page` to be `int` type.")
+        self.assertEqual(ctx.exception.args[1], -2)
+
+    def test_require_invalid_float_raises_key_error(self):
+        with self.assertRaises(KeyError) as ctx:
+            require({"score": "abc"}, "score", "float")
+
+        self.assertEqual(ctx.exception.args[0], "Invalid parameters. Expected `score` to be `float` type.")
+        self.assertEqual(ctx.exception.args[1], -2)
+
+    def test_require_invalid_list_raises_key_error(self):
+        with self.assertRaises(KeyError) as ctx:
+            require({"items": "not-list"}, "items", "list")
+
+        self.assertEqual(ctx.exception.args[0], "Invalid parameters. Expected `items` to be `list` type.")
+        self.assertEqual(ctx.exception.args[1], -2)
+
+    def test_require_unknown_type_raises_not_implemented_error(self):
+        with self.assertRaises(NotImplementedError) as ctx:
+            require({"enabled": True}, "enabled", "bool", err_code=9)
+
+        self.assertEqual(ctx.exception.args, ("Type `bool` not implemented.", 9))
+
+    def test_check_require_returns_wrapped_view_response(self):
+        @CheckRequire
+        def wrapped_view():
+            return require({"name": "Alice"}, "name")
+
+        self.assertEqual(wrapped_view(), "Alice")
+
+    def test_check_require_serializes_key_error(self):
+        @CheckRequire
+        def wrapped_view():
+            require({}, "name", err_msg="Missing name", err_code=7)
+
+        response = wrapped_view()
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(json.loads(response.content), {"code": 7, "info": "Missing name"})
+
+    def test_check_require_serializes_assertion_error_with_default_code(self):
+        @CheckRequire
+        def wrapped_view():
+            assert False, "Invalid state"
+
+        response = wrapped_view()
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(json.loads(response.content), {"code": -2, "info": "Invalid state"})
+
+
+class WeeklyPushFilesServiceTests(TestCase):
+    def setUp(self):
+        self.paper1 = Paper.objects.create(
+            title="周报论文1",
+            abstract="摘要1",
+            publish_date=date(2026, 4, 20),
+            author_names="Author One",
+            subjects="cs.AI",
+        )
+        self.paper2 = Paper.objects.create(
+            title="周报论文2",
+            abstract="摘要2",
+            publish_date=date(2026, 4, 21),
+            author_names="Author Two",
+            subjects="cs.LG",
+        )
+        self.paper3 = Paper.objects.create(
+            title="周报论文3",
+            abstract="摘要3",
+            publish_date=date(2026, 4, 22),
+            author_names="Author Three",
+            subjects="cs.CL",
+        )
+
+    def test_create_empty_weekly_push_payload_contains_all_day_keys(self):
+        payload = weekly_push_files.create_empty_weekly_push_payload()
+
+        self.assertEqual(list(payload.keys()), weekly_push_files.DAY_KEYS)
+        self.assertTrue(all(paper_ids == [] for paper_ids in payload.values()))
+
+    def test_append_unique_paper_ids_preserves_existing_order(self):
+        result = weekly_push_files.append_unique_paper_ids([3, 1], [1, 2, 3, 4])
+
+        self.assertEqual(result, [3, 1, 2, 4])
+
+    def test_get_weekly_push_day_key_maps_each_weekday(self):
+        day_by_date = {
+            datetime(2026, 4, 23, 13, 0, 0): "thursday",
+            datetime(2026, 4, 24, 13, 0, 0): "friday",
+            datetime(2026, 4, 25, 13, 0, 0): "saturday",
+            datetime(2026, 4, 26, 13, 0, 0): "sunday",
+            datetime(2026, 4, 27, 13, 0, 0): "monday",
+            datetime(2026, 4, 28, 13, 0, 0): "tuesday",
+            datetime(2026, 4, 29, 13, 0, 0): "wednesday",
+        }
+
+        for current_time, expected_day_key in day_by_date.items():
+            with self.subTest(current_time=current_time):
+                self.assertEqual(weekly_push_files.get_weekly_push_day_key(current_time), expected_day_key)
+
+    def test_should_stage_next_cycle_payload_only_before_thursday_cutoff(self):
+        self.assertTrue(weekly_push_files.should_stage_next_cycle_payload(datetime(2026, 4, 23, 11, 59, 0)))
+        self.assertFalse(weekly_push_files.should_stage_next_cycle_payload(datetime(2026, 4, 23, 12, 0, 0)))
+        self.assertFalse(weekly_push_files.should_stage_next_cycle_payload(datetime(2026, 4, 24, 11, 0, 0)))
+
+    def test_resolve_weekly_push_record_target_cycle(self):
+        self.assertEqual(
+            weekly_push_files.resolve_weekly_push_record_target_cycle(datetime(2026, 4, 23, 11, 0, 0)),
+            WeeklyPushPaperBucket.CYCLE_NEXT,
+        )
+        self.assertEqual(
+            weekly_push_files.resolve_weekly_push_record_target_cycle(datetime(2026, 4, 23, 12, 0, 0)),
+            WeeklyPushPaperBucket.CYCLE_CURRENT,
+        )
+
+    def test_build_weekly_push_bucket_period_key_for_thursday_morning(self):
+        current_key = weekly_push_files.build_weekly_push_bucket_period_key(
+            now=datetime(2026, 4, 23, 11, 0, 0),
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+        )
+        next_key = weekly_push_files.build_weekly_push_bucket_period_key(
+            now=datetime(2026, 4, 23, 11, 0, 0),
+            cycle=WeeklyPushPaperBucket.CYCLE_NEXT,
+        )
+
+        self.assertEqual(current_key, "20260416_20260422")
+        self.assertEqual(next_key, "20260423_20260429")
+
+    def test_build_weekly_push_bucket_period_key_after_cutoff(self):
+        current_key = weekly_push_files.build_weekly_push_bucket_period_key(
+            now=datetime(2026, 4, 23, 12, 0, 0),
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+        )
+        next_key = weekly_push_files.build_weekly_push_bucket_period_key(
+            now=datetime(2026, 4, 23, 12, 0, 0),
+            cycle=WeeklyPushPaperBucket.CYCLE_NEXT,
+        )
+
+        self.assertEqual(current_key, "20260423_20260429")
+        self.assertEqual(next_key, "20260430_20260506")
+
+    def test_build_weekly_push_delivery_period_key_always_targets_previous_cycle(self):
+        period_key = weekly_push_files.build_weekly_push_delivery_period_key(datetime(2026, 4, 23, 12, 0, 0))
+
+        self.assertEqual(period_key, "20260416_20260422")
+
+    def test_append_weekly_push_paper_ids_creates_only_missing_rows(self):
+        period_key = "20260423_20260429"
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key=period_key,
+            day_key="monday",
+            paper=self.paper1,
+        )
+
+        created_count = weekly_push_files.append_weekly_push_paper_ids(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key=period_key,
+            day_key="monday",
+            paper_ids=[self.paper1.id, self.paper2.id, self.paper3.id],
+        )
+
+        self.assertEqual(created_count, 2)
+        self.assertEqual(
+            list(
+                WeeklyPushPaperBucket.objects
+                .filter(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT, period_key=period_key, day_key="monday")
+                .order_by("paper_id")
+                .values_list("paper_id", flat=True)
+            ),
+            [self.paper1.id, self.paper2.id, self.paper3.id],
+        )
+
+    def test_load_weekly_push_payload_filters_by_cycle_and_period(self):
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key="target",
+            day_key="monday",
+            paper=self.paper1,
+        )
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key="other",
+            day_key="monday",
+            paper=self.paper2,
+        )
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_NEXT,
+            period_key="target",
+            day_key="monday",
+            paper=self.paper3,
+        )
+
+        payload = weekly_push_files.load_weekly_push_payload(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key="target",
+        )
+
+        self.assertEqual(payload["monday"], [self.paper1.id])
+        self.assertEqual(payload["tuesday"], [])
+
+    def test_load_daily_paper_lists_from_cycle_preserves_bucket_order(self):
+        period_key = "20260423_20260429"
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key=period_key,
+            day_key="friday",
+            paper=self.paper2,
+        )
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key=period_key,
+            day_key="friday",
+            paper=self.paper1,
+        )
+
+        daily_lists = weekly_push_files.load_daily_paper_lists_from_cycle(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key=period_key,
+        )
+
+        friday_index = weekly_push_files.DAY_KEYS.index("friday")
+        self.assertEqual([paper.id for paper in daily_lists[friday_index]], [self.paper2.id, self.paper1.id])
+
+    def test_archive_weekly_push_payload_moves_current_rows_to_archive(self):
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key="20260423_20260429",
+            day_key="monday",
+            paper=self.paper1,
+        )
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key="20260423_20260429",
+            day_key="tuesday",
+            paper=self.paper2,
+        )
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key="other",
+            day_key="wednesday",
+            paper=self.paper3,
+        )
+
+        archived_count = weekly_push_files.archive_weekly_push_payload(
+            archive_batch="batch-1",
+            period_key="20260423_20260429",
+        )
+
+        self.assertEqual(archived_count, 2)
+        self.assertFalse(
+            WeeklyPushPaperBucket.objects.filter(
+                cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+                period_key="20260423_20260429",
+            ).exists()
+        )
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(
+                cycle=WeeklyPushPaperBucket.CYCLE_ARCHIVED,
+                archive_batch="batch-1",
+            ).count(),
+            2,
+        )
+        self.assertTrue(
+            WeeklyPushPaperBucket.objects.filter(
+                cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+                period_key="other",
+            ).exists()
+        )
+
+    def test_promote_staged_weekly_push_payload_returns_false_without_next_rows(self):
+        self.assertFalse(weekly_push_files.promote_staged_weekly_push_payload())
+
+    def test_promote_staged_weekly_push_payload_moves_next_rows_to_current(self):
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_NEXT,
+            period_key="20260430_20260506",
+            day_key="thursday",
+            paper=self.paper1,
+        )
+
+        promoted = weekly_push_files.promote_staged_weekly_push_payload()
+
+        self.assertTrue(promoted)
+        self.assertFalse(WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_NEXT).exists())
+        self.assertTrue(
+            WeeklyPushPaperBucket.objects.filter(
+                cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+                period_key="20260430_20260506",
+                day_key="thursday",
+                paper=self.paper1,
+            ).exists()
+        )
+
+    def test_clear_weekly_push_cycle_only_removes_selected_cycle(self):
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key="current",
+            day_key="monday",
+            paper=self.paper1,
+        )
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_NEXT,
+            period_key="next",
+            day_key="monday",
+            paper=self.paper2,
+        )
+
+        weekly_push_files.clear_weekly_push_cycle(WeeklyPushPaperBucket.CYCLE_CURRENT)
+
+        self.assertFalse(WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT).exists())
+        self.assertTrue(WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_NEXT).exists())
+
