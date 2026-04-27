@@ -727,6 +727,62 @@ class AdminUserManagementTests(TestCase):
         self.assertEqual(res.json()["code"], 3)
         self.assertEqual(res.json()["info"], "Only mentor role can bind a mentor profile")
 
+    def test_admin_update_user_returns_404_for_missing_user(self):
+        res = self.client.put(
+            "/management/users/999999",
+            data=json.dumps({"role": User.ROLE_STUDENT}),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
+        self.assertEqual(res.json()["info"], "User not found")
+
+    def test_admin_update_user_rejects_invalid_role(self):
+        res = self.client.put(
+            f"/management/users/{self.student.id}",
+            data=json.dumps({"role": "superuser"}),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.json()["info"], "Invalid parameters. [role] is invalid")
+
+    def test_admin_update_user_rejects_invalid_mentor_id(self):
+        res = self.client.put(
+            f"/management/users/{self.student.id}",
+            data=json.dumps({"role": User.ROLE_MENTOR, "mentorId": "not-a-number"}),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.json()["info"], "Invalid parameters. [mentorId] must be an integer")
+
+    def test_admin_update_user_rejects_mentor_bound_to_another_user(self):
+        User.objects.create_user(
+            username="existing_mentor_user",
+            email="existing_mentor_user@example.com",
+            password="abc12345",
+            role=User.ROLE_MENTOR,
+            mentor_profile=self.public_mentor,
+        )
+
+        res = self.client.put(
+            f"/management/users/{self.student.id}",
+            data=json.dumps({"role": User.ROLE_MENTOR, "mentorId": self.public_mentor.id}),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.json()["code"], 3)
+        self.assertEqual(res.json()["info"], "Mentor is already bound to another user")
+
     def test_admin_can_ban_user(self):
         res = self.client.put(
             f"/management/users/{self.student.id}",
@@ -919,6 +975,40 @@ class AdminUserManagementTests(TestCase):
         self.assertEqual(res.status_code, 409)
         self.assertEqual(res.json()["code"], 3)
         self.assertEqual(res.json()["info"], "Verification request has already been reviewed")
+
+    def test_non_admin_cannot_review_verification_request(self):
+        request_obj = MentorVerificationRequest.objects.create(
+            user=self.student,
+            submitted_name="待认证导师姓名",
+            status=MentorVerificationRequest.STATUS_PENDING,
+        )
+
+        res = self.client.put(
+            f"/management/verification-requests/{request_obj.id}",
+            data=json.dumps({
+                "status": MentorVerificationRequest.STATUS_REJECTED,
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.json()["code"], 3)
+        self.assertEqual(res.json()["info"], "Permission denied")
+
+    def test_admin_review_verification_request_returns_404_for_missing_request(self):
+        res = self.client.put(
+            "/management/verification-requests/999999",
+            data=json.dumps({
+                "status": MentorVerificationRequest.STATUS_REJECTED,
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
+        self.assertEqual(res.json()["info"], "Verification request not found")
 
 
 class WeeklyPushDigestTests(TestCase):
