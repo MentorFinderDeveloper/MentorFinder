@@ -1482,6 +1482,45 @@ class WeeklyPushCommandTests(TestCase):
         self.assertEqual(failed_record.status, PushRecord.STATUS_SENT)
         self.assertEqual(PushRecord.objects.filter(period_key="20260416_20260422").count(), 2)
 
+    @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
+    def test_weekly_push_command_accepts_explicit_period_override(self, mock_send_weekly_push_email):
+        mock_send_weekly_push_email.return_value = {
+            "sent": True,
+            "digest": {
+                "totalPaperCount": 1,
+            },
+        }
+
+        call_command(
+            "send_weekly_push",
+            "--user",
+            "weekly_user",
+            "--period-key",
+            "20260401_20260407",
+            "--period-start",
+            "2026-04-01T00:00:00+08:00",
+            "--period-end",
+            "2026-04-07T23:59:59+08:00",
+            stdout=StringIO(),
+        )
+
+        self.assertTrue(
+            PushRecord.objects.filter(
+                user=self.user,
+                period_key="20260401_20260407",
+                status=PushRecord.STATUS_SENT,
+            ).exists()
+        )
+
+    def test_weekly_push_command_rejects_partial_period_override(self):
+        with self.assertRaises(CommandError):
+            call_command(
+                "send_weekly_push",
+                "--period-key",
+                "20260401_20260407",
+                stdout=StringIO(),
+            )
+
 
 class WeeklyPushSchedulerCommandTests(TestCase):
     @patch("account.management.commands.run_weekly_push_scheduler.BlockingScheduler")

@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 
 from django.core.management.base import BaseCommand
 from django.core.management.base import CommandError
+from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 
 from account.models import PushRecord, WeeklyPushPaperBucket
@@ -35,8 +36,25 @@ class Command(BaseCommand):
             action="store_true",
             help="Build weekly push digests without sending emails or updating weekly push buckets",
         )
+        parser.add_argument(
+            "--period-key",
+            help="Override weekly period key, for example 20260416_20260422",
+        )
+        parser.add_argument(
+            "--period-start",
+            help="Override weekly period start datetime in ISO format, for example 2026-04-16T00:00:00+08:00",
+        )
+        parser.add_argument(
+            "--period-end",
+            help="Override weekly period end datetime in ISO format, for example 2026-04-22T23:59:59+08:00",
+        )
     def handle(self, *args, **options):
-        payload, daily_paper_lists, period_key, period_start, period_end = _load_weekly_delivery_context(options["cycle"])
+        payload, daily_paper_lists, period_key, period_start, period_end = _load_weekly_delivery_context(
+            options["cycle"],
+            period_key=options.get("period_key"),
+            period_start_raw=options.get("period_start"),
+            period_end_raw=options.get("period_end"),
+        )
         users = _get_target_users(options.get("username"))
 
         if not users.exists():
@@ -95,10 +113,19 @@ def _build_archive_batch() -> str:
     return timezone.localtime().strftime("%Y%m%d_%H%M%S")
 
 
-def _load_weekly_delivery_context(cycle: str) -> tuple[dict, list, str, datetime, datetime]:
+def _load_weekly_delivery_context(
+    cycle: str,
+    period_key: str | None = None,
+    period_start_raw: str | None = None,
+    period_end_raw: str | None = None,
+) -> tuple[dict, list, str, datetime, datetime]:
     payload = load_weekly_push_payload(cycle)
     daily_paper_lists = load_daily_paper_lists_from_cycle(cycle)
-    period_key, period_start, period_end = _build_weekly_period_metadata()
+    period_key, period_start, period_end = _resolve_weekly_period_metadata(
+        period_key=period_key,
+        period_start_raw=period_start_raw,
+        period_end_raw=period_end_raw,
+    )
     return payload, daily_paper_lists, period_key, period_start, period_end
 
 
@@ -109,6 +136,33 @@ def _build_weekly_period_metadata(now: datetime | None = None) -> tuple[str, dat
     period_start = (start_of_today - timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
     period_key = f"{period_start.strftime('%Y%m%d')}_{period_end.strftime('%Y%m%d')}"
     return period_key, period_start, period_end
+
+
+def _resolve_weekly_period_metadata(
+    period_key: str | None = None,
+    period_start_raw: str | None = None,
+    period_end_raw: str | None = None,
+) -> tuple[str, datetime, datetime]:
+    if period_key is None and period_start_raw is None and period_end_raw is None:
+        return _build_weekly_period_metadata()
+
+    if not period_key or not period_start_raw or not period_end_raw:
+        raise CommandError("When overriding weekly period metadata, --period-key, --period-start and --period-end must all be provided.")
+
+    period_start = _parse_period_datetime(period_start_raw, "period-start")
+    period_end = _parse_period_datetime(period_end_raw, "period-end")
+    if period_end < period_start:
+        raise CommandError("Invalid weekly period override. --period-end must be greater than or equal to --period-start.")
+    return period_key, period_start, period_end
+
+
+def _parse_period_datetime(raw_value: str, arg_name: str) -> datetime:
+    parsed = parse_datetime(raw_value)
+    if parsed is None:
+        raise CommandError(f"Invalid datetime for --{arg_name}: {raw_value}")
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+    return timezone.localtime(parsed)
 
 
 def _get_or_create_weekly_push_record(user, period_key: str, period_start: datetime, period_end: datetime) -> PushRecord:

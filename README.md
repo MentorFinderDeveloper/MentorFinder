@@ -186,6 +186,12 @@ python manage.py retry_failed_weekly_push --period-key 20260416_20260422 --dry-r
 python manage.py retry_failed_weekly_push --period-key 20260416_20260422
 ```
 
+如果需要人工补发历史某一周，也可以在正式发送命令中显式指定周期：
+
+```bash
+python manage.py send_weekly_push --user alice --period-key 20260401_20260407 --period-start 2026-04-01T00:00:00+08:00 --period-end 2026-04-07T23:59:59+08:00
+```
+
 ## 爬虫定时任务
 
 后端已提供 `run_daily_sync` 命令，会在指定时刻执行 `sync_dataset`（即先抓导师再抓论文）。默认配置是每天 `04:00`（`Asia/Shanghai`）。
