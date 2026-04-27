@@ -341,6 +341,9 @@ def followed_mentors(req: HttpRequest):
     if auth_error is not None:
         return auth_error
 
+    if user.role != "student":
+        return request_failed(3, "Only students can view followed mentors", 403)
+
     follows = MentorFollow.objects.filter(student=user).select_related("mentor")
     mentors = [follow.mentor for follow in follows if follow.mentor.is_visible_to(user)]
 
