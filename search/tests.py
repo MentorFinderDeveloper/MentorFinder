@@ -24,6 +24,14 @@ class SearchTests(TestCase):
         )
         self.other_token = generate_jwt_token("other1")
 
+        self.admin = User.objects.create_user(
+            username="admin1",
+            email="admin1@example.com",
+            password="abc12345",
+            role="admin",
+        )
+        self.admin_token = generate_jwt_token("admin1")
+
         self.zs = Mentor.objects.create(
             Chinese_name="张三",
             English_name="Zhang San",
@@ -482,6 +490,29 @@ class SearchTests(TestCase):
         self.assertEqual([paper["title"] for paper in owner_res.json()["papers"]], ["隐私导师论文"])
         self.assertEqual(other_res.status_code, 200)
         self.assertEqual(other_res.json()["papers"], [])
+
+    def test_search_mentors_includes_private_mentor_for_admin(self):
+        res = self.client.get(
+            "/search/mentors",
+            {"keyword": "王五"},
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(len(res.json()["mentors"]), 1)
+        self.assertEqual(res.json()["mentors"][0]["Chinese_name"], "王五")
+
+    def test_search_papers_by_private_mentor_name_includes_admin_results(self):
+        res = self.client.get(
+            "/search/papers",
+            {"keyword": "王五"},
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["隐私导师论文"])
 
     def test_search_keyword_missing(self):
         res = self.client.get("/search/mentors")
