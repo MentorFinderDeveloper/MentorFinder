@@ -1,6 +1,6 @@
 from django.core.management.base import BaseCommand, CommandError
 
-from account.management.commands.send_weekly_push import Command as SendWeeklyPushCommand
+from account.management.commands.send_weekly_push import _deliver_weekly_push_for_user, _load_weekly_delivery_context
 from account.models import PushRecord
 
 
@@ -39,10 +39,18 @@ class Command(BaseCommand):
             )
             return
 
-        sender = SendWeeklyPushCommand()
+        _, daily_paper_lists, _, _, _ = _load_weekly_delivery_context("current")
         for username in usernames:
             self.stdout.write(f"Retrying weekly push for {username} in period {period_key}...")
-            sender.handle(user=username, cycle="current", dry_run=False)
+            record = next(record for record in failed_records if record.user.username == username)
+            _deliver_weekly_push_for_user(
+                user=record.user,
+                daily_paper_lists=daily_paper_lists,
+                period_key=record.period_key,
+                period_start=record.period_start,
+                period_end=record.period_end,
+                stdout=self.stdout,
+            )
 
         refreshed_failed_count = PushRecord.objects.filter(
             type=PushRecord.TYPE_WEEKLY,

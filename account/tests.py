@@ -1554,8 +1554,8 @@ class PushRecordCommandTests(TestCase):
         self.assertIn("failed_user | 20260416_20260422 | failed", output)
         self.assertNotIn("record_user | 20260416_20260422 | sent", output)
 
-    @patch("account.management.commands.retry_failed_weekly_push.SendWeeklyPushCommand.handle")
-    def test_retry_failed_weekly_push_dry_run_reports_target_users(self, mock_send_handle):
+    @patch("account.management.commands.retry_failed_weekly_push._deliver_weekly_push_for_user")
+    def test_retry_failed_weekly_push_dry_run_reports_target_users(self, mock_deliver_for_user):
         out = StringIO()
 
         call_command(
@@ -1566,11 +1566,11 @@ class PushRecordCommandTests(TestCase):
             stdout=out,
         )
 
-        mock_send_handle.assert_not_called()
+        mock_deliver_for_user.assert_not_called()
         self.assertIn("[DRY RUN] Would retry 1 failed weekly push user(s)", out.getvalue())
 
-    @patch("account.management.commands.retry_failed_weekly_push.SendWeeklyPushCommand.handle")
-    def test_retry_failed_weekly_push_retries_each_failed_user(self, mock_send_handle):
+    @patch("account.management.commands.retry_failed_weekly_push._deliver_weekly_push_for_user")
+    def test_retry_failed_weekly_push_retries_each_failed_user(self, mock_deliver_for_user):
         def fake_retry(*args, **kwargs):
             record = PushRecord.objects.get(user=self.failed_user, period_key=self.period_key)
             record.status = PushRecord.STATUS_SENT
@@ -1578,7 +1578,7 @@ class PushRecordCommandTests(TestCase):
             record.error_message = ""
             record.save(update_fields=["status", "sent_at", "error_message", "updated_at"])
 
-        mock_send_handle.side_effect = fake_retry
+        mock_deliver_for_user.side_effect = fake_retry
         out = StringIO()
 
         call_command(
@@ -1588,9 +1588,55 @@ class PushRecordCommandTests(TestCase):
             stdout=out,
         )
 
-        mock_send_handle.assert_called_once()
+        mock_deliver_for_user.assert_called_once()
         self.assertIn("Retrying weekly push for failed_user", out.getvalue())
         self.assertIn("Retried 1 failed weekly push user(s)", out.getvalue())
+
+    @patch("account.management.commands.retry_failed_weekly_push._deliver_weekly_push_for_user")
+    def test_retry_failed_weekly_push_does_not_archive_weekly_bucket(self, mock_deliver_for_user):
+        mentor = Mentor.objects.create(
+            Chinese_name="重试导师",
+            English_name="Retry Mentor",
+            research_direction="软件工程",
+        )
+        paper = Paper.objects.create(
+            title="重试周报论文",
+            abstract="摘要",
+            publish_date=date(2026, 4, 20),
+            author_names="重试导师",
+            subjects="cs.SE",
+        )
+        mentor.add_paper(paper.id)
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            day_key="monday",
+            paper=paper,
+        )
+
+        def fake_retry(*args, **kwargs):
+            record = PushRecord.objects.get(user=self.failed_user, period_key=self.period_key)
+            record.status = PushRecord.STATUS_SENT
+            record.sent_at = timezone.now()
+            record.error_message = ""
+            record.save(update_fields=["status", "sent_at", "error_message", "updated_at"])
+
+        mock_deliver_for_user.side_effect = fake_retry
+
+        call_command(
+            "retry_failed_weekly_push",
+            "--period-key",
+            self.period_key,
+            stdout=StringIO(),
+        )
+
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT, day_key="monday", paper=paper).count(),
+            1,
+        )
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_ARCHIVED, paper=paper).count(),
+            0,
+        )
 
 
 class RecordWeeklyPushPapersCommandTests(TestCase):

@@ -36,10 +36,8 @@ class Command(BaseCommand):
             help="Build weekly push digests without sending emails or updating weekly push buckets",
         )
     def handle(self, *args, **options):
-        payload = load_weekly_push_payload(options["cycle"])
-        daily_paper_lists = load_daily_paper_lists_from_cycle(options["cycle"])
+        payload, daily_paper_lists, period_key, period_start, period_end = _load_weekly_delivery_context(options["cycle"])
         users = _get_target_users(options.get("username"))
-        period_key, period_start, period_end = _build_weekly_period_metadata()
 
         if not users.exists():
             self.stdout.write(self.style.WARNING("No target users found."))
@@ -52,19 +50,6 @@ class Command(BaseCommand):
 
         pending_users = []
         for user in users:
-            push_record = _get_or_create_weekly_push_record(
-                user=user,
-                period_key=period_key,
-                period_start=period_start,
-                period_end=period_end,
-            )
-
-            if not options["dry_run"] and push_record.status == PushRecord.STATUS_SENT:
-                self.stdout.write(
-                    f"{user.username}: skipped, already sent for weekly period {period_key}."
-                )
-                continue
-
             if options["dry_run"]:
                 digest = build_weekly_push_digest(user, daily_paper_lists)
                 self.stdout.write(
@@ -73,19 +58,17 @@ class Command(BaseCommand):
                 )
                 continue
 
-            pending_users.append(user.username)
-            result = send_weekly_push_email(user, daily_paper_lists)
-            status = "sent" if result["sent"] else "failed"
-            if result["sent"]:
-                _mark_push_record_sent(push_record)
-            else:
-                _mark_push_record_failed(push_record, "Weekly push email failed")
-            self.stdout.write(
-                f"{user.username}: {status}, "
-                f"{result['digest']['totalPaperCount']} matched paper(s)."
+            skipped = _deliver_weekly_push_for_user(
+                user=user,
+                daily_paper_lists=daily_paper_lists,
+                period_key=period_key,
+                period_start=period_start,
+                period_end=period_end,
+                stdout=self.stdout,
             )
-            if not result["sent"]:
-                raise CommandError(f"Weekly push email failed for user {user.username}")
+            if skipped:
+                continue
+            pending_users.append(user.username)
 
         if options["dry_run"]:
             return
@@ -110,6 +93,13 @@ class Command(BaseCommand):
 
 def _build_archive_batch() -> str:
     return timezone.localtime().strftime("%Y%m%d_%H%M%S")
+
+
+def _load_weekly_delivery_context(cycle: str) -> tuple[dict, list, str, datetime, datetime]:
+    payload = load_weekly_push_payload(cycle)
+    daily_paper_lists = load_daily_paper_lists_from_cycle(cycle)
+    period_key, period_start, period_end = _build_weekly_period_metadata()
+    return payload, daily_paper_lists, period_key, period_start, period_end
 
 
 def _build_weekly_period_metadata(now: datetime | None = None) -> tuple[str, datetime, datetime]:
@@ -143,6 +133,43 @@ def _get_or_create_weekly_push_record(user, period_key: str, period_start: datet
         if fields_to_update:
             push_record.save(update_fields=fields_to_update + ["updated_at"])
     return push_record
+
+
+def _deliver_weekly_push_for_user(
+    user,
+    daily_paper_lists,
+    period_key: str,
+    period_start: datetime,
+    period_end: datetime,
+    stdout,
+) -> bool:
+    push_record = _get_or_create_weekly_push_record(
+        user=user,
+        period_key=period_key,
+        period_start=period_start,
+        period_end=period_end,
+    )
+
+    if push_record.status == PushRecord.STATUS_SENT:
+        stdout.write(
+            f"{user.username}: skipped, already sent for weekly period {period_key}."
+        )
+        return True
+
+    result = send_weekly_push_email(user, daily_paper_lists)
+    status = "sent" if result["sent"] else "failed"
+    if result["sent"]:
+        _mark_push_record_sent(push_record)
+    else:
+        _mark_push_record_failed(push_record, "Weekly push email failed")
+    stdout.write(
+        f"{user.username}: {status}, "
+        f"{result['digest']['totalPaperCount']} matched paper(s)."
+    )
+    if not result["sent"]:
+        raise CommandError(f"Weekly push email failed for user {user.username}")
+
+    return False
 
 
 def _mark_push_record_sent(push_record: PushRecord):
