@@ -146,7 +146,7 @@ class SearchTests(TestCase):
         paper = res.json()["papers"][0]
         self.assertEqual(
             set(paper.keys()),
-            {"id", "title", "abstract", "publish_date", "author_names", "subjects", "arxiv_url", "mentorNames"},
+            {"id", "title", "abstract", "publish_date", "author_names", "subjects", "arxiv_id", "arxiv_url", "mentorNames"},
         )
         self.assertEqual(paper["title"], "机器学习方法研究")
         self.assertEqual(paper["subjects"], "cs.LG, cs.AI")
