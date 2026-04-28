@@ -154,7 +154,7 @@ class SearchTests(TestCase):
         paper = res.json()["papers"][0]
         self.assertEqual(
             set(paper.keys()),
-            {"id", "title", "abstract", "publish_date", "author_names", "subjects", "mentorNames"},
+            {"id", "title", "abstract", "publish_date", "author_names", "subjects", "arxiv_url", "mentorNames"},
         )
         self.assertEqual(paper["title"], "机器学习方法研究")
         self.assertEqual(paper["subjects"], "cs.LG, cs.AI")
@@ -523,8 +523,32 @@ class SearchTests(TestCase):
     def test_search_keyword_empty(self):
         res = self.client.get("/search/papers", {"keyword": "   "})
 
-        self.assertEqual(res.status_code, 400)
-        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["keyword"], "")
+        self.assertEqual(res.json()["total"], 3)
+        self.assertEqual(len(res.json()["papers"]), 3)
+
+    def test_search_empty_keyword_returns_all_visible_mentors(self):
+        anonymous_res = self.client.get("/search/mentors", {"keyword": ""})
+        owner_res = self.client.get(
+            "/search/mentors",
+            {"keyword": ""},
+            **self.auth_headers(self.owner_token),
+        )
+
+        self.assertEqual(anonymous_res.status_code, 200)
+        self.assertEqual(anonymous_res.json()["code"], 0)
+        self.assertEqual(anonymous_res.json()["total"], 2)
+        self.assertEqual({mentor["Chinese_name"] for mentor in anonymous_res.json()["mentors"]}, {"张三", "李四"})
+
+        self.assertEqual(owner_res.status_code, 200)
+        self.assertEqual(owner_res.json()["code"], 0)
+        self.assertEqual(owner_res.json()["total"], 3)
+        self.assertEqual(
+            {mentor["Chinese_name"] for mentor in owner_res.json()["mentors"]},
+            {"张三", "李四", "王五"},
+        )
 
     def test_search_keyword_too_long_for_mentors(self):
         res = self.client.get("/search/mentors", {"keyword": "x" * 256})
