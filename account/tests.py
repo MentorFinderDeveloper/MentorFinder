@@ -484,6 +484,7 @@ class UserProfileViewTests(TestCase):
 
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["profile"]["personalIntro"], "")
         self.assertEqual(res.json()["profile"]["researchExperience"], "")
         self.assertEqual(res.json()["profile"]["honors"], "")
         self.assertEqual(res.json()["profile"]["projectExperience"], "")
@@ -494,6 +495,7 @@ class UserProfileViewTests(TestCase):
             "/profile/me",
             data=json.dumps(
                 {
+                    "personalIntro": "热爱人机交互与数据挖掘的本科生",
                     "researchExperience": "发表2篇CCF论文",
                     "honors": "国家奖学金",
                     "projectExperience": "参与导师课题系统开发",
@@ -505,6 +507,7 @@ class UserProfileViewTests(TestCase):
 
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["profile"]["personalIntro"], "热爱人机交互与数据挖掘的本科生")
         self.assertEqual(res.json()["profile"]["researchExperience"], "发表2篇CCF论文")
         self.assertEqual(res.json()["profile"]["honors"], "国家奖学金")
         self.assertEqual(res.json()["profile"]["projectExperience"], "参与导师课题系统开发")
@@ -514,6 +517,7 @@ class UserProfileViewTests(TestCase):
             "/profile/me",
             data=json.dumps(
                 {
+                    "personalIntro": "ok",
                     "researchExperience": ["wrong type"],
                     "honors": "ok",
                     "projectExperience": "ok",
@@ -2736,4 +2740,3 @@ class WeeklyPushFilesServiceTests(TestCase):
 
         self.assertFalse(WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT).exists())
         self.assertTrue(WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_NEXT).exists())
-
