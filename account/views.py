@@ -409,25 +409,39 @@ def my_profile(req: HttpRequest):
         if not isinstance(body, dict):
             return request_failed(-2, "Invalid parameters. [body] must be an object", 400)
 
-        personal_intro = body.get("personalIntro", "")
-        research_experience = body.get("researchExperience", "")
-        honors = body.get("honors", "")
-        project_experience = body.get("projectExperience", "")
-
-        if not isinstance(personal_intro, str):
-            return request_failed(-2, "Invalid parameters. [personalIntro] must be a string", 400)
-        if not isinstance(research_experience, str):
-            return request_failed(-2, "Invalid parameters. [researchExperience] must be a string", 400)
-        if not isinstance(honors, str):
-            return request_failed(-2, "Invalid parameters. [honors] must be a string", 400)
-        if not isinstance(project_experience, str):
-            return request_failed(-2, "Invalid parameters. [projectExperience] must be a string", 400)
-
         profile, _ = UserProfile.objects.get_or_create(user=user)
-        profile.personal_intro = personal_intro.strip()
-        profile.research_experience = research_experience.strip()
-        profile.honors = honors.strip()
-        profile.project_experience = project_experience.strip()
+
+        string_fields = {
+            "avatarUrl": "avatar_url",
+            "signature": "signature",
+            "personalIntro": "personal_intro",
+            "researchExperience": "research_experience",
+            "honors": "honors",
+            "projectExperience": "project_experience",
+        }
+        bool_fields = {
+            "showPersonalIntro": "show_personal_intro",
+            "showResearchExperience": "show_research_experience",
+            "showHonors": "show_honors",
+            "showProjectExperience": "show_project_experience",
+        }
+
+        for request_key, model_field in string_fields.items():
+            if request_key not in body:
+                continue
+            value = body[request_key]
+            if not isinstance(value, str):
+                return request_failed(-2, f"Invalid parameters. [{request_key}] must be a string", 400)
+            setattr(profile, model_field, value.strip())
+
+        for request_key, model_field in bool_fields.items():
+            if request_key not in body:
+                continue
+            value = body[request_key]
+            if not isinstance(value, bool):
+                return request_failed(-2, f"Invalid parameters. [{request_key}] must be a boolean", 400)
+            setattr(profile, model_field, value)
+
         profile.save()
 
         return request_success({"profile": profile.serialize()})
