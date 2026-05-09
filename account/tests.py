@@ -1608,6 +1608,8 @@ class WeeklyPushCommandTests(TestCase):
     def setUp(self):
         self.current_period_key = "20260416_20260422"
         self.next_period_key = "20260423_20260429"
+        self.current_period_start = "2026-04-16T00:00:00+08:00"
+        self.current_period_end = "2026-04-22T23:59:59+08:00"
         self.user = User.objects.create_user(
             username="weekly_user",
             email="weekly_user@example.com",
@@ -1641,6 +1643,16 @@ class WeeklyPushCommandTests(TestCase):
             paper=self.paper,
         )
 
+    def current_period_args(self):
+        return [
+            "--period-key",
+            self.current_period_key,
+            "--period-start",
+            self.current_period_start,
+            "--period-end",
+            self.current_period_end,
+        ]
+
     @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
     def test_weekly_push_command_sends_and_resets_after_archive(self, mock_send_weekly_push_email):
         mock_send_weekly_push_email.return_value = {
@@ -1653,6 +1665,7 @@ class WeeklyPushCommandTests(TestCase):
         out = StringIO()
         call_command(
             "send_weekly_push",
+            *self.current_period_args(),
             stdout=out,
         )
 
@@ -1677,6 +1690,7 @@ class WeeklyPushCommandTests(TestCase):
         call_command(
             "send_weekly_push",
             "--dry-run",
+            *self.current_period_args(),
             stdout=out,
         )
 
@@ -1707,6 +1721,7 @@ class WeeklyPushCommandTests(TestCase):
                 "send_weekly_push",
                 "--user",
                 "weekly_user",
+                *self.current_period_args(),
                 stdout=out,
             )
 
@@ -1737,6 +1752,7 @@ class WeeklyPushCommandTests(TestCase):
                 "send_weekly_push",
                 "--user",
                 "weekly_user",
+                *self.current_period_args(),
                 stdout=out,
             )
 
@@ -1767,6 +1783,7 @@ class WeeklyPushCommandTests(TestCase):
         out = StringIO()
         call_command(
             "send_weekly_push",
+            *self.current_period_args(),
             stdout=out,
         )
 
