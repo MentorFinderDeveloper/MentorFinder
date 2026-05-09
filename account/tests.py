@@ -11,7 +11,7 @@ from django.core.management.base import CommandError
 from django.test import TestCase
 from django.utils import timezone
 
-from account.models import MentorVerificationRequest, PushRecord, User, MentorFollow, WeeklyPushPaperBucket
+from account.models import MentorVerificationRequest, PushRecord, User, MentorFollow, UserProfile, WeeklyPushPaperBucket
 from account.management.commands.send_weekly_push import _build_weekly_period_metadata
 from account.services import weekly_push_files
 from account.services.weekly_push_files import (
@@ -484,10 +484,16 @@ class UserProfileViewTests(TestCase):
 
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["profile"]["avatarUrl"], "")
+        self.assertEqual(res.json()["profile"]["signature"], "")
         self.assertEqual(res.json()["profile"]["personalIntro"], "")
         self.assertEqual(res.json()["profile"]["researchExperience"], "")
         self.assertEqual(res.json()["profile"]["honors"], "")
         self.assertEqual(res.json()["profile"]["projectExperience"], "")
+        self.assertTrue(res.json()["profile"]["showPersonalIntro"])
+        self.assertTrue(res.json()["profile"]["showResearchExperience"])
+        self.assertTrue(res.json()["profile"]["showHonors"])
+        self.assertTrue(res.json()["profile"]["showProjectExperience"])
         self.assertIsNone(res.json()["mentorVerificationRequest"])
 
     def test_put_profile_updates_fields(self):
@@ -512,6 +518,42 @@ class UserProfileViewTests(TestCase):
         self.assertEqual(res.json()["profile"]["honors"], "国家奖学金")
         self.assertEqual(res.json()["profile"]["projectExperience"], "参与导师课题系统开发")
 
+    def test_put_profile_updates_display_settings_without_clearing_content(self):
+        profile = UserProfile.objects.create(
+            user=self.user,
+            personal_intro="原个人简介",
+            research_experience="原科研经历",
+            honors="原荣誉",
+            project_experience="原项目经历",
+        )
+
+        res = self.client.put(
+            "/profile/me",
+            data=json.dumps(
+                {
+                    "avatarUrl": "https://example.com/avatar.png",
+                    "signature": "努力做一点有意思的研究",
+                    "showPersonalIntro": False,
+                    "showResearchExperience": True,
+                    "showHonors": False,
+                    "showProjectExperience": True,
+                }
+            ),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        profile.refresh_from_db()
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["profile"]["avatarUrl"], "https://example.com/avatar.png")
+        self.assertEqual(res.json()["profile"]["signature"], "努力做一点有意思的研究")
+        self.assertFalse(res.json()["profile"]["showPersonalIntro"])
+        self.assertFalse(res.json()["profile"]["showHonors"])
+        self.assertEqual(profile.personal_intro, "原个人简介")
+        self.assertEqual(profile.research_experience, "原科研经历")
+        self.assertEqual(profile.honors, "原荣誉")
+        self.assertEqual(profile.project_experience, "原项目经历")
+
     def test_put_profile_rejects_non_string_field(self):
         res = self.client.put(
             "/profile/me",
@@ -521,6 +563,21 @@ class UserProfileViewTests(TestCase):
                     "researchExperience": ["wrong type"],
                     "honors": "ok",
                     "projectExperience": "ok",
+                }
+            ),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_put_profile_rejects_non_boolean_display_setting(self):
+        res = self.client.put(
+            "/profile/me",
+            data=json.dumps(
+                {
+                    "showHonors": "yes",
                 }
             ),
             content_type="application/json",

@@ -70,18 +70,30 @@ class UserProfile(models.Model):
         on_delete=models.CASCADE,
         related_name="profile",
     )
+    avatar_url = models.TextField(blank=True, default="", verbose_name="头像地址")
+    signature = models.CharField(max_length=200, blank=True, default="", verbose_name="个性签名")
     personal_intro = models.TextField(blank=True, default="", verbose_name="个人简介")
     research_experience = models.TextField(blank=True, default="", verbose_name="科研经历")
     honors = models.TextField(blank=True, default="", verbose_name="所获荣誉")
     project_experience = models.TextField(blank=True, default="", verbose_name="项目经历")
+    show_personal_intro = models.BooleanField(default=True, verbose_name="展示个人简介")
+    show_research_experience = models.BooleanField(default=True, verbose_name="展示科研经历")
+    show_honors = models.BooleanField(default=True, verbose_name="展示所获荣誉")
+    show_project_experience = models.BooleanField(default=True, verbose_name="展示项目经历")
     updated_at = models.DateTimeField(auto_now=True)
 
     def serialize(self):
         return {
+            "avatarUrl": self.avatar_url,
+            "signature": self.signature,
             "personalIntro": self.personal_intro,
             "researchExperience": self.research_experience,
             "honors": self.honors,
             "projectExperience": self.project_experience,
+            "showPersonalIntro": self.show_personal_intro,
+            "showResearchExperience": self.show_research_experience,
+            "showHonors": self.show_honors,
+            "showProjectExperience": self.show_project_experience,
             "updatedAt": localtime(self.updated_at).isoformat(sep=' ', timespec='seconds') if self.updated_at else "",
         }
 
