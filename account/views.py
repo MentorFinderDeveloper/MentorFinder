@@ -409,10 +409,13 @@ def my_profile(req: HttpRequest):
         if not isinstance(body, dict):
             return request_failed(-2, "Invalid parameters. [body] must be an object", 400)
 
+        personal_intro = body.get("personalIntro", "")
         research_experience = body.get("researchExperience", "")
         honors = body.get("honors", "")
         project_experience = body.get("projectExperience", "")
 
+        if not isinstance(personal_intro, str):
+            return request_failed(-2, "Invalid parameters. [personalIntro] must be a string", 400)
         if not isinstance(research_experience, str):
             return request_failed(-2, "Invalid parameters. [researchExperience] must be a string", 400)
         if not isinstance(honors, str):
@@ -421,6 +424,7 @@ def my_profile(req: HttpRequest):
             return request_failed(-2, "Invalid parameters. [projectExperience] must be a string", 400)
 
         profile, _ = UserProfile.objects.get_or_create(user=user)
+        profile.personal_intro = personal_intro.strip()
         profile.research_experience = research_experience.strip()
         profile.honors = honors.strip()
         profile.project_experience = project_experience.strip()

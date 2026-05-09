@@ -484,6 +484,7 @@ class UserProfileViewTests(TestCase):
 
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["profile"]["personalIntro"], "")
         self.assertEqual(res.json()["profile"]["researchExperience"], "")
         self.assertEqual(res.json()["profile"]["honors"], "")
         self.assertEqual(res.json()["profile"]["projectExperience"], "")
@@ -494,6 +495,7 @@ class UserProfileViewTests(TestCase):
             "/profile/me",
             data=json.dumps(
                 {
+                    "personalIntro": "热爱人机交互与数据挖掘的本科生",
                     "researchExperience": "发表2篇CCF论文",
                     "honors": "国家奖学金",
                     "projectExperience": "参与导师课题系统开发",
@@ -505,6 +507,7 @@ class UserProfileViewTests(TestCase):
 
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["profile"]["personalIntro"], "热爱人机交互与数据挖掘的本科生")
         self.assertEqual(res.json()["profile"]["researchExperience"], "发表2篇CCF论文")
         self.assertEqual(res.json()["profile"]["honors"], "国家奖学金")
         self.assertEqual(res.json()["profile"]["projectExperience"], "参与导师课题系统开发")
@@ -514,6 +517,7 @@ class UserProfileViewTests(TestCase):
             "/profile/me",
             data=json.dumps(
                 {
+                    "personalIntro": "ok",
                     "researchExperience": ["wrong type"],
                     "honors": "ok",
                     "projectExperience": "ok",
@@ -1604,6 +1608,8 @@ class WeeklyPushCommandTests(TestCase):
     def setUp(self):
         self.current_period_key = "20260416_20260422"
         self.next_period_key = "20260423_20260429"
+        self.current_period_start = "2026-04-16T00:00:00+08:00"
+        self.current_period_end = "2026-04-22T23:59:59+08:00"
         self.user = User.objects.create_user(
             username="weekly_user",
             email="weekly_user@example.com",
@@ -1637,6 +1643,16 @@ class WeeklyPushCommandTests(TestCase):
             paper=self.paper,
         )
 
+    def current_period_args(self):
+        return [
+            "--period-key",
+            self.current_period_key,
+            "--period-start",
+            self.current_period_start,
+            "--period-end",
+            self.current_period_end,
+        ]
+
     @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
     def test_weekly_push_command_sends_and_resets_after_archive(self, mock_send_weekly_push_email):
         mock_send_weekly_push_email.return_value = {
@@ -1649,6 +1665,7 @@ class WeeklyPushCommandTests(TestCase):
         out = StringIO()
         call_command(
             "send_weekly_push",
+            *self.current_period_args(),
             stdout=out,
         )
 
@@ -1673,6 +1690,7 @@ class WeeklyPushCommandTests(TestCase):
         call_command(
             "send_weekly_push",
             "--dry-run",
+            *self.current_period_args(),
             stdout=out,
         )
 
@@ -1703,6 +1721,7 @@ class WeeklyPushCommandTests(TestCase):
                 "send_weekly_push",
                 "--user",
                 "weekly_user",
+                *self.current_period_args(),
                 stdout=out,
             )
 
@@ -1733,6 +1752,7 @@ class WeeklyPushCommandTests(TestCase):
                 "send_weekly_push",
                 "--user",
                 "weekly_user",
+                *self.current_period_args(),
                 stdout=out,
             )
 
@@ -1763,6 +1783,7 @@ class WeeklyPushCommandTests(TestCase):
         out = StringIO()
         call_command(
             "send_weekly_push",
+            *self.current_period_args(),
             stdout=out,
         )
 
@@ -2736,4 +2757,3 @@ class WeeklyPushFilesServiceTests(TestCase):
 
         self.assertFalse(WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT).exists())
         self.assertTrue(WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_NEXT).exists())
-

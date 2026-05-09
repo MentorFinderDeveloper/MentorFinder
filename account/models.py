@@ -70,6 +70,7 @@ class UserProfile(models.Model):
         on_delete=models.CASCADE,
         related_name="profile",
     )
+    personal_intro = models.TextField(blank=True, default="", verbose_name="个人简介")
     research_experience = models.TextField(blank=True, default="", verbose_name="科研经历")
     honors = models.TextField(blank=True, default="", verbose_name="所获荣誉")
     project_experience = models.TextField(blank=True, default="", verbose_name="项目经历")
@@ -77,6 +78,7 @@ class UserProfile(models.Model):
 
     def serialize(self):
         return {
+            "personalIntro": self.personal_intro,
             "researchExperience": self.research_experience,
             "honors": self.honors,
             "projectExperience": self.project_experience,
