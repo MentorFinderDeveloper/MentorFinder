@@ -17,6 +17,13 @@ def run_sync_dataset_job():
         logger.exception("每日定时同步任务执行失败")
 
 
+def run_weekly_push_job():
+    try:
+        call_command("generate_weekly_push")
+    except Exception:
+        logger.exception("每周主页推送生成任务执行失败")
+
+
 class Command(BaseCommand):
     help = "每天定时执行 sync_dataset，默认在 Asia/Shanghai 时区 04:00 运行"
 
@@ -39,10 +46,19 @@ class Command(BaseCommand):
             max_instances=1,
             misfire_grace_time=3600,
         )
+        scheduler.add_job(
+            run_weekly_push_job,
+            trigger=CronTrigger(day_of_week="mon", hour=7, minute=0, timezone=timezone),
+            id="weekly_home_push",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+        )
 
         self.stdout.write(
             self.style.SUCCESS(
-                f"已启动定时同步任务：每天 {hour:02d}:{minute:02d} ({settings.TIME_ZONE})"
+                f"已启动定时任务：每天 {hour:02d}:{minute:02d} 同步数据；每周一 07:00 生成主页推送 ({settings.TIME_ZONE})"
             )
         )
 
