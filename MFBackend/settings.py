@@ -140,6 +140,12 @@ DEFAULT_FROM_EMAIL = os.environ.get(
     'MentorFinder <no-reply@mentorfinder.local>',
 )
 
+# AI weekly push (OpenAI-compatible API provided by THU CS lab)
+# Keep API key empty in repo, fill through environment variable in deployment.
+THUCS_API_BASE_URL = os.environ.get('THUCS_API_BASE_URL', 'https://api-ai.thucs.cn')
+THUCS_API_KEY = os.environ.get('THUCS_API_KEY', 'sk-7SwlMoXweFz18Xv8eI7Z1A')
+THUCS_MODEL_NAME = os.environ.get('THUCS_MODEL_NAME', 'qwen-plus')
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.1/ref/settings/#default-auto-field
 

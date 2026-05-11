@@ -117,3 +117,37 @@ class Mentor(models.Model):
         id_list.remove(paper_id)
         self.set_paper_id_list(id_list)
         self.save()
+
+
+class WeeklyPaperPush(models.Model):
+    week_start = models.DateField(unique=True, verbose_name="周开始日期")
+    week_end = models.DateField(verbose_name="周结束日期")
+    paper_count = models.IntegerField(default=0, verbose_name="论文数量")
+    title = models.CharField(max_length=255, verbose_name="推送标题")
+    fixed_summary = models.TextField(blank=True, default="", verbose_name="固定模板总结")
+    ai_summary = models.TextField(blank=True, default="", verbose_name="AI生成总结")
+    content = models.TextField(blank=True, default="", verbose_name="完整推送内容")
+    papers = models.JSONField(blank=True, default=list, verbose_name="本周论文列表")
+    generated_by = models.CharField(max_length=32, default="rule", verbose_name="生成方式")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "每周论文推送"
+        verbose_name_plural = verbose_name
+        ordering = ["-week_start"]
+
+    def serialize(self):
+        return {
+            "id": self.id,
+            "weekStart": self.week_start.isoformat(),
+            "weekEnd": self.week_end.isoformat(),
+            "paperCount": self.paper_count,
+            "title": self.title,
+            "fixedSummary": self.fixed_summary,
+            "aiSummary": self.ai_summary,
+            "content": self.content,
+            "papers": self.papers,
+            "generatedBy": self.generated_by,
+            "updatedAt": self.updated_at.isoformat(sep=" ", timespec="seconds"),
+        }
