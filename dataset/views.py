@@ -637,8 +637,36 @@ def weekly_push_latest(request):
     if request.method != "GET":
         return BAD_METHOD
 
+    week_start = str(request.GET.get("week_start", "")).strip()
+    if week_start != "":
+        push_obj = WeeklyPaperPush.objects.filter(week_start=week_start).first()
+        if push_obj is None:
+            return request_failed(2, "Weekly push not found", 404)
+        return request_success({"weeklyPush": push_obj.serialize()})
+
     latest_push = WeeklyPaperPush.objects.order_by("-week_start", "-id").first()
     if latest_push is None:
         return request_success({"weeklyPush": None})
 
     return request_success({"weeklyPush": latest_push.serialize()})
+
+
+@CheckRequire
+def weekly_push_history(request):
+    if request.method != "GET":
+        return BAD_METHOD
+
+    pushes = WeeklyPaperPush.objects.order_by("-week_start", "-id")
+    return request_success({
+        "history": [
+            {
+                "weekStart": push.week_start.isoformat(),
+                "weekEnd": push.week_end.isoformat(),
+                "title": push.title,
+                "paperCount": push.paper_count,
+                "generatedBy": push.generated_by,
+                "updatedAt": push.updated_at.isoformat(sep=" ", timespec="seconds"),
+            }
+            for push in pushes
+        ]
+    })

@@ -27,6 +27,7 @@ class Command(BaseCommand):
                 publish_date__lte=week_end,
             ).order_by("-publish_date", "-id")
         )
+        paper_items = [self._serialize_paper_item(paper) for paper in papers]
 
         fixed_summary = self._build_fixed_summary(week_start, week_end, papers)
         ai_summary, generated_by = self._build_ai_summary_with_fallback(week_start, week_end, papers, fixed_summary)
@@ -42,6 +43,7 @@ class Command(BaseCommand):
                 "fixed_summary": fixed_summary,
                 "ai_summary": ai_summary,
                 "content": final_content,
+                "papers": paper_items,
                 "generated_by": generated_by,
             },
         )
@@ -149,3 +151,19 @@ class Command(BaseCommand):
         if ai_summary == fixed_summary:
             return fixed_summary
         return f"{fixed_summary}\n\n【AI总结】\n{ai_summary}"
+
+    def _serialize_paper_item(self, paper: Paper):
+        arxiv_url = paper.arxiv_url
+        if not arxiv_url and paper.arxiv_id:
+            arxiv_url = f"https://arxiv.org/abs/{paper.arxiv_id}"
+
+        return {
+            "id": paper.id,
+            "title": paper.title,
+            "publishDate": paper.publish_date.isoformat() if paper.publish_date else None,
+            "authorNames": paper.author_names,
+            "arxivUrl": arxiv_url,
+            "arxivId": paper.arxiv_id,
+            "abstract": paper.abstract,
+            "tldr": paper.tldr,
+        }

@@ -127,6 +127,7 @@ class WeeklyPaperPush(models.Model):
     fixed_summary = models.TextField(blank=True, default="", verbose_name="固定模板总结")
     ai_summary = models.TextField(blank=True, default="", verbose_name="AI生成总结")
     content = models.TextField(blank=True, default="", verbose_name="完整推送内容")
+    papers = models.JSONField(blank=True, default=list, verbose_name="本周论文列表")
     generated_by = models.CharField(max_length=32, default="rule", verbose_name="生成方式")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -146,6 +147,7 @@ class WeeklyPaperPush(models.Model):
             "fixedSummary": self.fixed_summary,
             "aiSummary": self.ai_summary,
             "content": self.content,
+            "papers": self.papers,
             "generatedBy": self.generated_by,
             "updatedAt": self.updated_at.isoformat(sep=" ", timespec="seconds"),
         }
