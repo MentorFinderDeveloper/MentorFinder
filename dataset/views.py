@@ -13,7 +13,7 @@ from dataset.services.research_analysis import (
     build_ai_recent_direction_analysis,
     build_rule_based_recent_direction_analysis,
 )
-from dataset.services.thu_crawler import build_given_name_surname_pinyin, crawl_mentor_by_name
+from dataset.services.thu_crawler import get_english_name
 from utils.utils_jwt import check_jwt_token
 from utils.utils_request import BAD_METHOD, request_failed, request_success
 from utils.utils_require import CheckRequire, MAX_CHAR_LENGTH, require
@@ -81,15 +81,6 @@ def _require_user(req: HttpRequest):
         return None, request_failed(2, "Unauthorized", 401)
     return user, None
 
-
-def _build_crawler_lookup_names(chinese_name: str, english_name: str) -> tuple[str, str]:
-    normalized_english = english_name.strip()
-    if normalized_english != "":
-        # English name has priority when both Chinese and English are provided.
-        return "", normalized_english
-
-    normalized_chinese = chinese_name.strip()
-    return "", build_given_name_surname_pinyin(normalized_chinese)
 
 
 def _serialize_paper(paper: Paper):
@@ -291,18 +282,8 @@ def create_custom_mentor(req: HttpRequest):
             409,
         )
 
-    lookup_chinese_name, lookup_english_name = _build_crawler_lookup_names(chinese_name, english_name)
-    crawler_result = crawl_mentor_by_name(
-        chinese_name=lookup_chinese_name,
-        english_name=lookup_english_name,
-    )
-    if crawler_result is None:
-        return request_failed(2, "Mentor not found by crawler", 404)
-
-    final_chinese_name = str(crawler_result.get("Chinese_name") or chinese_name).strip()
-    final_english_name = str(crawler_result.get("English_name") or english_name).strip()
-    if final_chinese_name == "":
-        return request_failed(2, "Mentor not found by crawler", 404)
+    final_english_name = english_name if english_name != "" else get_english_name(chinese_name)
+    final_chinese_name = chinese_name if chinese_name != "" else english_name
 
     if Mentor.objects.filter(owner=user, Chinese_name=final_chinese_name).exists():
         return request_failed(3, "Mentor already exists in your private library", 409)
@@ -310,9 +291,9 @@ def create_custom_mentor(req: HttpRequest):
     mentor = Mentor.objects.create(
         Chinese_name=final_chinese_name,
         English_name=final_english_name or None,
-        research_direction=str(crawler_result.get("research_direction") or "").strip() or "未提供",
-        email=str(crawler_result.get("email") or "").strip() or None,
-        profile=str(crawler_result.get("profile") or "").strip() or None,
+        research_direction="待补充",
+        email=None,
+        profile=None,
         paper_ids="",
         owner=user,
     )
