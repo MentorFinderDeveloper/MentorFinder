@@ -2,7 +2,7 @@ from django.test import TestCase, Client
 from django.contrib.auth.models import User
 from django.utils import timezone
 from unittest.mock import patch, MagicMock
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 import json
 import tempfile
@@ -191,6 +191,12 @@ class PaperMentorBindingTest(TestCase):
         self.mentor1.refresh_from_db()
         self.assertIn(paper.id, self.mentor1.get_paper_id_list())
 
+    def test_bind_to_mentors_updates_paper_mentor_ids(self):
+        """测试绑定导师时同步记录到论文侧"""
+        self.paper1.bind_to_mentors_by_authors()
+        self.paper1.refresh_from_db()
+        self.assertIn(self.mentor1.id, self.paper1.get_mentor_id_list())
+
 
 class PaperViewTest(TestCase):
     """测试论文相关视图"""
@@ -264,7 +270,7 @@ class PaperViewTest(TestCase):
             content_type="application/json"
         )
         self.assertEqual(response.status_code, 401)
-    
+
     def test_create_paper_invalid_title(self):
         """测试创建论文时标题为空（应失败）"""
         response = self.client.post(
@@ -1666,3 +1672,44 @@ class DatasetViewBoundaryTest(TestCase):
 
         self.assertEqual(response.status_code, 403)
         self.assertTrue(Mentor.objects.filter(id=self.mentor.id).exists())
+
+
+class MentorRecentDirectionAnalysisViewTest(TestCase):
+    """测试导师最近研究方向分析接口"""
+
+    def setUp(self):
+        self.client = Client()
+        self.mentor = Mentor.objects.create(
+            Chinese_name="张三",
+            English_name="San Zhang",
+            research_direction="人工智能",
+            profile="测试导师",
+        )
+        self.recent_paper = Paper.objects.create(
+            title="Recent Paper",
+            abstract="This work studies agents and reasoning.",
+            publish_date=timezone.localdate() - timedelta(days=30),
+            author_names="张三",
+        )
+        self.old_paper = Paper.objects.create(
+            title="Old Paper",
+            abstract="This paper is old.",
+            publish_date=timezone.localdate() - timedelta(days=500),
+            author_names="张三",
+        )
+        self.mentor.set_paper_id_list([self.recent_paper.id, self.old_paper.id])
+        self.mentor.save()
+
+    @patch("dataset.views.build_ai_recent_direction_analysis")
+    def test_recent_direction_analysis_uses_recent_papers_only(self, mock_ai_analysis):
+        mock_ai_analysis.return_value = "导师近一年主要关注智能体与推理。"
+
+        response = self.client.post(f"/dataset/mentors/{self.mentor.id}/recent-direction-analysis")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["paperCount"], 1)
+        self.assertEqual(payload["generatedBy"], "thucs-openai")
+        self.assertEqual(payload["analysis"], "导师近一年主要关注智能体与推理。")
+        self.assertEqual(len(payload["papers"]), 1)
+        self.assertEqual(payload["papers"][0]["title"], "Recent Paper")

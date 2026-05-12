@@ -11,6 +11,7 @@ class Paper(models.Model):
     arxiv_id = models.CharField(max_length=64, blank=True, default="", verbose_name="arXiv ID")
     arxiv_url = models.URLField(blank=True, null=True, verbose_name="arXiv 链接")
     tldr = models.TextField(blank=True, null=True, verbose_name="一句话总结")
+    mentor_ids = models.TextField(blank=True, default="", verbose_name="导师ID列表")
     class Meta:
         verbose_name = "论文"
         verbose_name_plural = verbose_name
@@ -23,7 +24,32 @@ class Paper(models.Model):
             return []
         return [name.strip() for name in self.author_names.split(",")]
 
+    def get_mentor_id_list(self):
+        if self.mentor_ids == "":
+            return []
+        return [int(mid) for mid in self.mentor_ids.split(",")]
+
+    def set_mentor_id_list(self, id_list):
+        unique_ids = []
+        seen_ids = set()
+        for mentor_id in id_list:
+            if mentor_id in seen_ids:
+                continue
+            seen_ids.add(mentor_id)
+            unique_ids.append(mentor_id)
+        self.mentor_ids = ",".join(str(mid) for mid in unique_ids)
+
+    def add_mentor(self, mentor_id):
+        mentor_id_list = self.get_mentor_id_list()
+        if mentor_id in mentor_id_list:
+            return
+        mentor_id_list.append(mentor_id)
+        self.set_mentor_id_list(mentor_id_list)
+        self.save(update_fields=["mentor_ids"])
+
     def bind_to_mentors_by_authors(self):
+        matched_mentor_ids = []
+
         # 1. 获取原作者列表，并生成一个小写的作者列表，方便后续不区分大小写比对
         author_list = self.get_author_list()
         lower_authors = [author.lower() for author in author_list]
@@ -58,6 +84,10 @@ class Paper(models.Model):
                 paper_ids = mentor.get_paper_id_list()
                 if self.id not in paper_ids:
                     mentor.add_paper(self.id)
+                matched_mentor_ids.append(mentor.id)
+
+        self.set_mentor_id_list(matched_mentor_ids)
+        self.save(update_fields=["mentor_ids"])
 
 class Mentor(models.Model):
     Chinese_name = models.CharField(max_length=100, verbose_name="中文姓名")

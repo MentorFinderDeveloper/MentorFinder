@@ -1,12 +1,18 @@
 import json
+from datetime import timedelta
 
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db.models import Q
 from django.http import HttpRequest
+from django.utils import timezone
 
 from account.models import User
 from dataset.models import Mentor, Paper, WeeklyPaperPush
+from dataset.services.research_analysis import (
+    build_ai_recent_direction_analysis,
+    build_rule_based_recent_direction_analysis,
+)
 from dataset.services.thu_crawler import build_given_name_surname_pinyin, crawl_mentor_by_name
 from utils.utils_jwt import check_jwt_token
 from utils.utils_request import BAD_METHOD, request_failed, request_success
@@ -97,6 +103,7 @@ def _serialize_paper(paper: Paper):
         "arxiv_id": paper.arxiv_id,
         "arxiv_url": paper.arxiv_url,
         "tldr": paper.tldr,
+        "mentor_ids": paper.get_mentor_id_list(),
     }
 
 
@@ -183,6 +190,13 @@ def _validate_mentor_payload(body: dict):
 
 
 def _refresh_mentor_papers(mentor: Mentor):
+    for paper in Paper.objects.all():
+        mentor_id_list = paper.get_mentor_id_list()
+        if mentor.id not in mentor_id_list:
+            continue
+        paper.set_mentor_id_list([mid for mid in mentor_id_list if mid != mentor.id])
+        paper.save(update_fields=["mentor_ids"])
+
     paper_ids = []
     for paper in Paper.objects.all():
         author_list = paper.get_author_list()
@@ -190,6 +204,7 @@ def _refresh_mentor_papers(mentor: Mentor):
             mentor.English_name and mentor.English_name in author_list
         ):
             paper_ids.append(paper.id)
+            paper.add_mentor(mentor.id)
     mentor.set_paper_id_list(paper_ids)
     mentor.save()
 
@@ -200,6 +215,10 @@ def _detach_paper_from_mentors(paper_id: int):
         if paper_id in id_list:
             mentor.set_paper_id_list([pid for pid in id_list if pid != paper_id])
             mentor.save()
+    paper = Paper.objects.filter(id=paper_id).first()
+    if paper is not None and paper.mentor_ids != "":
+        paper.set_mentor_id_list([])
+        paper.save(update_fields=["mentor_ids"])
 
 
 @CheckRequire
@@ -385,6 +404,64 @@ def mentor_detail(req: HttpRequest, mentor_id: int):
     _refresh_mentor_papers(mentor)
 
     return request_success({"mentor": _serialize_mentor(mentor)})
+
+
+@CheckRequire
+def mentor_recent_direction_analysis(req: HttpRequest, mentor_id: int):
+    if req.method != "POST":
+        return BAD_METHOD
+
+    mentor = Mentor.objects.filter(id=mentor_id).first()
+    if mentor is None:
+        return request_failed(2, "Mentor not found", 404)
+
+    current_user = _resolve_user(req)
+    if not mentor.is_visible_to(current_user):
+        return request_failed(2, "Mentor not found", 404)
+
+    today = timezone.localdate()
+    cutoff_date = today - timedelta(days=365)
+    recent_papers = list(
+        Paper.objects.filter(
+            id__in=mentor.get_paper_id_list(),
+            publish_date__isnull=False,
+            publish_date__gte=cutoff_date,
+            publish_date__lte=today,
+        ).order_by("-publish_date", "-id")
+    )
+
+    if not recent_papers:
+        return request_success({
+            "mentorId": mentor.id,
+            "mentorName": mentor.Chinese_name,
+            "paperCount": 0,
+            "generatedBy": "rule",
+            "analysis": build_rule_based_recent_direction_analysis(mentor, recent_papers, cutoff_date, today),
+            "papers": [],
+        })
+
+    try:
+        analysis = build_ai_recent_direction_analysis(mentor, recent_papers, cutoff_date, today)
+        generated_by = "thucs-openai"
+    except Exception:
+        analysis = build_rule_based_recent_direction_analysis(mentor, recent_papers, cutoff_date, today)
+        generated_by = "rule"
+
+    return request_success({
+        "mentorId": mentor.id,
+        "mentorName": mentor.Chinese_name,
+        "paperCount": len(recent_papers),
+        "generatedBy": generated_by,
+        "analysis": analysis,
+        "papers": [
+            {
+                "id": paper.id,
+                "title": paper.title,
+                "publish_date": paper.publish_date.isoformat() if paper.publish_date else "",
+            }
+            for paper in recent_papers
+        ],
+    })
 
 
 # 常见的 arXiv 分类代码与中文名称映射表
