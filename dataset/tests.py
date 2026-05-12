@@ -608,16 +608,7 @@ class MentorViewTest(TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
-    @patch("dataset.views.crawl_mentor_by_name")
-    def test_create_custom_mentor_success(self, mock_crawler):
-        mock_crawler.return_value = {
-            "Chinese_name": "王五",
-            "English_name": "Wang Wu",
-            "research_direction": "强化学习",
-            "email": "wangwu@example.com",
-            "profile": "测试私有导师",
-        }
-
+    def test_create_custom_mentor_success(self):
         response = self.client.post(
             "/dataset/mentors/custom",
             data=json.dumps({
@@ -632,41 +623,26 @@ class MentorViewTest(TestCase):
         created = Mentor.objects.filter(owner=self.normal_user, Chinese_name="王五").first()
         self.assertIsNotNone(created)
         self.assertEqual(response.json()["mentor"]["Chinese_name"], "王五")
+        self.assertEqual(response.json()["mentor"]["English_name"], "Wang Wu")
+        self.assertEqual(response.json()["mentor"]["research_direction"], "待补充")
+        self.assertEqual(response.json()["mentor"]["email"], None)
         self.assertEqual(response.json()["mentor"]["is_private"], True)
 
-    @patch("dataset.views.crawl_mentor_by_name")
-    def test_create_custom_mentor_prefers_english_name_for_crawler(self, mock_crawler):
-        mock_crawler.return_value = {
-            "Chinese_name": "王五",
-            "English_name": "Wang Wu",
-            "research_direction": "强化学习",
-            "email": "wangwu@example.com",
-            "profile": "测试私有导师",
-        }
-
+    def test_create_custom_mentor_uses_provided_english_name(self):
         response = self.client.post(
             "/dataset/mentors/custom",
             data=json.dumps({
-                "Chinese_name": "错误中文名",
-                "English_name": "Wang Wu",
+                "Chinese_name": "赵六",
+                "English_name": "Six Zhao",
             }),
             content_type="application/json",
             HTTP_AUTHORIZATION=f"Bearer {self.normal_token}",
         )
 
         self.assertEqual(response.status_code, 200)
-        mock_crawler.assert_called_once_with(chinese_name="", english_name="Wang Wu")
+        self.assertEqual(response.json()["mentor"]["English_name"], "Six Zhao")
 
-    @patch("dataset.views.crawl_mentor_by_name")
-    def test_create_custom_mentor_uses_pinyin_name_surname_when_english_missing(self, mock_crawler):
-        mock_crawler.return_value = {
-            "Chinese_name": "唐杰",
-            "English_name": "Jie Tang",
-            "research_direction": "知识图谱",
-            "email": "jietang@example.com",
-            "profile": "测试私有导师",
-        }
-
+    def test_create_custom_mentor_generates_pinyin_when_english_missing(self):
         response = self.client.post(
             "/dataset/mentors/custom",
             data=json.dumps({
@@ -677,7 +653,7 @@ class MentorViewTest(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        mock_crawler.assert_called_once_with(chinese_name="", english_name="jie-tang")
+        self.assertEqual(response.json()["mentor"]["English_name"], "Jie Tang")
 
     def test_create_custom_mentor_requires_login(self):
         response = self.client.post(
@@ -690,21 +666,19 @@ class MentorViewTest(TestCase):
 
         self.assertEqual(response.status_code, 401)
 
-    @patch("dataset.views.crawl_mentor_by_name")
-    def test_create_custom_mentor_returns_404_when_crawler_has_no_match(self, mock_crawler):
-        mock_crawler.return_value = None
-
+    def test_create_custom_mentor_creates_directly_without_crawler(self):
         response = self.client.post(
             "/dataset/mentors/custom",
-            data=json.dumps({"Chinese_name": "不存在导师"}),
+            data=json.dumps({"Chinese_name": "独立导师"}),
             content_type="application/json",
             HTTP_AUTHORIZATION=f"Bearer {self.normal_token}",
         )
 
-        self.assertEqual(response.status_code, 404)
-        self.assertEqual(response.json()["code"], 2)
-        self.assertEqual(response.json()["info"], "Mentor not found by crawler")
-        self.assertFalse(Mentor.objects.filter(owner=self.normal_user, Chinese_name="不存在导师").exists())
+        self.assertEqual(response.status_code, 200)
+        mentor = Mentor.objects.get(owner=self.normal_user, Chinese_name="独立导师")
+        self.assertEqual(mentor.research_direction, "待补充")
+        self.assertEqual(mentor.email, None)
+        self.assertEqual(mentor.profile, None)
 
     def test_create_custom_mentor_requires_at_least_one_name(self):
         response = self.client.post(
@@ -733,21 +707,13 @@ class MentorViewTest(TestCase):
         self.assertEqual(response.json()["code"], -2)
         self.assertEqual(response.json()["info"], "Invalid parameters. [English_name] is too long")
 
-    @patch("dataset.views.crawl_mentor_by_name")
-    def test_create_custom_mentor_rejects_duplicate_private_mentor(self, mock_crawler):
+    def test_create_custom_mentor_rejects_duplicate_private_mentor(self):
         Mentor.objects.create(
             Chinese_name="王五",
             English_name="Wang Wu",
             research_direction="强化学习",
             owner=self.normal_user,
         )
-        mock_crawler.return_value = {
-            "Chinese_name": "王五",
-            "English_name": "Wang Wu",
-            "research_direction": "强化学习",
-            "email": "wangwu@example.com",
-            "profile": "测试私有导师",
-        }
 
         response = self.client.post(
             "/dataset/mentors/custom",
@@ -762,8 +728,7 @@ class MentorViewTest(TestCase):
         self.assertEqual(response.json()["code"], 3)
         self.assertEqual(response.json()["info"], "Mentor already exists in your private library")
 
-    @patch("dataset.views.crawl_mentor_by_name")
-    def test_create_custom_mentor_rejects_when_reaching_limit(self, mock_crawler):
+    def test_create_custom_mentor_rejects_when_reaching_limit(self):
         for idx in range(10):
             Mentor.objects.create(
                 Chinese_name=f"私有导师{idx}",
@@ -785,18 +750,8 @@ class MentorViewTest(TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["info"], "Private mentor limit reached (max 10)")
         self.assertEqual(Mentor.objects.filter(owner=self.normal_user).count(), 10)
-        mock_crawler.assert_not_called()
 
-    @patch("dataset.views.crawl_mentor_by_name")
-    def test_my_custom_mentors_only_returns_current_user_records(self, mock_crawler):
-        mock_crawler.return_value = {
-            "Chinese_name": "王五",
-            "English_name": "Wang Wu",
-            "research_direction": "强化学习",
-            "email": "wangwu@example.com",
-            "profile": "测试私有导师",
-        }
-
+    def test_my_custom_mentors_only_returns_current_user_records(self):
         self.client.post(
             "/dataset/mentors/custom",
             data=json.dumps({"Chinese_name": "王五"}),
@@ -1598,35 +1553,20 @@ class DatasetViewBoundaryTest(TestCase):
         self.assertEqual(self.mentor.research_direction, "可信人工智能")
         self.assertEqual(self.mentor.get_paper_id_list(), [new_paper.id])
 
-    @patch("dataset.views.crawl_mentor_by_name")
-    def test_create_custom_mentor_returns_404_when_crawler_result_has_no_chinese_name(self, mock_crawler):
-        mock_crawler.return_value = {
-            "Chinese_name": "",
-            "English_name": "Unknown Mentor",
-            "research_direction": "未知方向",
-        }
-
+    def test_create_custom_mentor_english_only_uses_english_as_chinese_name(self):
         response = self.client.post(
             "/dataset/mentors/custom",
-            data=json.dumps({"English_name": "Unknown Mentor"}),
+            data=json.dumps({"English_name": "John Smith"}),
             content_type="application/json",
             HTTP_AUTHORIZATION=f"Bearer {self.student_token}",
         )
 
-        self.assertEqual(response.status_code, 404)
-        self.assertEqual(response.json()["code"], 2)
-        self.assertEqual(response.json()["info"], "Mentor not found by crawler")
+        self.assertEqual(response.status_code, 200)
+        mentor = Mentor.objects.get(owner=self.student, Chinese_name="John Smith")
+        self.assertEqual(mentor.English_name, "John Smith")
+        self.assertEqual(mentor.research_direction, "待补充")
 
-    @patch("dataset.views.crawl_mentor_by_name")
-    def test_create_custom_mentor_uses_submitted_name_when_crawler_omits_english_name(self, mock_crawler):
-        mock_crawler.return_value = {
-            "Chinese_name": "补全导师",
-            "English_name": "",
-            "research_direction": "系统安全",
-            "email": "",
-            "profile": "",
-        }
-
+    def test_create_custom_mentor_uses_submitted_english_name_directly(self):
         response = self.client.post(
             "/dataset/mentors/custom",
             data=json.dumps({"Chinese_name": "补全导师", "English_name": "Fallback Name"}),
@@ -1637,7 +1577,7 @@ class DatasetViewBoundaryTest(TestCase):
         self.assertEqual(response.status_code, 200)
         mentor = Mentor.objects.get(owner=self.student, Chinese_name="补全导师")
         self.assertEqual(mentor.English_name, "Fallback Name")
-        self.assertEqual(mentor.research_direction, "系统安全")
+        self.assertEqual(mentor.research_direction, "待补充")
 
     def test_owner_update_private_mentor_rejects_invalid_email(self):
         private_mentor = Mentor.objects.create(
