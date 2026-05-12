@@ -9,7 +9,11 @@ from django.utils import timezone
 
 from account.models import User
 from dataset.models import Mentor, Paper, WeeklyPaperPush
-from dataset.services.thu_crawler import build_given_name_surname_pinyin, crawl_mentor_by_name
+from dataset.services.research_analysis import (
+    build_ai_recent_direction_analysis,
+    build_rule_based_recent_direction_analysis,
+)
+from dataset.services.thu_crawler import get_english_name
 from utils.utils_jwt import check_jwt_token
 from utils.utils_request import BAD_METHOD, request_failed, request_success
 from utils.utils_require import CheckRequire, MAX_CHAR_LENGTH, require
