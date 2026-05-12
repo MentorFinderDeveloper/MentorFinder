@@ -97,6 +97,7 @@ def _serialize_paper(paper: Paper):
         "arxiv_id": paper.arxiv_id,
         "arxiv_url": paper.arxiv_url,
         "tldr": paper.tldr,
+        "mentor_ids": paper.get_mentor_id_list(),
     }
 
 
@@ -183,6 +184,13 @@ def _validate_mentor_payload(body: dict):
 
 
 def _refresh_mentor_papers(mentor: Mentor):
+    for paper in Paper.objects.all():
+        mentor_id_list = paper.get_mentor_id_list()
+        if mentor.id not in mentor_id_list:
+            continue
+        paper.set_mentor_id_list([mid for mid in mentor_id_list if mid != mentor.id])
+        paper.save(update_fields=["mentor_ids"])
+
     paper_ids = []
     for paper in Paper.objects.all():
         author_list = paper.get_author_list()
@@ -190,6 +198,7 @@ def _refresh_mentor_papers(mentor: Mentor):
             mentor.English_name and mentor.English_name in author_list
         ):
             paper_ids.append(paper.id)
+            paper.add_mentor(mentor.id)
     mentor.set_paper_id_list(paper_ids)
     mentor.save()
 
@@ -200,6 +209,10 @@ def _detach_paper_from_mentors(paper_id: int):
         if paper_id in id_list:
             mentor.set_paper_id_list([pid for pid in id_list if pid != paper_id])
             mentor.save()
+    paper = Paper.objects.filter(id=paper_id).first()
+    if paper is not None and paper.mentor_ids != "":
+        paper.set_mentor_id_list([])
+        paper.save(update_fields=["mentor_ids"])
 
 
 @CheckRequire
