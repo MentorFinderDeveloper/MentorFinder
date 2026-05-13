@@ -1013,6 +1013,25 @@ class FetchPapersCommandTest(TestCase):
         self.assertEqual(len(self.command.created_paper_ids), 1)
         self.assertEqual(list(self.command.created_paper_ids)[0], Paper.objects.first().id)
 
+    @patch("dataset.management.commands.fetch_papers.time.sleep")
+    @patch.object(FetchPapersCommand, "_fetch_from_arxiv_once")
+    def test_fetch_from_arxiv_retries_when_arxiv_returns_429(self, mock_fetch_once, mock_sleep):
+        mentor = Mentor.objects.create(
+            Chinese_name="测试导师",
+            English_name="Test Mentor",
+            research_direction="人工智能",
+        )
+
+        mock_fetch_once.side_effect = [
+            Exception("Page request resulted in HTTP 429"),
+            None,
+        ]
+
+        self.command.fetch_from_arxiv(mentor)
+
+        self.assertEqual(mock_fetch_once.call_count, 2)
+        mock_sleep.assert_called_once_with(self.command.ARXIV_RATE_LIMIT_BACKOFF_SECONDS[0])
+
     def test_record_new_papers_for_weekly_push_writes_to_current_cycle_file(self):
         paper = Paper.objects.create(
             title="周报当前周期论文",
