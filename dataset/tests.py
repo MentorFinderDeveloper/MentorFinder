@@ -1094,6 +1094,13 @@ class TimelineViewTest(TestCase):
 
     def setUp(self):
         self.client = Client()
+        self.mentor_li = Mentor.objects.create(
+            Chinese_name="李四",
+            English_name="Li Si",
+            research_direction="人工智能",
+            email="lisi@example.com",
+            profile="用于测试时间线作者链接。",
+        )
 
         self.paper_ai_old = Paper.objects.create(
             title="AI 早期论文",
@@ -1175,6 +1182,32 @@ class TimelineViewTest(TestCase):
         self.assertEqual(len(data["papers"]), 1)
         self.assertEqual(data["papers"][0]["id"], self.paper_ai_new.id)
         self.assertEqual(data["papers"][0]["subjects"], "cs.AI, cs.LG")
+        self.assertEqual(data["papers"][0]["mentor_ids"], [self.mentor_li.id])
+
+    def test_timeline_papers_return_author_aligned_mentor_ids(self):
+        mixed_paper = Paper.objects.create(
+            title="混合作者论文",
+            abstract="摘要5",
+            publish_date=date(2024, 2, 20),
+            author_names="李四,赵云",
+            subjects="cs.AI",
+            arxiv_url="https://arxiv.org/abs/4444.4444",
+            tldr="tldr4",
+        )
+
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "人工智能 (Artificial Intelligence)",
+                "page": 1,
+                "page_size": 5,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        target_paper = next(paper for paper in data["papers"] if paper["id"] == mixed_paper.id)
+        self.assertEqual(target_paper["mentor_ids"], [self.mentor_li.id, 0])
 
     def test_timeline_page_size_has_upper_bound(self):
         response = self.client.get(
