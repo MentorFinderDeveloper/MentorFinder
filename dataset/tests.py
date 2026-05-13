@@ -1155,6 +1155,7 @@ class TimelineViewTest(TestCase):
         self.assertTrue(data["has_next"])
         self.assertEqual(len(data["papers"]), 1)
         self.assertEqual(data["papers"][0]["id"], self.paper_ai_new.id)
+        self.assertEqual(data["papers"][0]["subjects"], "cs.AI, cs.LG")
 
     def test_timeline_page_size_has_upper_bound(self):
         response = self.client.get(
@@ -1286,6 +1287,7 @@ class TimelineViewTest(TestCase):
         data = response.json()
         self.assertEqual(data["total_papers"], 1)
         self.assertEqual(data["papers"][0]["id"], raw_subject_paper.id)
+        self.assertEqual(data["papers"][0]["subjects"], "custom.NEW")
 
 
 class ThuCrawlerUtilityTest(TestCase):
