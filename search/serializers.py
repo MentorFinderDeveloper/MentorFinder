@@ -54,4 +54,4 @@ class PaperSerializer(serializers.ModelSerializer):
             if english_name:
                 mentor_id_by_name.setdefault(english_name, mentor.pk)
 
-        return [mentor_id_by_name.get(author_name.lower()) for author_name in author_list]
+        return [mentor_id_by_name.get(author_name.lower(), 0) for author_name in author_list]
