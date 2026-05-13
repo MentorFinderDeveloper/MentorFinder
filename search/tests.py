@@ -143,6 +143,16 @@ class SearchTests(TestCase):
         self.assertEqual(len(res.json()["mentors"]), 1)
         self.assertEqual(res.json()["mentors"][0]["Chinese_name"], "张三")
 
+    def test_search_mentors_by_english_name_variants_exact(self):
+        for keyword in ["San Zhang", "San, Zhang"]:
+            with self.subTest(keyword=keyword):
+                res = self.client.get("/search/mentors", {"keyword": keyword})
+
+                self.assertEqual(res.status_code, 200)
+                self.assertEqual(res.json()["code"], 0)
+                self.assertEqual(len(res.json()["mentors"]), 1)
+                self.assertEqual(res.json()["mentors"][0]["Chinese_name"], "张三")
+
     def test_search_papers_by_exact_title(self):
         res = self.client.get("/search/papers", {"keyword": "机器学习方法研究"})
 
@@ -185,6 +195,15 @@ class SearchTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["大语言模型在问答系统中的应用"])
+
+    def test_search_papers_by_mentor_english_name_variants_exact(self):
+        for keyword in ["Si Li", "Si, Li"]:
+            with self.subTest(keyword=keyword):
+                res = self.client.get("/search/papers", {"keyword": keyword})
+
+                self.assertEqual(res.status_code, 200)
+                self.assertEqual(res.json()["code"], 0)
+                self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["大语言模型在问答系统中的应用"])
 
     def test_search_papers_by_author_names(self):
         res = self.client.get("/search/papers", {"keyword": "张三"})

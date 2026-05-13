@@ -37,6 +37,13 @@ def _mentor_fuzzy_query(keyword: str) -> Q:
     return query
 
 
+def _mentor_exact_query(keyword: str) -> Q:
+    query = Q(Chinese_name__iexact=keyword) | Q(research_direction__iexact=keyword)
+    for variant in _name_variants(keyword):
+        query |= Q(English_name__iexact=variant)
+    return query
+
+
 def _order_papers(papers, sort_mode: str):
     if sort_mode == "early":
         return papers.order_by("publish_date", "id")
@@ -113,11 +120,7 @@ def search_mentors_queryset(keyword: str, user=None, fuzzy: bool = False):
     if fuzzy:
         return _visible_mentors(user).filter(_mentor_fuzzy_query(keyword)).distinct()
 
-    return _visible_mentors(user).filter(
-        Q(Chinese_name__iexact=keyword) |
-        Q(English_name__iexact=keyword) |
-        Q(research_direction__iexact=keyword)
-    ).distinct()
+    return _visible_mentors(user).filter(_mentor_exact_query(keyword)).distinct()
 
 
 def _search_papers_exact_queryset(keyword: str, user=None):
@@ -131,11 +134,7 @@ def _search_papers_exact_queryset(keyword: str, user=None):
     # (assume that a mentor's name or research direction is not the title of any paper)
     if not papers.exists():
         mentor_ids: list[int] = []
-        for mentor in _visible_mentors(user).filter(
-            Q(Chinese_name__iexact=keyword) |
-            Q(English_name__iexact=keyword) |
-            Q(research_direction__iexact=keyword)
-        ):
+        for mentor in _visible_mentors(user).filter(_mentor_exact_query(keyword)):
             mentor_ids.extend(mentor.get_paper_id_list())
 
         if mentor_ids:
