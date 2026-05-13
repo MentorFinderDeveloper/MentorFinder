@@ -6,7 +6,7 @@ from django.core.validators import validate_email
 from django.http import HttpRequest
 from django.db.models import Q
 
-from account.models import MentorVerificationRequest, User, UserProfile
+from account.models import MentorVerificationRequest, User, UserFollow, UserProfile
 from utils.utils_jwt import generate_jwt_token
 from utils.utils_request import BAD_METHOD, request_failed, request_success
 from utils.utils_require import CheckRequire, MAX_CHAR_LENGTH, require
@@ -146,6 +146,23 @@ def _serialize_admin_user(user: User):
 
 def _serialize_verification_request(request_obj: MentorVerificationRequest):
     return request_obj.serialize()
+
+
+def _serialize_follow_user(user: User, current_user: User | None = None):
+    profile = getattr(user, "profile", None)
+    followed = False
+    if current_user is not None:
+        followed = UserFollow.objects.filter(follower=current_user, following=user).exists()
+
+    return {
+        "id": user.id,
+        "username": user.username,
+        "realName": user.real_name,
+        "role": user.role,
+        "avatarUrl": profile.avatar_url if profile is not None else "",
+        "signature": profile.signature if profile is not None else "",
+        "followed": followed,
+    }
 
 
 def _validate_verification_review_payload(body: dict):
@@ -347,6 +364,88 @@ def followed_mentors(req: HttpRequest):
     return request_success({
         "mentors": MentorSerializer(mentors, many=True).data,
     })
+
+
+@CheckRequire
+def followed_users(req: HttpRequest):
+    if req.method != "GET":
+        return BAD_METHOD
+
+    user, auth_error = _require_user(req)
+    if auth_error is not None:
+        return auth_error
+
+    follows = (
+        UserFollow.objects
+        .filter(follower=user)
+        .select_related("following", "following__profile")
+    )
+    users = [
+        _serialize_follow_user(follow.following, user)
+        for follow in follows
+        if follow.following.role != User.ROLE_BANNED
+    ]
+
+    return request_success({
+        "users": users,
+    })
+
+
+@CheckRequire
+def search_users(req: HttpRequest):
+    if req.method != "GET":
+        return BAD_METHOD
+
+    user, auth_error = _require_user(req)
+    if auth_error is not None:
+        return auth_error
+
+    keyword = str(req.GET.get("keyword", "")).strip()
+    if len(keyword) > MAX_CHAR_LENGTH:
+        return request_failed(-2, "Invalid parameters. [keyword] is too long", 400)
+
+    users = (
+        User.objects
+        .exclude(id=user.id)
+        .exclude(role=User.ROLE_BANNED)
+        .select_related("profile")
+        .order_by("id")
+    )
+    if keyword != "":
+        users = users.filter(
+            Q(username__icontains=keyword) |
+            Q(real_name__icontains=keyword) |
+            Q(email__icontains=keyword)
+        )
+
+    return request_success({
+        "users": [_serialize_follow_user(match, user) for match in users[:20]],
+        "keyword": keyword,
+    })
+
+
+@CheckRequire
+def follow_user(req: HttpRequest, user_id: int):
+    if req.method not in ["POST", "DELETE"]:
+        return BAD_METHOD
+
+    user, auth_error = _require_user(req)
+    if auth_error is not None:
+        return auth_error
+
+    if user.id == user_id:
+        return request_failed(3, "Cannot follow yourself", 400)
+
+    target_user = User.objects.filter(id=user_id).first()
+    if target_user is None or target_user.role == User.ROLE_BANNED:
+        return request_failed(2, "User not found", 404)
+
+    if req.method == "POST":
+        UserFollow.objects.get_or_create(follower=user, following=target_user)
+        return request_success({"followed": True})
+
+    UserFollow.objects.filter(follower=user, following=target_user).delete()
+    return request_success({"followed": False})
 
 
 @CheckRequire
