@@ -61,6 +61,13 @@ def _parse_positive_int(raw_value, default_value: int, minimum: int = 1, maximum
     return parsed
 
 
+def _get_visibility(req: HttpRequest) -> str:
+    visibility = str(req.GET.get("visibility", "all")).strip().lower()
+    if visibility not in {"all", "mine", "public"}:
+        return "all"
+    return visibility
+
+
 def _get_pagination(req: HttpRequest) -> tuple[int, int]:
     page = _parse_positive_int(req.GET.get("page"), DEFAULT_SEARCH_PAGE)
     page_size = _parse_positive_int(
@@ -98,6 +105,7 @@ def mentors(req: HttpRequest):
 
     keyword = _get_keyword(req)
     search_mode = _get_search_mode(req)
+    visibility = _get_visibility(req)
     page, page_size = _get_pagination(req)
     user = _resolve_user(req)
     mentors, pagination = search_mentors_page(
@@ -106,6 +114,7 @@ def mentors(req: HttpRequest):
         fuzzy=(search_mode == "fuzzy"),
         page=page,
         page_size=page_size,
+        visibility=visibility,
     )
     return request_success({
         "keyword": keyword,

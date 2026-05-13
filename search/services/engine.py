@@ -52,12 +52,21 @@ def _order_papers(papers, sort_mode: str):
     return papers
 
 
-def _visible_mentors(user):
+def _visible_mentors(user, visibility="all"):
     if user is None:
         return Mentor.objects.filter(owner__isnull=True)
     if getattr(user, "role", "") == "admin":
-        return Mentor.objects.all()
-    return Mentor.objects.filter(Q(owner__isnull=True) | Q(owner_id=user.id))
+        base = Mentor.objects.all()
+    else:
+        base = Mentor.objects.filter(Q(owner__isnull=True) | Q(owner_id=user.id))
+
+    if visibility == "mine":
+        if user is None:
+            return Mentor.objects.none()
+        return base.filter(owner_id=user.id)
+    if visibility == "public":
+        return base.filter(owner__isnull=True)
+    return base
 
 
 def _collect_mentor_paper_ids(mentors) -> list[int]:
@@ -113,14 +122,14 @@ def _paginate_queryset(queryset, page, page_size):
     }
 
 
-def search_mentors_queryset(keyword: str, user=None, fuzzy: bool = False):
+def search_mentors_queryset(keyword: str, user=None, fuzzy: bool = False, visibility: str = "all"):
     if keyword.strip() == "":
-        return _visible_mentors(user).distinct()
+        return _visible_mentors(user, visibility=visibility).distinct()
 
     if fuzzy:
-        return _visible_mentors(user).filter(_mentor_fuzzy_query(keyword)).distinct()
+        return _visible_mentors(user, visibility=visibility).filter(_mentor_fuzzy_query(keyword)).distinct()
 
-    return _visible_mentors(user).filter(_mentor_exact_query(keyword)).distinct()
+    return _visible_mentors(user, visibility=visibility).filter(_mentor_exact_query(keyword)).distinct()
 
 
 def _search_papers_exact_queryset(keyword: str, user=None):
@@ -164,8 +173,8 @@ def _search_papers_fuzzy_queryset(keyword: str, user=None):
     return Paper.objects.filter(paper_filters).distinct()
 
 
-def search_mentors_page(keyword: str, user=None, fuzzy: bool = False, page: int = 1, page_size: int = DEFAULT_SEARCH_PAGE_SIZE):
-    mentors = search_mentors_queryset(keyword, user=user, fuzzy=fuzzy)
+def search_mentors_page(keyword: str, user=None, fuzzy: bool = False, page: int = 1, page_size: int = DEFAULT_SEARCH_PAGE_SIZE, visibility: str = "all"):
+    mentors = search_mentors_queryset(keyword, user=user, fuzzy=fuzzy, visibility=visibility)
     paged_queryset, pagination = _paginate_queryset(mentors, page, page_size)
     return [dict(item) for item in MentorSerializer(paged_queryset, many=True).data], pagination
 
