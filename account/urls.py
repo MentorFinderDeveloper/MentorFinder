@@ -11,6 +11,7 @@ urlpatterns = [
     path("follow/users", views.followed_users),
     path("follow/users/<int:user_id>", views.follow_user),
     path("search/users", views.search_users),
+    path("users/<int:user_id>/profile", views.public_user_profile),
     path("profile/me", views.my_profile),
     path("profile/mentor-verification-request", views.mentor_verification_request),
     path("management/users", views.admin_users),
