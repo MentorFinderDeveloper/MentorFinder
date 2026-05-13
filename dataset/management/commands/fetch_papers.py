@@ -20,6 +20,10 @@ class Command(BaseCommand):
     help = '从 arXiv 和 Google Scholar 抓取导师的论文'
     S2_API_URL = "https://api.semanticscholar.org/graph/v1/paper/ARXIV:{arxiv_id}"
     S2_FIELDS = "s2FieldsOfStudy,tldr"
+    ARXIV_CLIENT_PAGE_SIZE = 100
+    ARXIV_CLIENT_DELAY_SECONDS = 5.0
+    ARXIV_CLIENT_NUM_RETRIES = 5
+    ARXIV_RATE_LIMIT_BACKOFF_SECONDS = [20, 60, 180]
 
     SEMANTIC_SCHOLAR_API_TEMPLATE = "https://api.semanticscholar.org/graph/v1/paper/ARXIV:{arxiv_id}"
     SEMANTIC_SCHOLAR_FIELDS = "s2FieldsOfStudy,tldr"
@@ -120,98 +124,126 @@ class Command(BaseCommand):
     def fetch_from_arxiv(self, mentor):
         self.stdout.write(f"  -> 正在 arXiv 搜索: {mentor.English_name}...")
         
-        try:
-            client = arxiv.Client()
-            # 构建查询：au 代表 author (作者)
-            search = arxiv.Search(
-                query=f'au:"{mentor.English_name}"',
-                sort_by=arxiv.SortCriterion.SubmittedDate
-            )
+        for attempt_index in range(len(self.ARXIV_RATE_LIMIT_BACKOFF_SECONDS) + 1):
+            try:
+                self._fetch_from_arxiv_once(mentor)
+                return
+            except Exception as e:
+                if not self._is_arxiv_rate_limit_error(e):
+                    self.stdout.write(self.style.ERROR(f"  arXiv 抓取报错: {e}"))
+                    return
 
-            for result in client.results(search):
-                title = result.title
-                abstract = result.summary.replace('\n', ' ').strip()
-                publish_date = result.published.date()
-                authors = ", ".join([author.name for author in result.authors])
-                arxiv_id = self._extract_arxiv_id(result.entry_id)
-                arxiv_url = self._build_arxiv_url(arxiv_id)
-                arxiv_subjects = ", ".join(result.categories)
-                s2_subjects, s2_tldr = self._fetch_s2_metadata(arxiv_id)
-                subjects_str = s2_subjects or arxiv_subjects
+                if attempt_index >= len(self.ARXIV_RATE_LIMIT_BACKOFF_SECONDS):
+                    self.stdout.write(self.style.ERROR(f"  arXiv 抓取报错: {e}"))
+                    return
 
-                # 使用 get_or_create 防止论文重复录入数据库
-                paper = None
-                created = False
-                if arxiv_id:
-                    paper = Paper.objects.filter(arxiv_id=arxiv_id).first()
-
-                if paper is None:
-                    paper, created = Paper.objects.get_or_create(
-                        title=title,
-                        defaults={
-                            "abstract": abstract,
-                            "publish_date": publish_date,
-                            "author_names": authors,
-                            "subjects": subjects_str,
-                            "arxiv_id": arxiv_id,
-                            "arxiv_url": arxiv_url or None,
-                            "tldr": s2_tldr or None,
-                        },
+                backoff_seconds = self.ARXIV_RATE_LIMIT_BACKOFF_SECONDS[attempt_index]
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"  arXiv 返回 429，等待 {backoff_seconds} 秒后重试（第 {attempt_index + 1} 次）..."
                     )
-                else:
-                    changed = False
-                    if paper.title != title:
-                        paper.title = title
-                        changed = True
-                    if not paper.abstract and abstract:
-                        paper.abstract = abstract
-                        changed = True
-                    if paper.publish_date is None and publish_date:
-                        paper.publish_date = publish_date
-                        changed = True
-                    if not paper.author_names and authors:
-                        paper.author_names = authors
-                        changed = True
-                    if not paper.subjects and subjects_str:
-                        paper.subjects = subjects_str
-                        changed = True
-                    if not paper.arxiv_id and arxiv_id:
-                        paper.arxiv_id = arxiv_id
-                        changed = True
-                    if not paper.arxiv_url and arxiv_url:
-                        paper.arxiv_url = arxiv_url
-                        changed = True
-                    if not paper.tldr and s2_tldr:
-                        paper.tldr = s2_tldr
-                        changed = True
-                    if changed:
-                        paper.save()
+                )
+                time.sleep(backoff_seconds)
 
-                if created:
-                    self.stdout.write(self.style.SUCCESS(f"    [新增论文] {title} (分类: {subjects_str})"))
-                    if paper.id is not None:
-                        self.created_paper_ids.add(paper.id)
-                else:
-                    updated = False
-                    if not paper.subjects and subjects_str:
-                        paper.subjects = subjects_str
-                        updated = True
-                    if not paper.tldr and s2_tldr:
-                        paper.tldr = s2_tldr
-                        updated = True
-                    if not paper.arxiv_id and arxiv_id:
-                        paper.arxiv_id = arxiv_id
-                        updated = True
-                    if not paper.arxiv_url and arxiv_url:
-                        paper.arxiv_url = arxiv_url
-                        updated = True
-                    if updated:
-                        paper.save()
-                        self.stdout.write(self.style.SUCCESS(f"    [更新论文元数据] {title} (分类: {subjects_str})"))
-                
-                paper.bind_to_mentors_by_authors()
-        except Exception as e:
-            self.stdout.write(self.style.ERROR(f"  arXiv 抓取报错: {e}"))
+    def _build_arxiv_client(self):
+        return arxiv.Client(
+            page_size=self.ARXIV_CLIENT_PAGE_SIZE,
+            delay_seconds=self.ARXIV_CLIENT_DELAY_SECONDS,
+            num_retries=self.ARXIV_CLIENT_NUM_RETRIES,
+        )
+
+    def _is_arxiv_rate_limit_error(self, error: Exception) -> bool:
+        error_message = str(error)
+        return "HTTP 429" in error_message or "429" in error_message
+
+    def _fetch_from_arxiv_once(self, mentor):
+        client = self._build_arxiv_client()
+        search = arxiv.Search(
+            query=f'au:"{mentor.English_name}"',
+            sort_by=arxiv.SortCriterion.SubmittedDate
+        )
+
+        for result in client.results(search):
+            title = result.title
+            abstract = result.summary.replace('\n', ' ').strip()
+            publish_date = result.published.date()
+            authors = ", ".join([author.name for author in result.authors])
+            arxiv_id = self._extract_arxiv_id(result.entry_id)
+            arxiv_url = self._build_arxiv_url(arxiv_id)
+            arxiv_subjects = ", ".join(result.categories)
+            s2_subjects, s2_tldr = self._fetch_s2_metadata(arxiv_id)
+            subjects_str = s2_subjects or arxiv_subjects
+
+            paper = None
+            created = False
+            if arxiv_id:
+                paper = Paper.objects.filter(arxiv_id=arxiv_id).first()
+
+            if paper is None:
+                paper, created = Paper.objects.get_or_create(
+                    title=title,
+                    defaults={
+                        "abstract": abstract,
+                        "publish_date": publish_date,
+                        "author_names": authors,
+                        "subjects": subjects_str,
+                        "arxiv_id": arxiv_id,
+                        "arxiv_url": arxiv_url or None,
+                        "tldr": s2_tldr or None,
+                    },
+                )
+            else:
+                changed = False
+                if paper.title != title:
+                    paper.title = title
+                    changed = True
+                if not paper.abstract and abstract:
+                    paper.abstract = abstract
+                    changed = True
+                if paper.publish_date is None and publish_date:
+                    paper.publish_date = publish_date
+                    changed = True
+                if not paper.author_names and authors:
+                    paper.author_names = authors
+                    changed = True
+                if not paper.subjects and subjects_str:
+                    paper.subjects = subjects_str
+                    changed = True
+                if not paper.arxiv_id and arxiv_id:
+                    paper.arxiv_id = arxiv_id
+                    changed = True
+                if not paper.arxiv_url and arxiv_url:
+                    paper.arxiv_url = arxiv_url
+                    changed = True
+                if not paper.tldr and s2_tldr:
+                    paper.tldr = s2_tldr
+                    changed = True
+                if changed:
+                    paper.save()
+
+            if created:
+                self.stdout.write(self.style.SUCCESS(f"    [新增论文] {title} (分类: {subjects_str})"))
+                if paper.id is not None:
+                    self.created_paper_ids.add(paper.id)
+            else:
+                updated = False
+                if not paper.subjects and subjects_str:
+                    paper.subjects = subjects_str
+                    updated = True
+                if not paper.tldr and s2_tldr:
+                    paper.tldr = s2_tldr
+                    updated = True
+                if not paper.arxiv_id and arxiv_id:
+                    paper.arxiv_id = arxiv_id
+                    updated = True
+                if not paper.arxiv_url and arxiv_url:
+                    paper.arxiv_url = arxiv_url
+                    updated = True
+                if updated:
+                    paper.save()
+                    self.stdout.write(self.style.SUCCESS(f"    [更新论文元数据] {title} (分类: {subjects_str})"))
+            
+            paper.bind_to_mentors_by_authors()
 
 
     def fetch_from_scholar(self, mentor):
