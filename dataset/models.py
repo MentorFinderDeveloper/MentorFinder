@@ -2,6 +2,7 @@ import re
 
 from django.conf import settings
 from django.db import models
+from django.db.models.functions import Lower
 
 
 def _name_variants(name: str) -> list[str]:
@@ -65,12 +66,21 @@ class Paper(models.Model):
 
         matched_ids = self._resolve_author_mentor_ids(author_list, mentors)
         if any(mentor_id == 0 for mentor_id in matched_ids):
-            author_match_query = models.Q()
-            for author_name in author_list:
-                for variant in _name_variants(author_name):
-                    author_match_query |= models.Q(Chinese_name__iexact=variant) | models.Q(English_name__iexact=variant)
-            fallback_mentors = Mentor.objects.filter(author_match_query).only("id", "Chinese_name", "English_name") if author_match_query else Mentor.objects.none()
-            matched_ids = self._resolve_author_mentor_ids(author_list, fallback_mentors, matched_ids)
+            unresolved_variants = sorted({
+                variant
+                for idx, author_name in enumerate(author_list)
+                if idx >= len(matched_ids) or matched_ids[idx] == 0
+                for variant in _name_variants(author_name)
+            })
+            if unresolved_variants:
+                fallback_mentors = Mentor.objects.annotate(
+                    chinese_name_lower=Lower("Chinese_name"),
+                    english_name_lower=Lower("English_name"),
+                ).filter(
+                    models.Q(chinese_name_lower__in=unresolved_variants)
+                    | models.Q(english_name_lower__in=unresolved_variants)
+                )
+                matched_ids = self._resolve_author_mentor_ids(author_list, fallback_mentors, matched_ids)
 
         return matched_ids
 
