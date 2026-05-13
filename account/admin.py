@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
-from account.models import PushRecord, User, UserProfile
+from account.models import PushRecord, User, UserFollow, UserProfile
 
 
 class CustomUserAdmin(UserAdmin):
@@ -13,6 +13,13 @@ class CustomUserAdmin(UserAdmin):
 
 admin.site.register(User, CustomUserAdmin)
 admin.site.register(UserProfile)
+
+
+@admin.register(UserFollow)
+class UserFollowAdmin(admin.ModelAdmin):
+    list_display = ("follower", "following", "created_at")
+    search_fields = ("follower__username", "following__username", "follower__email", "following__email")
+    ordering = ("-created_at", "-id")
 
 
 @admin.register(PushRecord)

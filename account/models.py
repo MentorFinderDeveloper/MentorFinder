@@ -162,6 +162,27 @@ class MentorFollow(models.Model):
         return f"{self.student.username} follows {self.mentor.Chinese_name}"
 
 
+class UserFollow(models.Model):
+    follower = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="following_users",
+    )
+    following = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="followed_by_users",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("follower", "following")
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.follower.username} follows {self.following.username}"
+
+
 class WeeklyPushPaperBucket(models.Model):
     CYCLE_CURRENT = "current"
     CYCLE_NEXT = "next"
