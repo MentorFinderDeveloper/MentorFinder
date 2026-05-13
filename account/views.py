@@ -531,6 +531,7 @@ def my_profile(req: HttpRequest):
             .first()
         )
         return request_success({
+            "userId": user.id,
             "profile": profile.serialize(),
             "mentorVerificationRequest": (
                 _serialize_verification_request(verification_request)
