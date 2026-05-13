@@ -301,15 +301,16 @@ class MentorFollowViewTests(TestCase):
         self.assertEqual(res.status_code, 401)
         self.assertEqual(res.json()["code"], 2)
 
-    def test_only_student_can_follow_mentor(self):
+    def test_admin_can_follow_mentor(self):
         res = self.client.post(
             f"/follow/mentors/{self.mentor.id}",
             **self.auth_headers(self.admin_token),
         )
 
-        self.assertEqual(res.status_code, 403)
-        self.assertEqual(res.json()["code"], 3)
-        self.assertFalse(
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["followed"], True)
+        self.assertTrue(
             MentorFollow.objects.filter(
                 student=self.admin,
                 mentor=self.mentor,
@@ -425,6 +426,28 @@ class MentorFollowViewTests(TestCase):
 
         self.assertEqual(mentor_names, {"张三", "李四"})
         self.assertEqual(len(mentors), 2)
+
+    def test_admin_can_view_own_followed_mentors(self):
+        MentorFollow.objects.create(
+            student=self.admin,
+            mentor=self.mentor,
+        )
+        MentorFollow.objects.create(
+            student=self.student,
+            mentor=self.other_mentor,
+        )
+
+        res = self.client.get(
+            "/follow/mentors",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+
+        mentors = res.json()["mentors"]
+        self.assertEqual(len(mentors), 1)
+        self.assertEqual(mentors[0]["Chinese_name"], "张三")
 
     def test_get_followed_mentors_returns_empty_list(self):
         res = self.client.get(
