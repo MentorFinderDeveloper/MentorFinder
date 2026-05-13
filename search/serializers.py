@@ -1,6 +1,29 @@
+import re
+
 from django.db.models import Q
 from rest_framework import serializers
 from dataset.models import Mentor, Paper
+
+
+def _name_variants(name: str) -> list[str]:
+    normalized = " ".join(str(name).lower().strip().replace(",", " ").split())
+    if normalized == "":
+        return []
+
+    variants = [normalized]
+    parts = [part for part in re.split(r"[,\s]+", normalized) if part]
+    if len(parts) == 2:
+        variants.append(f"{parts[1]} {parts[0]}")
+        variants.append(f"{parts[1]}, {parts[0]}")
+
+    unique_variants = []
+    seen = set()
+    for variant in variants:
+        if variant in seen:
+            continue
+        seen.add(variant)
+        unique_variants.append(variant)
+    return unique_variants
 
 
 class MentorSerializer(serializers.ModelSerializer):
@@ -30,28 +53,25 @@ class PaperSerializer(serializers.ModelSerializer):
         return obj.get_author_list()
 
     def get_mentor_ids(self, obj):
-        author_list = obj.get_author_list() # 所有作者列表
+        author_list = obj.get_author_list()
         if not author_list:
             return []
 
-        bound_mentor_ids = obj.get_mentor_id_list() # 已绑定的导师ID列表
-        if bound_mentor_ids: # mentor_ids 字段有效，直接查询这些导师的姓名（性能较好）
+        bound_mentor_ids = obj.get_mentor_id_list()
+        if bound_mentor_ids:
             mentors = Mentor.objects.filter(id__in=bound_mentor_ids).only("id", "Chinese_name", "English_name")
-        else: # mentor_ids 字段缺失或为空字符串，尝试通过作者名单匹配导师（性能较差）
+        else:
             author_match_query = Q()
             for author_name in author_list:
-                author_match_query |= Q(Chinese_name__iexact=author_name) | Q(English_name__iexact=author_name)
+                for variant in _name_variants(author_name):
+                    author_match_query |= Q(Chinese_name__iexact=variant) | Q(English_name__iexact=variant)
             mentors = Mentor.objects.filter(author_match_query).only("id", "Chinese_name", "English_name")
 
-        # 仅基于已绑定的导师建立索引
         mentor_id_by_name = {}
         for mentor in mentors:
-            chinese_name = (mentor.Chinese_name or "").strip().lower()
-            english_name = (mentor.English_name or "").strip().lower()
+            for variant in _name_variants(mentor.Chinese_name or ""):
+                mentor_id_by_name.setdefault(variant, mentor.pk)
+            for variant in _name_variants(mentor.English_name or ""):
+                mentor_id_by_name.setdefault(variant, mentor.pk)
 
-            if chinese_name:
-                mentor_id_by_name.setdefault(chinese_name, mentor.pk)
-            if english_name:
-                mentor_id_by_name.setdefault(english_name, mentor.pk)
-
-        return [mentor_id_by_name.get(author_name.lower(), 0) for author_name in author_list]
+        return [next((mentor_id_by_name.get(variant) for variant in _name_variants(author_name) if variant in mentor_id_by_name), 0) for author_name in author_list]

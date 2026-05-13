@@ -250,6 +250,39 @@ class SearchTests(TestCase):
 
         self.assertEqual([paper["title"] for paper in papers], ["大语言模型在问答系统中的应用"])
 
+    def test_search_papers_fuzzy_by_mentor_english_name_variants(self):
+        mentor_variant = Mentor.objects.create(
+            Chinese_name="薛伟",
+            English_name="Wei Xue",
+            research_direction="图表示学习",
+            email="xuewei@example.com",
+            profile="用于验证英文名不同写法的模糊搜索。",
+        )
+        paper_variant = Paper.objects.create(
+            title="英文名变体论文",
+            abstract="用于验证英文名不同写法的模糊搜索。",
+            publish_date="2024-08-01",
+            author_names="Xue Wei",
+            subjects="cs.LG",
+        )
+        paper_variant.bind_to_mentors_by_authors()
+
+        res = self.client.get("/search/mentors", {"keyword": "wei, xue", "search_mode": "fuzzy"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual([mentor["Chinese_name"] for mentor in res.json()["mentors"]], ["薛伟"])
+
+        papers = search_papers_fuzzy("wei, xue")
+
+        self.assertEqual([paper["title"] for paper in papers], ["英文名变体论文"])
+
+        paper_res = self.client.get("/search/papers", {"keyword": "英文名变体论文"})
+
+        self.assertEqual(paper_res.status_code, 200)
+        self.assertEqual(paper_res.json()["code"], 0)
+        self.assertEqual(paper_res.json()["papers"][0]["mentor_ids"], [mentor_variant.id])
+
     def test_search_papers_fuzzy_by_research_direction_substring(self):
         papers = search_papers_fuzzy("自然语言")
 

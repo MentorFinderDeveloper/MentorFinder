@@ -1,3 +1,5 @@
+import re
+
 from search.serializers import MentorSerializer, PaperSerializer
 from dataset.models import Mentor, Paper
 from django.db.models import Q, Subquery
@@ -5,6 +7,34 @@ from django.db.models import Q, Subquery
 
 DEFAULT_SEARCH_PAGE = 1
 DEFAULT_SEARCH_PAGE_SIZE = 10
+
+
+def _name_variants(name: str) -> list[str]:
+    normalized = " ".join(str(name).lower().strip().replace(",", " ").split())
+    if normalized == "":
+        return []
+
+    variants = [normalized]
+    parts = [part for part in re.split(r"[,\s]+", normalized) if part]
+    if len(parts) == 2:
+        variants.append(f"{parts[1]} {parts[0]}")
+        variants.append(f"{parts[1]}, {parts[0]}")
+
+    unique_variants = []
+    seen = set()
+    for variant in variants:
+        if variant in seen:
+            continue
+        seen.add(variant)
+        unique_variants.append(variant)
+    return unique_variants
+
+
+def _mentor_fuzzy_query(keyword: str) -> Q:
+    query = Q(Chinese_name__icontains=keyword) | Q(research_direction__icontains=keyword)
+    for variant in _name_variants(keyword):
+        query |= Q(English_name__icontains=variant)
+    return query
 
 
 def _order_papers(papers, sort_mode: str):
@@ -80,11 +110,13 @@ def search_mentors_queryset(keyword: str, user=None, fuzzy: bool = False):
     if keyword.strip() == "":
         return _visible_mentors(user).distinct()
 
-    lookup = "icontains" if fuzzy else "iexact"
+    if fuzzy:
+        return _visible_mentors(user).filter(_mentor_fuzzy_query(keyword)).distinct()
+
     return _visible_mentors(user).filter(
-        Q(**{f"Chinese_name__{lookup}": keyword}) |
-        Q(**{f"English_name__{lookup}": keyword}) |
-        Q(**{f"research_direction__{lookup}": keyword})
+        Q(Chinese_name__iexact=keyword) |
+        Q(English_name__iexact=keyword) |
+        Q(research_direction__iexact=keyword)
     ).distinct()
 
 
@@ -124,11 +156,7 @@ def _search_papers_fuzzy_queryset(keyword: str, user=None):
     )
 
     # keyword is mentor name or research direction
-    mentor_ids = _collect_mentor_paper_ids(_visible_mentors(user).filter(
-        Q(Chinese_name__icontains=keyword) |
-        Q(English_name__icontains=keyword) |
-        Q(research_direction__icontains=keyword)
-    ))
+    mentor_ids = _collect_mentor_paper_ids(_visible_mentors(user).filter(_mentor_fuzzy_query(keyword)))
 
     paper_filters = Q(id__in=Subquery(title_match_ids_subquery))
     if mentor_ids:
@@ -140,7 +168,7 @@ def _search_papers_fuzzy_queryset(keyword: str, user=None):
 def search_mentors_page(keyword: str, user=None, fuzzy: bool = False, page: int = 1, page_size: int = DEFAULT_SEARCH_PAGE_SIZE):
     mentors = search_mentors_queryset(keyword, user=user, fuzzy=fuzzy)
     paged_queryset, pagination = _paginate_queryset(mentors, page, page_size)
-    return MentorSerializer(paged_queryset, many=True).data, pagination
+    return [dict(item) for item in MentorSerializer(paged_queryset, many=True).data], pagination
 
 
 def search_papers_page(
@@ -154,29 +182,29 @@ def search_papers_page(
     papers = _search_papers_fuzzy_queryset(keyword, user=user) if search_mode == "fuzzy" else _search_papers_exact_queryset(keyword, user=user)
     ordered_papers = _order_papers(papers, sort_mode)
     paged_queryset, pagination = _paginate_queryset(ordered_papers, page, page_size)
-    return PaperSerializer(paged_queryset, many=True).data, pagination
+    return [dict(item) for item in PaperSerializer(paged_queryset, many=True).data], pagination
 
 
 def search_mentors(keyword: str, user=None) -> list[dict]:
     mentors = search_mentors_queryset(keyword, user=user, fuzzy=False)
 
-    return MentorSerializer(mentors, many=True).data
+    return [dict(item) for item in MentorSerializer(mentors, many=True).data]
 
 
 def search_mentors_fuzzy(keyword: str, user=None) -> list[dict]:
     mentors = search_mentors_queryset(keyword, user=user, fuzzy=True)
 
-    return MentorSerializer(mentors, many=True).data
+    return [dict(item) for item in MentorSerializer(mentors, many=True).data]
 
 
 def search_papers(keyword: str, user=None, sort_mode: str = "default") -> list[dict]:
     papers = _search_papers_exact_queryset(keyword, user=user)
     ordered_papers = _order_papers(papers, sort_mode)
-    return PaperSerializer(ordered_papers, many=True).data
+    return [dict(item) for item in PaperSerializer(ordered_papers, many=True).data]
 
 
 def search_papers_fuzzy(keyword: str, user=None, sort_mode: str = "default") -> list[dict]:
     papers = _search_papers_fuzzy_queryset(keyword, user=user)
     ordered_papers = _order_papers(papers, sort_mode)
 
-    return PaperSerializer(ordered_papers, many=True).data
+    return [dict(item) for item in PaperSerializer(ordered_papers, many=True).data]
