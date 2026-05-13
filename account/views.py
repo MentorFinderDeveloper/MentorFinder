@@ -5,6 +5,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.http import HttpRequest
 from django.db.models import Q
+from django.utils.timezone import localtime
 
 from account.models import MentorVerificationRequest, User, UserFollow, UserProfile
 from utils.utils_jwt import generate_jwt_token
@@ -163,6 +164,24 @@ def _serialize_follow_user(user: User, current_user: User | None = None):
         "signature": profile.signature if profile is not None else "",
         "followed": followed,
     }
+
+
+def _serialize_public_user_profile(user: User, current_user: User):
+    profile, _ = UserProfile.objects.get_or_create(user=user)
+    serialized_user = _serialize_follow_user(user, current_user)
+    serialized_user["isSelf"] = user.id == current_user.id
+    serialized_user["profile"] = {
+        "personalIntro": profile.personal_intro if profile.show_personal_intro else "",
+        "researchExperience": profile.research_experience if profile.show_research_experience else "",
+        "honors": profile.honors if profile.show_honors else "",
+        "projectExperience": profile.project_experience if profile.show_project_experience else "",
+        "showPersonalIntro": profile.show_personal_intro,
+        "showResearchExperience": profile.show_research_experience,
+        "showHonors": profile.show_honors,
+        "showProjectExperience": profile.show_project_experience,
+        "updatedAt": localtime(profile.updated_at).isoformat(sep=" ", timespec="seconds") if profile.updated_at else "",
+    }
+    return serialized_user
 
 
 def _validate_verification_review_payload(body: dict):
@@ -446,6 +465,24 @@ def follow_user(req: HttpRequest, user_id: int):
 
     UserFollow.objects.filter(follower=user, following=target_user).delete()
     return request_success({"followed": False})
+
+
+@CheckRequire
+def public_user_profile(req: HttpRequest, user_id: int):
+    if req.method != "GET":
+        return BAD_METHOD
+
+    user, auth_error = _require_user(req)
+    if auth_error is not None:
+        return auth_error
+
+    target_user = User.objects.select_related("profile").filter(id=user_id).first()
+    if target_user is None or target_user.role == User.ROLE_BANNED:
+        return request_failed(2, "User not found", 404)
+
+    return request_success({
+        "user": _serialize_public_user_profile(target_user, user),
+    })
 
 
 @CheckRequire
