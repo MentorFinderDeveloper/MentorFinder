@@ -419,6 +419,31 @@ def followed_users(req: HttpRequest):
 
 
 @CheckRequire
+def follower_users(req: HttpRequest):
+    if req.method != "GET":
+        return BAD_METHOD
+
+    user, auth_error = _require_user(req)
+    if auth_error is not None:
+        return auth_error
+
+    follows = (
+        UserFollow.objects
+        .filter(following=user)
+        .select_related("follower", "follower__profile")
+    )
+    users = [
+        _serialize_follow_user(follow.follower, user)
+        for follow in follows
+        if follow.follower.role != User.ROLE_BANNED
+    ]
+
+    return request_success({
+        "users": users,
+    })
+
+
+@CheckRequire
 def search_users(req: HttpRequest):
     if req.method != "GET":
         return BAD_METHOD
