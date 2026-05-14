@@ -513,6 +513,39 @@ class MentorFollowViewTests(TestCase):
             "我关注了你",
         )
 
+    def test_get_followers_includes_bound_mentor_followers_without_duplicates(self):
+        banned_user = User.objects.create_user(
+            username="banned2",
+            email="banned2@example.com",
+            password="abc12345",
+            role=User.ROLE_BANNED,
+        )
+        self.student.role = User.ROLE_MENTOR
+        self.student.mentor_profile = self.mentor
+        self.student.save(update_fields=["role", "mentor_profile"])
+
+        UserFollow.objects.create(follower=self.other_student, following=self.student)
+        MentorFollow.objects.create(student=self.other_student, mentor=self.mentor)
+        MentorFollow.objects.create(student=self.admin, mentor=self.mentor)
+        MentorFollow.objects.create(student=banned_user, mentor=self.mentor)
+        MentorFollow.objects.create(student=self.student, mentor=self.mentor)
+
+        res = self.client.get(
+            "/follow/followers",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+
+        followers = res.json()["users"]
+        follower_names = [follower["username"] for follower in followers]
+
+        self.assertEqual(set(follower_names), {"student2", "admin1"})
+        self.assertEqual(follower_names.count("student2"), 1)
+        self.assertNotIn("student1", follower_names)
+        self.assertNotIn("banned2", follower_names)
+
     def test_get_followers_requires_login(self):
         res = self.client.get("/follow/followers")
 
