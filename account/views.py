@@ -427,16 +427,31 @@ def follower_users(req: HttpRequest):
     if auth_error is not None:
         return auth_error
 
-    follows = (
+    seen_user_ids = set()
+    users = []
+
+    def append_follower(follower: User):
+        if follower.id == user.id or follower.role == User.ROLE_BANNED or follower.id in seen_user_ids:
+            return
+        seen_user_ids.add(follower.id)
+        users.append(_serialize_follow_user(follower, user))
+
+    user_follows = (
         UserFollow.objects
         .filter(following=user)
         .select_related("follower", "follower__profile")
     )
-    users = [
-        _serialize_follow_user(follow.follower, user)
-        for follow in follows
-        if follow.follower.role != User.ROLE_BANNED
-    ]
+    for follow in user_follows:
+        append_follower(follow.follower)
+
+    if user.role == User.ROLE_MENTOR and user.mentor_profile_id is not None:
+        mentor_follows = (
+            MentorFollow.objects
+            .filter(mentor_id=user.mentor_profile_id)
+            .select_related("student", "student__profile")
+        )
+        for follow in mentor_follows:
+            append_follower(follow.student)
 
     return request_success({
         "users": users,
