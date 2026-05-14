@@ -9,6 +9,7 @@ urlpatterns = [
     path("follow/mentors", views.followed_mentors),
     path("follow/mentors/<int:mentor_id>", views.follow_mentor),
     path("follow/users", views.followed_users),
+    path("follow/followers", views.follower_users),
     path("follow/users/<int:user_id>", views.follow_user),
     path("search/users", views.search_users),
     path("users/<int:user_id>/profile", views.public_user_profile),
