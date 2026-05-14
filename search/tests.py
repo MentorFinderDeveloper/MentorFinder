@@ -153,6 +153,23 @@ class SearchTests(TestCase):
                 self.assertEqual(len(res.json()["mentors"]), 1)
                 self.assertEqual(res.json()["mentors"][0]["Chinese_name"], "张三")
 
+    def test_search_mentors_supports_and_logic(self):
+        res = self.client.get("/search/mentors", {"keyword": "张三 且 机器学习"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual([mentor["Chinese_name"] for mentor in res.json()["mentors"]], ["张三"])
+
+    def test_search_mentors_supports_or_logic(self):
+        res = self.client.get("/search/mentors", {"keyword": "张三 或 李四"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(
+            {mentor["Chinese_name"] for mentor in res.json()["mentors"]},
+            {"张三", "李四"},
+        )
+
     def test_search_papers_by_exact_title(self):
         res = self.client.get("/search/papers", {"keyword": "机器学习方法研究"})
 
@@ -211,6 +228,23 @@ class SearchTests(TestCase):
                 self.assertEqual(res.status_code, 200)
                 self.assertEqual(res.json()["code"], 0)
                 self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["大语言模型在问答系统中的应用"])
+
+    def test_search_papers_supports_and_logic(self):
+        res = self.client.get("/search/papers", {"keyword": "张三 且 cs.AI"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["机器学习方法研究"])
+
+    def test_search_papers_supports_or_logic(self):
+        res = self.client.get("/search/papers", {"keyword": "cs.AI 或 cs.CL"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(
+            {paper["title"] for paper in res.json()["papers"]},
+            {"机器学习方法研究", "大语言模型在问答系统中的应用"},
+        )
 
     def test_search_papers_by_author_names(self):
         res = self.client.get("/search/papers", {"keyword": "张三"})
