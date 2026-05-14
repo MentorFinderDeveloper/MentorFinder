@@ -11,7 +11,7 @@ from django.core.management.base import CommandError
 from django.test import TestCase
 from django.utils import timezone
 
-from account.models import MentorVerificationRequest, PushRecord, User, MentorFollow, UserProfile, WeeklyPushPaperBucket
+from account.models import MentorVerificationRequest, PushRecord, User, MentorFollow, UserFollow, UserProfile, WeeklyPushPaperBucket
 from account.management.commands.send_weekly_push import _build_weekly_period_metadata
 from account.services import weekly_push_files
 from account.services.weekly_push_files import (
@@ -471,6 +471,57 @@ class MentorFollowViewTests(TestCase):
     def test_followed_mentors_bad_method(self):
         res = self.client.post(
             "/follow/mentors",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+    def test_get_followers_returns_users_following_current_user(self):
+        banned_user = User.objects.create_user(
+            username="banned1",
+            email="banned1@example.com",
+            password="abc12345",
+            role=User.ROLE_BANNED,
+        )
+        UserProfile.objects.create(
+            user=self.other_student,
+            signature="我关注了你",
+        )
+        UserFollow.objects.create(follower=self.other_student, following=self.student)
+        UserFollow.objects.create(follower=self.admin, following=self.student)
+        UserFollow.objects.create(follower=banned_user, following=self.student)
+        UserFollow.objects.create(follower=self.student, following=self.other_student)
+
+        res = self.client.get(
+            "/follow/followers",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+
+        followers = res.json()["users"]
+        follower_names = {follower["username"] for follower in followers}
+        followed_by_username = {follower["username"]: follower["followed"] for follower in followers}
+
+        self.assertEqual(follower_names, {"student2", "admin1"})
+        self.assertTrue(followed_by_username["student2"])
+        self.assertFalse(followed_by_username["admin1"])
+        self.assertEqual(
+            next(follower for follower in followers if follower["username"] == "student2")["signature"],
+            "我关注了你",
+        )
+
+    def test_get_followers_requires_login(self):
+        res = self.client.get("/follow/followers")
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_followers_bad_method(self):
+        res = self.client.post(
+            "/follow/followers",
             **self.auth_headers(self.student_token),
         )
 
