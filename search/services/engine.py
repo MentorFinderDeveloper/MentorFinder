@@ -47,7 +47,75 @@ def _split_keyword_logic(keyword: str) -> list[list[str]]:
     return logic_groups
 
 
-def _build_logic_query(keyword: str, build_term_query) -> Q:
+class _KeywordLogicParseError(ValueError):
+    pass
+
+
+def _tokenize_keyword_logic(keyword: str) -> list[tuple[str, str]]:
+    tokens: list[tuple[str, str]] = []
+    term_chars: list[str] = []
+
+    def flush_term() -> None:
+        if not term_chars:
+            return
+        term = "".join(term_chars).strip()
+        term_chars.clear()
+        if term != "":
+            tokens.append(("TERM", term))
+
+    index = 0
+    while index < len(keyword):
+        if keyword.startswith("&&", index):
+            flush_term()
+            tokens.append(("AND", "&&"))
+            index += 2
+            continue
+        if keyword.startswith("||", index):
+            flush_term()
+            tokens.append(("OR", "||"))
+            index += 2
+            continue
+
+        char = keyword[index]
+        if char in "(（":
+            flush_term()
+            tokens.append(("LPAREN", char))
+            index += 1
+            continue
+        if char in ")）":
+            flush_term()
+            tokens.append(("RPAREN", char))
+            index += 1
+            continue
+        if char == "&":
+            flush_term()
+            tokens.append(("AND", char))
+            index += 1
+            continue
+        if char == "|":
+            flush_term()
+            tokens.append(("OR", char))
+            index += 1
+            continue
+        if char == "且":
+            flush_term()
+            tokens.append(("AND", char))
+            index += 1
+            continue
+        if char == "或":
+            flush_term()
+            tokens.append(("OR", char))
+            index += 1
+            continue
+
+        term_chars.append(char)
+        index += 1
+
+    flush_term()
+    return tokens
+
+
+def _build_flat_logic_query(keyword: str, build_term_query) -> Q:
     logic_groups = _split_keyword_logic(keyword)
     if not logic_groups:
         return Q()
@@ -66,6 +134,68 @@ def _build_logic_query(keyword: str, build_term_query) -> Q:
         logic_query |= group_query
 
     return logic_query
+
+
+def _build_logic_query(keyword: str, build_term_query) -> Q:
+    tokens = _tokenize_keyword_logic(keyword.strip())
+    if not tokens:
+        return Q()
+
+    position = 0
+
+    def peek() -> tuple[str, str] | None:
+        return tokens[position] if position < len(tokens) else None
+
+    def consume(expected_type: str | None = None) -> tuple[str, str]:
+        nonlocal position
+        token = peek()
+        if token is None:
+            raise _KeywordLogicParseError()
+        if expected_type is not None and token[0] != expected_type:
+            raise _KeywordLogicParseError()
+        position += 1
+        return token
+
+    def parse_primary() -> Q:
+        token = peek()
+        if token is None:
+            raise _KeywordLogicParseError()
+
+        token_type, token_value = token
+        if token_type == "TERM":
+            consume("TERM")
+            return build_term_query(token_value)
+        if token_type == "LPAREN":
+            consume("LPAREN")
+            expression = parse_or()
+            if peek() is None or peek()[0] != "RPAREN":
+                raise _KeywordLogicParseError()
+            consume("RPAREN")
+            return expression
+
+        raise _KeywordLogicParseError()
+
+    def parse_and() -> Q:
+        expression = parse_primary()
+        while peek() is not None and peek()[0] == "AND":
+            consume("AND")
+            expression &= parse_primary()
+        return expression
+
+    def parse_or() -> Q:
+        expression = parse_and()
+        while peek() is not None and peek()[0] == "OR":
+            consume("OR")
+            expression |= parse_and()
+        return expression
+
+    try:
+        logic_query = parse_or()
+        if position != len(tokens):
+            raise _KeywordLogicParseError()
+        return logic_query
+    except _KeywordLogicParseError:
+        return _build_flat_logic_query(keyword, build_term_query)
 
 
 def _mentor_fuzzy_query(keyword: str) -> Q:
