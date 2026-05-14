@@ -47,7 +47,11 @@ def login(req: HttpRequest):
         return request_failed(3, "User is banned", 403)
 
     if user.check_password(password):
-        return request_success({"token": generate_jwt_token(user.username), "role": user.role})
+        return request_success({
+            "token": generate_jwt_token(user.username),
+            "role": user.role,
+            "userId": user.id,
+        })
 
     return request_failed(2, "Wrong password", 401)
 
@@ -101,7 +105,11 @@ def register(req: HttpRequest):
         password=password,
         role="student",
     )
-    return request_success({"token": generate_jwt_token(user.username), "role": user.role})
+    return request_success({
+        "token": generate_jwt_token(user.username),
+        "role": user.role,
+        "userId": user.id,
+    })
 
 def _extract_token(req: HttpRequest) -> str:
     auth_header = req.headers.get("Authorization", "").strip()
@@ -523,6 +531,7 @@ def my_profile(req: HttpRequest):
             .first()
         )
         return request_success({
+            "userId": user.id,
             "profile": profile.serialize(),
             "mentorVerificationRequest": (
                 _serialize_verification_request(verification_request)
