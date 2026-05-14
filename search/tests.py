@@ -215,6 +215,30 @@ class SearchTests(TestCase):
             {"机器学习方法研究", "大语言模型在问答系统中的应用"},
         )
 
+    def test_search_papers_with_large_author_list(self):
+        authors = [f"Author {index}" for index in range(1001)]
+        target_mentor = Mentor.objects.create(
+            Chinese_name="Author 500",
+            English_name="Author 500",
+            research_direction="规模化匹配测试",
+            email="author500@example.com",
+            profile="用于验证搜索序列化不会生成过深的表达式树。",
+        )
+        large_author_paper = Paper.objects.create(
+            title="超大作者列表论文",
+            abstract="用于验证搜索结果序列化的稳定性。",
+            publish_date="2024-09-01",
+            author_names=",".join(authors),
+            subjects="cs.DS",
+        )
+
+        res = self.client.get("/search/papers", {"keyword": "超大作者列表论文"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["papers"][0]["title"], large_author_paper.title)
+        self.assertIn(target_mentor.id, res.json()["papers"][0]["mentor_ids"])
+
     def test_search_papers_deduplicate_multi_source_matches(self):
         res = self.client.get("/search/papers", {"keyword": "张三"})
 
