@@ -18,6 +18,12 @@ from dataset.services.thu_crawler import (
     parse_mentor_detail,
     parse_mentor_list,
 )
+from dataset.services.author_matching import (
+    english_name_variants,
+    has_exact_english_author_match,
+    is_exact_english_author_match,
+    normalize_english_name,
+)
 from account.models import User as AccountUser, WeeklyPushPaperBucket
 from account.services.weekly_push_files import build_weekly_push_bucket_period_key
 from utils.utils_jwt import generate_jwt_token
@@ -196,6 +202,24 @@ class PaperMentorBindingTest(TestCase):
         self.paper1.bind_to_mentors_by_authors()
         self.paper1.refresh_from_db()
         self.assertIn(self.mentor1.id, self.paper1.get_mentor_id_list())
+
+    def test_bind_to_mentors_does_not_match_partial_english_name(self):
+        mentor = Mentor.objects.create(
+            Chinese_name="陈宇",
+            English_name="Yu Chen",
+            research_direction="人工智能",
+        )
+        paper = Paper.objects.create(
+            title="误匹配论文",
+            author_names="Wei Yu Chen, Other Author",
+        )
+
+        paper.bind_to_mentors_by_authors()
+        mentor.refresh_from_db()
+        paper.refresh_from_db()
+
+        self.assertNotIn(mentor.id, paper.get_mentor_id_list())
+        self.assertNotIn(paper.id, mentor.get_paper_id_list())
 
 
 class PaperViewTest(TestCase):
@@ -1013,6 +1037,55 @@ class FetchPapersCommandTest(TestCase):
         self.assertEqual(len(self.command.created_paper_ids), 1)
         self.assertEqual(list(self.command.created_paper_ids)[0], Paper.objects.first().id)
 
+    def test_clean_arxiv_author_names_removes_prefix_before_colon(self):
+        self.assertEqual(
+            self.command._clean_arxiv_author_names("GLM Team : Alice, Bob"),
+            "Alice, Bob",
+        )
+        self.assertEqual(
+            self.command._clean_arxiv_author_names("Some Group, :, Alice, Bob"),
+            "Alice, Bob",
+        )
+        self.assertEqual(
+            self.command._clean_arxiv_author_names("Project X：Alice, Bob"),
+            "Alice, Bob",
+        )
+        self.assertEqual(
+            self.command._clean_arxiv_author_names("Consortium: Alice"),
+            "Alice",
+        )
+        self.assertEqual(
+            self.command._clean_arxiv_author_names("Alice, Bob"),
+            "Alice, Bob",
+        )
+
+    @patch.object(FetchPapersCommand, "_fetch_s2_metadata")
+    @patch("dataset.management.commands.fetch_papers.arxiv.Client")
+    def test_fetch_from_arxiv_skips_partial_english_name_match(self, mock_arxiv_client_cls, mock_fetch_s2_metadata):
+        mentor = Mentor.objects.create(
+            Chinese_name="陈宇",
+            English_name="Yu Chen",
+            research_direction="人工智能",
+        )
+        result = MagicMock()
+        result.title = "误召回论文"
+        result.summary = "测试摘要"
+        result.published = datetime(2026, 4, 25, 12, 0, 0)
+        author_1 = MagicMock()
+        author_1.name = "Wei Yu Chen"
+        author_2 = MagicMock()
+        author_2.name = "Other Author"
+        result.authors = [author_1, author_2]
+        result.entry_id = "http://arxiv.org/abs/2504.99999v1"
+        result.categories = ["cs.AI"]
+        mock_arxiv_client_cls.return_value.results.return_value = [result]
+        mock_fetch_s2_metadata.return_value = ("cs.AI", "TLDR")
+
+        self.command.fetch_from_arxiv(mentor)
+
+        self.assertEqual(Paper.objects.count(), 0)
+        self.assertEqual(len(self.command.created_paper_ids), 0)
+
     @patch("dataset.management.commands.fetch_papers.time.sleep")
     @patch.object(FetchPapersCommand, "_fetch_from_arxiv_once")
     def test_fetch_from_arxiv_retries_when_arxiv_returns_429(self, mock_fetch_once, mock_sleep):
@@ -1375,6 +1448,14 @@ class ThuCrawlerUtilityTest(TestCase):
 
     def test_english_name_variants_return_empty_set_for_blank_input(self):
         self.assertEqual(_english_name_variants("   "), set())
+
+    def test_author_matching_normalizes_and_matches_exact_name_only(self):
+        self.assertEqual(normalize_english_name("  Chen,   Yu "), "chen yu")
+        self.assertEqual(english_name_variants("Yu Chen"), {"yu chen", "chen yu"})
+        self.assertTrue(is_exact_english_author_match("Chen, Yu", "Yu Chen"))
+        self.assertFalse(is_exact_english_author_match("Wei Yu Chen", "Yu Chen"))
+        self.assertTrue(has_exact_english_author_match(["Wei Li", "Chen, Yu"], "Yu Chen"))
+        self.assertFalse(has_exact_english_author_match(["Wei Yu Chen"], "Yu Chen"))
 
     @patch("dataset.services.thu_crawler.fetch_html")
     def test_parse_mentor_detail_extracts_research_email_and_profile(self, mock_fetch_html):

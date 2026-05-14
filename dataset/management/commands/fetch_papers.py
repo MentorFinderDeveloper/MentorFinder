@@ -14,6 +14,7 @@ from account.services.weekly_push_files import (
     resolve_weekly_push_record_target_cycle,
 )
 from dataset.models import Mentor, Paper
+from dataset.services.author_matching import has_exact_english_author_match
 
 
 class Command(BaseCommand):
@@ -156,6 +157,37 @@ class Command(BaseCommand):
         error_message = str(error)
         return "HTTP 429" in error_message or "429" in error_message
 
+    def _clean_arxiv_author_names(self, author_names: str) -> str:
+        parts = [part.strip() for part in str(author_names or "").split(",")]
+
+        while parts and parts[0] == "":
+            parts.pop(0)
+
+        if not parts:
+            return ""
+
+        for index in range(min(2, len(parts))):
+            current_part = parts[index]
+            if ":" not in current_part and "：" not in current_part:
+                continue
+
+            _, suffix = re.split(r"[:：]", current_part, maxsplit=1)
+            suffix = suffix.strip()
+            parts = parts[index + 1:]
+            if suffix != "":
+                parts.insert(0, suffix)
+            break
+
+        while parts and parts[0] in {"", ":", "："}:
+            parts.pop(0)
+
+        return ", ".join(part for part in parts if part != "")
+
+    def _extract_arxiv_authors(self, result) -> list[str]:
+        raw_authors = [str(author.name).strip() for author in getattr(result, "authors", []) if str(author.name).strip()]
+        cleaned_author_names = self._clean_arxiv_author_names(", ".join(raw_authors))
+        return [author.strip() for author in cleaned_author_names.split(",") if author.strip()]
+
     def _fetch_from_arxiv_once(self, mentor):
         client = self._build_arxiv_client()
         search = arxiv.Search(
@@ -167,7 +199,10 @@ class Command(BaseCommand):
             title = result.title
             abstract = result.summary.replace('\n', ' ').strip()
             publish_date = result.published.date()
-            authors = ", ".join([author.name for author in result.authors])
+            author_list = self._extract_arxiv_authors(result)
+            if not has_exact_english_author_match(author_list, mentor.English_name):
+                continue
+            authors = ", ".join(author_list)
             arxiv_id = self._extract_arxiv_id(result.entry_id)
             arxiv_url = self._build_arxiv_url(arxiv_id)
             arxiv_subjects = ", ".join(result.categories)
