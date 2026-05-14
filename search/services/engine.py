@@ -137,7 +137,7 @@ def _search_papers_exact_queryset(keyword: str, user=None):
         return Paper.objects.all().distinct()
 
     # keyword is title
-    papers = Paper.objects.filter(Q(title__iexact=keyword) | Q(subjects__iexact=keyword)).distinct()
+    papers = Paper.objects.filter(Q(title__iexact=keyword) | Q(subjects__icontains=keyword)).distinct()
 
     # keyword is mentor name or research direction
     # (assume that a mentor's name or research direction is not the title of any paper)

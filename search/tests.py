@@ -172,6 +172,13 @@ class SearchTests(TestCase):
         self.assertEqual(paper["mentor_ids"], [self.zs.id])
         self.assertEqual(paper["author_names"], "张三")
 
+    def test_search_papers_by_subject_token_in_comma_separated_subjects(self):
+        res = self.client.get("/search/papers", {"keyword": "cs.AI"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["机器学习方法研究"])
+
     def test_search_papers_by_mentor_research_direction(self):
         res = self.client.get("/search/papers", {"keyword": "机器学习"})
 
