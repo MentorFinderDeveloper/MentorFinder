@@ -153,6 +153,30 @@ class SearchTests(TestCase):
                 self.assertEqual(len(res.json()["mentors"]), 1)
                 self.assertEqual(res.json()["mentors"][0]["Chinese_name"], "张三")
 
+    def test_search_mentors_supports_and_logic(self):
+        res = self.client.get("/search/mentors", {"keyword": "张三 且 机器学习"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual([mentor["Chinese_name"] for mentor in res.json()["mentors"]], ["张三"])
+
+    def test_search_mentors_supports_or_logic(self):
+        res = self.client.get("/search/mentors", {"keyword": "张三 或 李四"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(
+            {mentor["Chinese_name"] for mentor in res.json()["mentors"]},
+            {"张三", "李四"},
+        )
+
+    def test_search_mentors_supports_parentheses_precedence(self):
+        res = self.client.get("/search/mentors", {"keyword": "(张三 或 李四) 且 自然语言处理"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual([mentor["Chinese_name"] for mentor in res.json()["mentors"]], ["李四"])
+
     def test_search_papers_by_exact_title(self):
         res = self.client.get("/search/papers", {"keyword": "机器学习方法研究"})
 
@@ -171,6 +195,13 @@ class SearchTests(TestCase):
         self.assertEqual(paper["mentorNames"], ["张三"])
         self.assertEqual(paper["mentor_ids"], [self.zs.id])
         self.assertEqual(paper["author_names"], "张三")
+
+    def test_search_papers_by_subject_token_in_comma_separated_subjects(self):
+        res = self.client.get("/search/papers", {"keyword": "cs.AI"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["机器学习方法研究"])
 
     def test_search_papers_by_mentor_research_direction(self):
         res = self.client.get("/search/papers", {"keyword": "机器学习"})
@@ -205,6 +236,30 @@ class SearchTests(TestCase):
                 self.assertEqual(res.json()["code"], 0)
                 self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["大语言模型在问答系统中的应用"])
 
+    def test_search_papers_supports_and_logic(self):
+        res = self.client.get("/search/papers", {"keyword": "张三 且 cs.AI"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["机器学习方法研究"])
+
+    def test_search_papers_supports_or_logic(self):
+        res = self.client.get("/search/papers", {"keyword": "cs.AI 或 cs.CL"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(
+            {paper["title"] for paper in res.json()["papers"]},
+            {"机器学习方法研究", "大语言模型在问答系统中的应用"},
+        )
+
+    def test_search_papers_supports_parentheses_precedence(self):
+        res = self.client.get("/search/papers", {"keyword": "(张三 或 李四) 且 cs.AI"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["机器学习方法研究"])
+
     def test_search_papers_by_author_names(self):
         res = self.client.get("/search/papers", {"keyword": "张三"})
 
@@ -214,6 +269,30 @@ class SearchTests(TestCase):
             {paper["title"] for paper in res.json()["papers"]},
             {"机器学习方法研究", "大语言模型在问答系统中的应用"},
         )
+
+    def test_search_papers_with_large_author_list(self):
+        authors = [f"Author {index}" for index in range(1001)]
+        target_mentor = Mentor.objects.create(
+            Chinese_name="Author 500",
+            English_name="Author 500",
+            research_direction="规模化匹配测试",
+            email="author500@example.com",
+            profile="用于验证搜索序列化不会生成过深的表达式树。",
+        )
+        large_author_paper = Paper.objects.create(
+            title="超大作者列表论文",
+            abstract="用于验证搜索结果序列化的稳定性。",
+            publish_date="2024-09-01",
+            author_names=",".join(authors),
+            subjects="cs.DS",
+        )
+
+        res = self.client.get("/search/papers", {"keyword": "超大作者列表论文"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["papers"][0]["title"], large_author_paper.title)
+        self.assertIn(target_mentor.id, res.json()["papers"][0]["mentor_ids"])
 
     def test_search_papers_deduplicate_multi_source_matches(self):
         res = self.client.get("/search/papers", {"keyword": "张三"})

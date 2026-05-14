@@ -30,6 +30,174 @@ def _name_variants(name: str) -> list[str]:
     return unique_variants
 
 
+def _split_keyword_logic(keyword: str) -> list[list[str]]:
+    normalized_keyword = keyword.strip()
+    if normalized_keyword == "":
+        return []
+
+    or_groups = [segment.strip() for segment in re.split(r"\s*(?:或|\|\|?)\s*", normalized_keyword) if segment.strip() != ""]
+    if not or_groups:
+        return [[normalized_keyword]]
+
+    logic_groups: list[list[str]] = []
+    for group in or_groups:
+        and_terms = [term.strip() for term in re.split(r"\s*(?:且|&&?)\s*", group) if term.strip() != ""]
+        logic_groups.append(and_terms if and_terms else [group])
+
+    return logic_groups
+
+
+class _KeywordLogicParseError(ValueError):
+    pass
+
+
+def _tokenize_keyword_logic(keyword: str) -> list[tuple[str, str]]:
+    tokens: list[tuple[str, str]] = []
+    term_chars: list[str] = []
+
+    def flush_term() -> None:
+        if not term_chars:
+            return
+        term = "".join(term_chars).strip()
+        term_chars.clear()
+        if term != "":
+            tokens.append(("TERM", term))
+
+    index = 0
+    while index < len(keyword):
+        if keyword.startswith("&&", index):
+            flush_term()
+            tokens.append(("AND", "&&"))
+            index += 2
+            continue
+        if keyword.startswith("||", index):
+            flush_term()
+            tokens.append(("OR", "||"))
+            index += 2
+            continue
+
+        char = keyword[index]
+        if char in "(（":
+            flush_term()
+            tokens.append(("LPAREN", char))
+            index += 1
+            continue
+        if char in ")）":
+            flush_term()
+            tokens.append(("RPAREN", char))
+            index += 1
+            continue
+        if char == "&":
+            flush_term()
+            tokens.append(("AND", char))
+            index += 1
+            continue
+        if char == "|":
+            flush_term()
+            tokens.append(("OR", char))
+            index += 1
+            continue
+        if char == "且":
+            flush_term()
+            tokens.append(("AND", char))
+            index += 1
+            continue
+        if char == "或":
+            flush_term()
+            tokens.append(("OR", char))
+            index += 1
+            continue
+
+        term_chars.append(char)
+        index += 1
+
+    flush_term()
+    return tokens
+
+
+def _build_flat_logic_query(keyword: str, build_term_query) -> Q:
+    logic_groups = _split_keyword_logic(keyword)
+    if not logic_groups:
+        return Q()
+
+    logic_query = Q()
+    for group in logic_groups:
+        group_query = Q()
+        first_term = True
+        for term in group:
+            term_query = build_term_query(term)
+            if first_term:
+                group_query = term_query
+                first_term = False
+            else:
+                group_query &= term_query
+        logic_query |= group_query
+
+    return logic_query
+
+
+def _build_logic_query(keyword: str, build_term_query) -> Q:
+    tokens = _tokenize_keyword_logic(keyword.strip())
+    if not tokens:
+        return Q()
+
+    position = 0
+
+    def peek() -> tuple[str, str] | None:
+        return tokens[position] if position < len(tokens) else None
+
+    def consume(expected_type: str | None = None) -> tuple[str, str]:
+        nonlocal position
+        token = peek()
+        if token is None:
+            raise _KeywordLogicParseError()
+        if expected_type is not None and token[0] != expected_type:
+            raise _KeywordLogicParseError()
+        position += 1
+        return token
+
+    def parse_primary() -> Q:
+        token = peek()
+        if token is None:
+            raise _KeywordLogicParseError()
+
+        token_type, token_value = token
+        if token_type == "TERM":
+            consume("TERM")
+            return build_term_query(token_value)
+        if token_type == "LPAREN":
+            consume("LPAREN")
+            expression = parse_or()
+            if peek() is None or peek()[0] != "RPAREN":
+                raise _KeywordLogicParseError()
+            consume("RPAREN")
+            return expression
+
+        raise _KeywordLogicParseError()
+
+    def parse_and() -> Q:
+        expression = parse_primary()
+        while peek() is not None and peek()[0] == "AND":
+            consume("AND")
+            expression &= parse_primary()
+        return expression
+
+    def parse_or() -> Q:
+        expression = parse_and()
+        while peek() is not None and peek()[0] == "OR":
+            consume("OR")
+            expression |= parse_and()
+        return expression
+
+    try:
+        logic_query = parse_or()
+        if position != len(tokens):
+            raise _KeywordLogicParseError()
+        return logic_query
+    except _KeywordLogicParseError:
+        return _build_flat_logic_query(keyword, build_term_query)
+
+
 def _mentor_fuzzy_query(keyword: str) -> Q:
     query = Q(Chinese_name__icontains=keyword) | Q(research_direction__icontains=keyword)
     for variant in _name_variants(keyword):
@@ -41,6 +209,28 @@ def _mentor_exact_query(keyword: str) -> Q:
     query = Q(Chinese_name__iexact=keyword) | Q(research_direction__iexact=keyword)
     for variant in _name_variants(keyword):
         query |= Q(English_name__iexact=variant)
+    return query
+
+
+def _paper_exact_term_query(term: str, user=None) -> Q:
+    query = Q(title__iexact=term) | Q(subjects__icontains=term)
+
+    mentor_ids: list[int] = []
+    for mentor in _visible_mentors(user).filter(_mentor_exact_query(term)):
+        mentor_ids.extend(mentor.get_paper_id_list())
+    if mentor_ids:
+        query |= Q(id__in=mentor_ids)
+
+    return query
+
+
+def _paper_fuzzy_term_query(term: str, user=None) -> Q:
+    query = Q(title__icontains=term)
+
+    mentor_ids = _collect_mentor_paper_ids(_visible_mentors(user).filter(_mentor_fuzzy_query(term)))
+    if mentor_ids:
+        query |= Q(id__in=mentor_ids)
+
     return query
 
 
@@ -126,51 +316,35 @@ def search_mentors_queryset(keyword: str, user=None, fuzzy: bool = False, visibi
     if keyword.strip() == "":
         return _visible_mentors(user, visibility=visibility).distinct()
 
-    if fuzzy:
-        return _visible_mentors(user, visibility=visibility).filter(_mentor_fuzzy_query(keyword)).distinct()
-
-    return _visible_mentors(user, visibility=visibility).filter(_mentor_exact_query(keyword)).distinct()
+    term_query_builder = _mentor_fuzzy_query if fuzzy else _mentor_exact_query
+    logic_query = _build_logic_query(keyword, term_query_builder)
+    return _visible_mentors(user, visibility=visibility).filter(logic_query).distinct()
 
 
 def _search_papers_exact_queryset(keyword: str, user=None):
     if keyword.strip() == "":
         return Paper.objects.all().distinct()
 
-    # keyword is title
-    papers = Paper.objects.filter(Q(title__iexact=keyword) | Q(subjects__iexact=keyword)).distinct()
+    # Priority: if any paper title exactly matches the keyword logic, return only those.
+    # Build a title-only logic query (each term matches title__iexact) and check.
+    def _paper_title_exact_query(term: str) -> Q:
+        return Q(title__iexact=term)
 
-    # keyword is mentor name or research direction
-    # (assume that a mentor's name or research direction is not the title of any paper)
-    if not papers.exists():
-        mentor_ids: list[int] = []
-        for mentor in _visible_mentors(user).filter(_mentor_exact_query(keyword)):
-            mentor_ids.extend(mentor.get_paper_id_list())
+    title_logic_query = _build_logic_query(keyword, _paper_title_exact_query)
+    title_qs = Paper.objects.filter(title_logic_query).distinct()
+    if title_qs.exists():
+        return title_qs
 
-        if mentor_ids:
-            papers = Paper.objects.filter(id__in=mentor_ids).distinct()
-
-    return papers
+    logic_query = _build_logic_query(keyword, lambda term: _paper_exact_term_query(term, user=user))
+    return Paper.objects.filter(logic_query).distinct()
 
 
 def _search_papers_fuzzy_queryset(keyword: str, user=None):
     if keyword.strip() == "":
         return Paper.objects.all().distinct()
 
-    # keyword is title (use subquery instead of collecting IDs in Python)
-    title_match_ids_subquery = (
-        Paper.objects
-        .filter(title__icontains=keyword)
-        .values("id")
-    )
-
-    # keyword is mentor name or research direction
-    mentor_ids = _collect_mentor_paper_ids(_visible_mentors(user).filter(_mentor_fuzzy_query(keyword)))
-
-    paper_filters = Q(id__in=Subquery(title_match_ids_subquery))
-    if mentor_ids:
-        paper_filters |= Q(id__in=mentor_ids)
-
-    return Paper.objects.filter(paper_filters).distinct()
+    logic_query = _build_logic_query(keyword, lambda term: _paper_fuzzy_term_query(term, user=user))
+    return Paper.objects.filter(logic_query).distinct()
 
 
 def search_mentors_page(keyword: str, user=None, fuzzy: bool = False, page: int = 1, page_size: int = DEFAULT_SEARCH_PAGE_SIZE, visibility: str = "all"):
