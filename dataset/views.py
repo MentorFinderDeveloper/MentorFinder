@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from account.models import User
 from dataset.models import Mentor, Paper, WeeklyPaperPush
+from dataset.services.author_matching import is_exact_english_author_match
 from dataset.services.research_analysis import (
     build_ai_recent_direction_analysis,
     build_rule_based_recent_direction_analysis,
@@ -191,7 +192,10 @@ def _refresh_mentor_papers(mentor: Mentor):
     for paper in Paper.objects.all():
         author_list = paper.get_author_list()
         if mentor.Chinese_name in author_list or (
-            mentor.English_name and mentor.English_name in author_list
+            mentor.English_name and any(
+                is_exact_english_author_match(author_name, mentor.English_name)
+                for author_name in author_list
+            )
         ):
             paper_ids.append(paper.id)
             paper.add_mentor(mentor.id)

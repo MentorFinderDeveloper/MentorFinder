@@ -25,6 +25,8 @@ def _name_variants(name: str) -> list[str]:
         unique_variants.append(variant)
     return unique_variants
 
+from dataset.services.author_matching import is_exact_english_author_match
+
 
 class Paper(models.Model):
     title = models.CharField(max_length=255, verbose_name="论文题目")
@@ -129,9 +131,8 @@ class Paper(models.Model):
     def bind_to_mentors_by_authors(self):
         matched_mentor_ids = []
 
-        # 1. 获取原作者列表，并生成一个小写的作者列表，方便后续不区分大小写比对
+        # 1. 获取原作者列表
         author_list = self.get_author_list()
-        lower_authors = [author.lower() for author in author_list]
 
         for mentor in Mentor.objects.all():
             match_found = False
@@ -142,19 +143,8 @@ class Paper(models.Model):
 
             # 3. 检查英文名是否匹配（需要处理大小写和颠倒顺序）
             elif mentor.English_name:
-                eng_name = mentor.English_name.lower().strip()
-                name_parts = eng_name.split()
-
-                # 构建可能的英文名格式列表
-                possible_names = [eng_name] # 正常格式: "wei xue"
-                if len(name_parts) == 2:
-                    # 如果英文名是两个词，加入颠倒后的格式
-                    possible_names.append(f"{name_parts[1]} {name_parts[0]}")  # "xue wei"
-                    possible_names.append(f"{name_parts[1]}, {name_parts[0]}") # "xue, wei"
-
-                # 只要上述任意一种格式，包含在论文作者名单的某一个作者名中，即视为匹配
-                for author in lower_authors:
-                    if any(possible_name in author for possible_name in possible_names):
+                for author in author_list:
+                    if is_exact_english_author_match(author, mentor.English_name):
                         match_found = True
                         break
 
@@ -164,6 +154,11 @@ class Paper(models.Model):
                 if self.id not in paper_ids:
                     mentor.add_paper(self.id)
                 matched_mentor_ids.append(mentor.id)
+            else:
+                paper_ids = mentor.get_paper_id_list()
+                if self.id in paper_ids:
+                    mentor.set_paper_id_list([paper_id for paper_id in paper_ids if paper_id != self.id])
+                    mentor.save(update_fields=["paper_ids"])
 
         self.set_mentor_id_list(matched_mentor_ids)
         self.save(update_fields=["mentor_ids"])
