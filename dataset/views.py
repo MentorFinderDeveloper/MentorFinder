@@ -680,6 +680,7 @@ def paper_timeline_view(request):
                 "title": paper.title,
                 "publish_date": str(paper.publish_date) if paper.publish_date else None,
                 "author_names": paper.author_names,
+                "mentor_ids": paper.get_author_mentor_ids(),
                 "subjects": paper.subjects,
                 "abstract": paper.abstract,
                 "arxiv_url": paper.arxiv_url,

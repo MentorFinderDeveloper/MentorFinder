@@ -1,5 +1,29 @@
+import re
+
 from django.conf import settings
 from django.db import models
+from django.db.models.functions import Lower
+
+
+def _name_variants(name: str) -> list[str]:
+    normalized = " ".join(str(name).lower().strip().replace(",", " ").split())
+    if normalized == "":
+        return []
+
+    variants = [normalized]
+    parts = [part for part in re.split(r"[,\s]+", normalized) if part]
+    if len(parts) == 2:
+        variants.append(f"{parts[1]} {parts[0]}")
+        variants.append(f"{parts[1]}, {parts[0]}")
+
+    unique_variants = []
+    seen = set()
+    for variant in variants:
+        if variant in seen:
+            continue
+        seen.add(variant)
+        unique_variants.append(variant)
+    return unique_variants
 
 
 class Paper(models.Model):
@@ -28,6 +52,61 @@ class Paper(models.Model):
         if self.mentor_ids == "":
             return []
         return [int(mid) for mid in self.mentor_ids.split(",")]
+
+    def get_author_mentor_ids(self):
+        author_list = self.get_author_list()
+        if not author_list:
+            return []
+
+        bound_mentor_ids = self.get_mentor_id_list()
+        if bound_mentor_ids:
+            mentors = Mentor.objects.filter(id__in=bound_mentor_ids).only("id", "Chinese_name", "English_name")
+        else:
+            mentors = Mentor.objects.none()
+
+        matched_ids = self._resolve_author_mentor_ids(author_list, mentors)
+        if any(mentor_id == 0 for mentor_id in matched_ids):
+            unresolved_variants = sorted({
+                variant
+                for idx, author_name in enumerate(author_list)
+                if idx >= len(matched_ids) or matched_ids[idx] == 0
+                for variant in _name_variants(author_name)
+            })
+            if unresolved_variants:
+                fallback_mentors = Mentor.objects.annotate(
+                    chinese_name_lower=Lower("Chinese_name"),
+                    english_name_lower=Lower("English_name"),
+                ).filter(
+                    models.Q(chinese_name_lower__in=unresolved_variants)
+                    | models.Q(english_name_lower__in=unresolved_variants)
+                )
+                matched_ids = self._resolve_author_mentor_ids(author_list, fallback_mentors, matched_ids)
+
+        return matched_ids
+
+    @staticmethod
+    def _resolve_author_mentor_ids(author_list, mentors, base_matches=None):
+        mentor_id_by_name = {}
+        for mentor in mentors:
+            for variant in _name_variants(mentor.Chinese_name or ""):
+                mentor_id_by_name.setdefault(variant, mentor.pk)
+            for variant in _name_variants(mentor.English_name or ""):
+                mentor_id_by_name.setdefault(variant, mentor.pk)
+
+        resolved_matches = list(base_matches) if base_matches is not None else [0] * len(author_list)
+        for idx, author_name in enumerate(author_list):
+            if idx < len(resolved_matches) and resolved_matches[idx] > 0:
+                continue
+            mentor_id = next(
+                (mentor_id_by_name.get(variant) for variant in _name_variants(author_name) if variant in mentor_id_by_name),
+                0,
+            )
+            if idx < len(resolved_matches):
+                resolved_matches[idx] = mentor_id
+            else:
+                resolved_matches.append(mentor_id)
+
+        return resolved_matches
 
     def set_mentor_id_list(self, id_list):
         unique_ids = []
