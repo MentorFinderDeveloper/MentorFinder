@@ -20,7 +20,7 @@ def build_weekly_push_digest(
     mentor_groups = []
     matched_papers_by_id = {}
 
-    for mentor in _collect_target_mentors(user):
+    for mentor in collect_target_mentors(user):
         mentor_papers = _match_mentor_papers(mentor, weekly_papers)
         if not mentor_papers:
             continue
@@ -168,7 +168,7 @@ def _collect_unique_papers(daily_paper_lists: Iterable[Iterable[Paper]]) -> dict
     return papers_by_id
 
 
-def _collect_target_mentors(user: User) -> list[Mentor]:
+def collect_target_mentors(user: User) -> list[Mentor]:
     followed_mentors = (
         MentorFollow.objects
         .filter(student=user)
