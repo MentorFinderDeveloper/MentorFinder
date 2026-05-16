@@ -16,6 +16,14 @@ from pathlib import Path
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Load <BASE_DIR>/.env so secrets like the 163 SMTP auth code don't need to be
+# exported manually on every deploy. The .env file stays gitignored.
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(BASE_DIR / ".env")
+except ModuleNotFoundError:
+    pass
+
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.1/howto/deployment/checklist/
@@ -130,15 +138,32 @@ STATIC_URL = 'static/'
 
 
 # Email
-# Default to console backend so local weekly push tests never send real emails.
-EMAIL_BACKEND = os.environ.get(
-    'EMAIL_BACKEND',
-    'django.core.mail.backends.console.EmailBackend',
+# 163 SMTP integration. When EMAIL_HOST_USER and EMAIL_HOST_PASSWORD are both set
+# via environment variables, the SMTP backend is used; otherwise we fall back to
+# the console backend so local development never tries to send real mail.
+EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.163.com')
+EMAIL_PORT = int(os.environ.get('EMAIL_PORT', '465'))
+EMAIL_USE_SSL = os.environ.get('EMAIL_USE_SSL', 'true').lower() in ('1', 'true', 'yes')
+EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'false').lower() in ('1', 'true', 'yes')
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
+EMAIL_TIMEOUT = int(os.environ.get('EMAIL_TIMEOUT', '15'))
+
+_smtp_configured = bool(EMAIL_HOST_USER) and bool(EMAIL_HOST_PASSWORD)
+_default_email_backend = (
+    'django.core.mail.backends.smtp.EmailBackend'
+    if _smtp_configured
+    else 'django.core.mail.backends.console.EmailBackend'
 )
+EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', _default_email_backend)
 DEFAULT_FROM_EMAIL = os.environ.get(
     'DEFAULT_FROM_EMAIL',
-    'MentorFinder <no-reply@mentorfinder.local>',
+    (f'MentorFinder <{EMAIL_HOST_USER}>' if EMAIL_HOST_USER else 'MentorFinder <no-reply@mentorfinder.local>'),
 )
+
+EMAIL_VERIFICATION_CODE_TTL_SECONDS = int(os.environ.get('EMAIL_VERIFICATION_CODE_TTL', '600'))
+EMAIL_VERIFICATION_CODE_RESEND_COOLDOWN = int(os.environ.get('EMAIL_VERIFICATION_CODE_COOLDOWN', '60'))
+EMAIL_VERIFICATION_BYPASS_PREFIX = os.environ.get('EMAIL_VERIFICATION_BYPASS_PREFIX', 'bypass')
 
 # AI weekly push (OpenAI-compatible API provided by THU CS lab)
 # Keep API key empty in repo, fill through environment variable in deployment.

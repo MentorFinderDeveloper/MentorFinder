@@ -64,6 +64,20 @@ class User(AbstractUser):
         return f"{self.username} ({self.get_role_display()})"
 
 
+class EmailVerificationCode(models.Model):
+    email = models.EmailField(unique=True, verbose_name="邮箱")
+    code = models.CharField(max_length=10, verbose_name="验证码")
+    expires_at = models.DateTimeField(verbose_name="过期时间")
+    created_at = models.DateTimeField(auto_now=True, verbose_name="最近一次发送时间")
+
+    class Meta:
+        verbose_name = "邮箱验证码"
+        verbose_name_plural = "邮箱验证码"
+
+    def __str__(self) -> str:
+        return f"{self.email}:{self.code}"
+
+
 class UserProfile(models.Model):
     user = models.OneToOneField(
         User,

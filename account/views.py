@@ -15,6 +15,13 @@ from utils.utils_require import CheckRequire, MAX_CHAR_LENGTH, require
 from utils.utils_jwt import check_jwt_token
 from dataset.models import Mentor
 from account.models import MentorFollow
+from account.services.email_verification import (
+    email_matches_bypass,
+    get_remaining_cooldown,
+    issue_verification_code,
+    send_verification_email,
+    verify_code,
+)
 from search.serializers import MentorSerializer
 
 USERNAME_REGEX = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -99,6 +106,17 @@ def register(req: HttpRequest):
     if User.objects.filter(email=email).exists():
         return request_failed(4, "Email already exists", 409)
 
+    # 邮箱验证码校验（"bypass" 前缀邮箱可跳过，方便测试，后续可删除该后门）
+    verification_code_raw = body.get("verificationCode", "")
+    if not isinstance(verification_code_raw, str):
+        return request_failed(-2, "Invalid parameters. [verificationCode] must be a string", 400)
+    verification_code = verification_code_raw.strip()
+    if not email_matches_bypass(email):
+        if verification_code == "":
+            return request_failed(5, "Verification code is required", 400)
+        if not verify_code(email, verification_code):
+            return request_failed(5, "Verification code is invalid or expired", 400)
+
     user = User.objects.create_user(
         username=username,
         email=email,
@@ -109,6 +127,48 @@ def register(req: HttpRequest):
         "token": generate_jwt_token(user.username),
         "role": user.role,
         "userId": user.id,
+    })
+
+
+@CheckRequire
+def send_email_verification_code(req: HttpRequest):
+    if req.method != "POST":
+        return BAD_METHOD
+
+    body = json.loads(req.body.decode("utf-8"))
+    email_raw = require(body, "email", "string", err_msg="Missing or error type of [email]")
+    email = email_raw.strip()
+    if email == "":
+        return request_failed(-2, "Invalid parameters. [email] format is invalid", 400)
+    try:
+        validate_email(email)
+    except ValidationError:
+        return request_failed(-2, "Invalid parameters. [email] format is invalid", 400)
+
+    if User.objects.filter(email=email).exists():
+        return request_failed(4, "Email already exists", 409)
+
+    if email_matches_bypass(email):
+        return request_success({"bypass": True, "info": "Bypass email: no verification code required"})
+
+    from django.conf import settings as _settings
+    cooldown_remaining = get_remaining_cooldown(email)
+    if cooldown_remaining > 0:
+        return request_failed(
+            6,
+            f"Verification code was just sent, please wait {cooldown_remaining}s before retrying",
+            429,
+        )
+
+    code, _record = issue_verification_code(email)
+    try:
+        send_verification_email(email, code)
+    except Exception as exc:
+        return request_failed(7, f"Failed to send verification email: {exc}", 502)
+
+    return request_success({
+        "bypass": False,
+        "cooldownSeconds": int(getattr(_settings, "EMAIL_VERIFICATION_CODE_RESEND_COOLDOWN", 60)),
     })
 
 def _extract_token(req: HttpRequest) -> str:
