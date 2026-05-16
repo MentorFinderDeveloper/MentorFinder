@@ -24,7 +24,8 @@ from dataset.services.author_matching import (
     is_exact_english_author_match,
     normalize_english_name,
 )
-from account.models import User as AccountUser, WeeklyPushPaperBucket
+from dataset.services.weekly_push_summary import resolve_week_range
+from account.models import MentorFollow, User as AccountUser, WeeklyPushPaperBucket
 from account.services.weekly_push_files import build_weekly_push_bucket_period_key
 from utils.utils_jwt import generate_jwt_token
 
@@ -1747,6 +1748,123 @@ class DatasetViewBoundaryTest(TestCase):
 
         self.assertEqual(response.status_code, 403)
         self.assertTrue(Mentor.objects.filter(id=self.mentor.id).exists())
+
+
+class PersonalizedWeeklyPushViewTest(TestCase):
+    """测试首页专属周报接口"""
+
+    def setUp(self):
+        self.client = Client()
+        self.user = AccountUser.objects.create_user(
+            username="personalized_user",
+            email="personalized@example.com",
+            password="student12345",
+            role="student",
+        )
+        self.token = generate_jwt_token("personalized_user")
+        self.other_user = AccountUser.objects.create_user(
+            username="other_personalized_user",
+            email="other-personalized@example.com",
+            password="student12345",
+            role="student",
+        )
+
+        self.followed_mentor = Mentor.objects.create(
+            Chinese_name="关注导师",
+            English_name="Followed Mentor",
+            research_direction="机器学习",
+        )
+        self.private_mentor = Mentor.objects.create(
+            Chinese_name="私有导师",
+            English_name="Private Mentor",
+            research_direction="自然语言处理",
+            owner=self.user,
+        )
+        self.unrelated_mentor = Mentor.objects.create(
+            Chinese_name="无关导师",
+            English_name="Other Mentor",
+            research_direction="数据库",
+            owner=self.other_user,
+        )
+        MentorFollow.objects.create(student=self.user, mentor=self.followed_mentor)
+
+        week_start, week_end = resolve_week_range(0, today=timezone.localdate())
+        self.followed_paper = Paper.objects.create(
+            title="关注导师本周论文",
+            abstract="关注导师的论文摘要",
+            publish_date=week_end,
+            author_names="关注导师, Alice",
+            subjects="cs.LG",
+            arxiv_id="2605.00001",
+        )
+        self.private_paper = Paper.objects.create(
+            title="私有导师本周论文",
+            abstract="私有导师的论文摘要",
+            publish_date=week_end - timedelta(days=1),
+            author_names="私有导师, Bob",
+            subjects="cs.CL",
+        )
+        self.unrelated_paper = Paper.objects.create(
+            title="无关导师本周论文",
+            abstract="无关摘要",
+            publish_date=week_end - timedelta(days=2),
+            author_names="无关导师",
+            subjects="cs.DB",
+        )
+        self.old_followed_paper = Paper.objects.create(
+            title="关注导师旧论文",
+            abstract="旧论文摘要",
+            publish_date=week_start - timedelta(days=1),
+            author_names="关注导师, Alice",
+            subjects="cs.AI",
+        )
+
+        self.followed_mentor.add_paper(self.followed_paper.id)
+        self.followed_mentor.add_paper(self.old_followed_paper.id)
+        self.private_mentor.add_paper(self.private_paper.id)
+        self.unrelated_mentor.add_paper(self.unrelated_paper.id)
+
+    def test_personalized_weekly_push_requires_login(self):
+        response = self.client.post("/dataset/weekly-push/personalized")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json()["code"], 2)
+
+    @patch("dataset.services.weekly_push_summary.build_ai_summary_with_fallback")
+    def test_personalized_weekly_push_only_uses_followed_and_private_mentor_weekly_papers(self, mock_ai_summary):
+        mock_ai_summary.return_value = ("AI专属周报总结", "thucs-openai")
+
+        response = self.client.post(
+            "/dataset/weekly-push/personalized",
+            HTTP_AUTHORIZATION=f"Bearer {self.token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["weeklyPush"]
+        self.assertEqual(payload["paperCount"], 2)
+        self.assertEqual(payload["trackedMentorCount"], 2)
+        self.assertEqual(payload["activeMentorCount"], 2)
+        self.assertEqual(payload["generatedBy"], "thucs-openai")
+        self.assertEqual(payload["aiSummary"], "AI专属周报总结")
+
+        returned_titles = [paper["title"] for paper in payload["papers"]]
+        self.assertEqual(
+            returned_titles,
+            ["关注导师本周论文", "私有导师本周论文"],
+        )
+        self.assertEqual(payload["papers"][0]["mentorNames"], ["关注导师"])
+        self.assertEqual(payload["papers"][1]["mentorNames"], ["私有导师"])
+
+        mentor_group_names = [group["mentorName"] for group in payload["mentorGroups"]]
+        self.assertEqual(mentor_group_names, ["关注导师", "私有导师"])
+        self.assertEqual(
+            payload["subjectDistribution"],
+            [
+                {"subject": "cs.CL", "count": 1},
+                {"subject": "cs.LG", "count": 1},
+            ],
+        )
+        self.assertIn("AI专属周报总结", payload["content"])
 
 
 class MentorRecentDirectionAnalysisViewTest(TestCase):
