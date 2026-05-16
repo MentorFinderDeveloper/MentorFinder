@@ -635,6 +635,20 @@ def _filter_timeline_papers_by_direction(direction: str):
     return base_query.filter(subjects__icontains=direction)
 
 
+def _serialize_timeline_paper(paper: Paper) -> dict:
+    return {
+        "id": paper.id,
+        "title": paper.title,
+        "publish_date": str(paper.publish_date) if paper.publish_date else None,
+        "author_names": paper.author_names,
+        "mentor_ids": paper.get_author_mentor_ids(),
+        "subjects": paper.subjects,
+        "abstract": paper.abstract,
+        "arxiv_url": paper.arxiv_url,
+        "tldr": paper.tldr,
+    }
+
+
 # 把论文按研究方向分类，先返回方向概览，再按方向分页拉取论文
 def paper_timeline_view(request):
     if request.method != "GET":
@@ -647,6 +661,13 @@ def paper_timeline_view(request):
         TIMELINE_DEFAULT_PAGE_SIZE,
         maximum=TIMELINE_MAX_PAGE_SIZE,
     )
+    offset = _parse_positive_int(request.GET.get("offset"), 0, minimum=0)
+    limit = _parse_positive_int(
+        request.GET.get("limit"),
+        TIMELINE_DEFAULT_PAGE_SIZE,
+        maximum=TIMELINE_MAX_PAGE_SIZE,
+    )
+    use_offset_limit = "offset" in request.GET or "limit" in request.GET
 
     if direction == "":
         direction_summaries = _build_timeline_direction_summaries()
@@ -665,6 +686,24 @@ def paper_timeline_view(request):
 
     papers_query = _filter_timeline_papers_by_direction(direction).order_by("-publish_date", "-id")
     total_papers = papers_query.count()
+    if use_offset_limit:
+        if total_papers > 0:
+            offset = min(offset, total_papers - 1)
+            sliced_papers = papers_query[offset:offset + limit]
+        else:
+            offset = 0
+            sliced_papers = []
+
+        return request_success({
+            "direction": direction,
+            "offset": offset,
+            "limit": limit,
+            "total_papers": total_papers,
+            "has_previous": total_papers > 0 and offset > 0,
+            "has_next": total_papers > 0 and offset + len(sliced_papers) < total_papers,
+            "papers": [_serialize_timeline_paper(paper) for paper in sliced_papers],
+        })
+
     total_pages = (total_papers + page_size - 1) // page_size if total_papers > 0 else 0
 
     if total_pages > 0:
@@ -683,20 +722,7 @@ def paper_timeline_view(request):
         "total_pages": total_pages,
         "has_previous": total_pages > 0 and page > 1,
         "has_next": total_pages > 0 and page < total_pages,
-        "papers": [
-            {
-                "id": paper.id,
-                "title": paper.title,
-                "publish_date": str(paper.publish_date) if paper.publish_date else None,
-                "author_names": paper.author_names,
-                "mentor_ids": paper.get_author_mentor_ids(),
-                "subjects": paper.subjects,
-                "abstract": paper.abstract,
-                "arxiv_url": paper.arxiv_url,
-                "tldr": paper.tldr,
-            }
-            for paper in paged_papers
-        ],
+        "papers": [_serialize_timeline_paper(paper) for paper in paged_papers],
     })
 
 
