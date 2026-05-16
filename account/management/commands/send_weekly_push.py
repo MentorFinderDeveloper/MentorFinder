@@ -252,6 +252,16 @@ def _deliver_weekly_push_for_user(
             f"Weekly push email failed for user {user.username}: {error_message}"
         ) from exc
 
+    # 用户个人周报为空时，service 层直接返回 skipped=True，不真正发邮件，
+    # 但将 PushRecord 标记为 sent，避免后续 retry 任务把它当成失败用户反复重发。
+    if result.get("skipped"):
+        _mark_push_record_sent(push_record)
+        stdout.write(
+            f"{user.username}: skipped, no personal updates this week "
+            f"({result['digest']['totalPaperCount']} matched paper(s))."
+        )
+        return True
+
     status = "sent" if result["sent"] else "failed"
     if result["sent"]:
         _mark_push_record_sent(push_record)

@@ -6,6 +6,7 @@ import account.views as views
 urlpatterns = [
     path('login', views.login),
     path('register', views.register),
+    path('register/verification-code', views.send_email_verification_code),
     path("follow/mentors", views.followed_mentors),
     path("follow/mentors/<int:mentor_id>", views.follow_mentor),
     path("follow/users", views.followed_users),
