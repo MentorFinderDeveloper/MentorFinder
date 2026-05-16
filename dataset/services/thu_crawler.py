@@ -135,14 +135,15 @@ def crawl_mentor_by_name(chinese_name: str = "", english_name: str = "") -> dict
 def parse_mentor_detail(detail_url: str) -> dict:
     html = fetch_html(detail_url)
     soup = BeautifulSoup(html, "lxml")
-    
+    #查找研究领域
     start_node = soup.find(lambda tag: tag.name == "p" and "研究领域" in tag.get_text())
     direction_list = []
 
     if start_node:
         for sibling in start_node.find_next_siblings():
             if sibling.find('strong') or sibling.name=='h4' or "研究概况" in sibling.get_text(strip = True)  \
-                or "讲授课程" in sibling.get_text(strip = True) or "工作履历" in sibling.get_text(strip = True):
+                or "讲授课程" in sibling.get_text(strip = True) or "工作履历" in sibling.get_text(strip = True)  \
+                or "研究概况" in sibling.get_text(strip = True) or "奖励与荣誉" in sibling.get_text(strip = True):
                 break
             text = sibling.get_text(strip=True)
             if text:
@@ -166,7 +167,7 @@ def parse_mentor_detail(detail_url: str) -> dict:
         if start_node:
             for sibling in start_node.find_next_siblings():
                 if sibling.find('strong') or "学术成果" in sibling.get_text(strip = True)   \
-                    or "代表性论文" in sibling.get_text(strip = True):
+                    or "代表性论文" in sibling.get_text(strip = True) or "研究概况" in sibling.get_text(strip = True) or "奖励与荣誉" in sibling.get_text(strip = True):
                     break
                 text = sibling.get_text(strip=True)
                 if text:
