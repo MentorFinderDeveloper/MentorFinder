@@ -1258,6 +1258,76 @@ class TimelineViewTest(TestCase):
         self.assertEqual(data["papers"][0]["subjects"], "cs.AI, cs.LG")
         self.assertEqual(data["papers"][0]["mentor_ids"], [self.mentor_li.id])
 
+    def test_timeline_direction_response_supports_offset_limit_slicing(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "人工智能 (Artificial Intelligence)",
+                "offset": 0,
+                "limit": 1,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["direction"], "人工智能 (Artificial Intelligence)")
+        self.assertEqual(data["offset"], 0)
+        self.assertEqual(data["limit"], 1)
+        self.assertEqual(data["total_papers"], 2)
+        self.assertFalse(data["has_previous"])
+        self.assertTrue(data["has_next"])
+        self.assertEqual(len(data["papers"]), 1)
+        self.assertEqual(data["papers"][0]["id"], self.paper_ai_new.id)
+
+    def test_timeline_offset_limit_middle_slice_reports_both_directions(self):
+        middle_paper = Paper.objects.create(
+            title="AI 中间论文",
+            abstract="摘要中间",
+            publish_date=date(2024, 2, 1),
+            author_names="李四",
+            subjects="cs.AI",
+            arxiv_url="https://arxiv.org/abs/5555.5555",
+            tldr="tldr-middle",
+        )
+
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "人工智能 (Artificial Intelligence)",
+                "offset": 1,
+                "limit": 1,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["offset"], 1)
+        self.assertEqual(data["limit"], 1)
+        self.assertEqual(data["total_papers"], 3)
+        self.assertTrue(data["has_previous"])
+        self.assertTrue(data["has_next"])
+        self.assertEqual(len(data["papers"]), 1)
+        self.assertEqual(data["papers"][0]["id"], middle_paper.id)
+
+    def test_timeline_offset_limit_tail_slice_reports_no_next(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "人工智能 (Artificial Intelligence)",
+                "offset": 1,
+                "limit": 5,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["offset"], 1)
+        self.assertEqual(data["limit"], 5)
+        self.assertTrue(data["has_previous"])
+        self.assertFalse(data["has_next"])
+        self.assertEqual(len(data["papers"]), 1)
+        self.assertEqual(data["papers"][0]["id"], self.paper_ai_old.id)
+
     def test_timeline_papers_return_author_aligned_mentor_ids(self):
         mixed_paper = Paper.objects.create(
             title="混合作者论文",
@@ -1297,6 +1367,25 @@ class TimelineViewTest(TestCase):
         data = response.json()
         self.assertEqual(data["page_size"], 100)
         self.assertEqual(data["total_papers"], 1)
+        self.assertEqual(data["papers"][0]["id"], self.paper_other.id)
+
+    def test_timeline_offset_and_limit_are_normalized(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "其他/未分类",
+                "offset": -2,
+                "limit": 999,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["offset"], 0)
+        self.assertEqual(data["limit"], 100)
+        self.assertFalse(data["has_previous"])
+        self.assertFalse(data["has_next"])
+        self.assertEqual(len(data["papers"]), 1)
         self.assertEqual(data["papers"][0]["id"], self.paper_other.id)
 
     def test_timeline_rejects_bad_method(self):
@@ -1369,6 +1458,24 @@ class TimelineViewTest(TestCase):
         self.assertEqual(data["page"], 2)
         self.assertFalse(data["has_next"])
         self.assertTrue(data["has_previous"])
+        self.assertEqual(data["papers"][0]["id"], self.paper_ai_old.id)
+
+    def test_timeline_offset_above_total_clamps_to_last_available_item(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "人工智能 (Artificial Intelligence)",
+                "offset": 999,
+                "limit": 5,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["offset"], 1)
+        self.assertTrue(data["has_previous"])
+        self.assertFalse(data["has_next"])
+        self.assertEqual(len(data["papers"]), 1)
         self.assertEqual(data["papers"][0]["id"], self.paper_ai_old.id)
 
     def test_timeline_unknown_direction_returns_empty_page(self):
