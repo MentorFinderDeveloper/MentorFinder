@@ -11,7 +11,7 @@ from django.core.management.base import CommandError
 from django.test import TestCase
 from django.utils import timezone
 
-from account.models import MentorVerificationRequest, PushRecord, User, MentorFollow, UserFollow, UserProfile, WeeklyPushPaperBucket
+from account.models import MentorVerificationRequest, PushRecord, User, MentorFollow, SubjectFollow, UserFollow, UserProfile, WeeklyPushPaperBucket
 from account.management.commands.send_weekly_push import _build_weekly_period_metadata
 from account.services import weekly_push_files
 from account.services.weekly_push_files import (
@@ -426,6 +426,96 @@ class MentorFollowViewTests(TestCase):
 
         self.assertEqual(mentor_names, {"张三", "李四"})
         self.assertEqual(len(mentors), 2)
+
+    def test_student_can_follow_subject(self):
+        Paper.objects.create(
+            title="AI paper",
+            subjects="cs.AI, cs.LG",
+            publish_date=date(2026, 5, 1),
+        )
+
+        res = self.client.post(
+            "/follow/subjects/cs.AI",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["followed"], True)
+        self.assertTrue(
+            SubjectFollow.objects.filter(
+                user=self.student,
+                subject="cs.AI",
+            ).exists()
+        )
+        self.assertEqual(res.json()["subject"]["paperCount"], 1)
+
+    def test_get_followed_subjects_includes_recent_papers(self):
+        Paper.objects.create(
+            title="Old AI paper",
+            subjects="cs.AI",
+            publish_date=date(2026, 4, 1),
+            author_names="A",
+        )
+        Paper.objects.create(
+            title="New AI paper",
+            subjects="cs.AI, cs.LG",
+            publish_date=date(2026, 5, 1),
+            author_names="B",
+        )
+        Paper.objects.create(
+            title="NLP paper",
+            subjects="cs.CL",
+            publish_date=date(2026, 5, 2),
+        )
+        SubjectFollow.objects.create(user=self.student, subject="cs.AI")
+
+        res = self.client.get(
+            "/follow/subjects",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["subjects"][0]["subject"], "cs.AI")
+        self.assertEqual(res.json()["subjects"][0]["paperCount"], 2)
+        self.assertEqual(res.json()["subjects"][0]["recentPapers"][0]["title"], "New AI paper")
+        self.assertIn(
+            {"subject": "cs.CL", "paperCount": 1, "followed": False},
+            res.json()["availableSubjects"],
+        )
+        self.assertIn(
+            {"subject": "cs.AI", "paperCount": 2, "followed": True},
+            res.json()["availableSubjects"],
+        )
+
+    def test_student_can_unfollow_subject(self):
+        Paper.objects.create(title="AI paper", subjects="cs.AI")
+        SubjectFollow.objects.create(user=self.student, subject="cs.AI")
+
+        res = self.client.delete(
+            "/follow/subjects/cs.AI",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["followed"], False)
+        self.assertFalse(
+            SubjectFollow.objects.filter(
+                user=self.student,
+                subject="cs.AI",
+            ).exists()
+        )
+
+    def test_follow_unknown_subject_returns_404(self):
+        res = self.client.post(
+            "/follow/subjects/cs.UNKNOWN",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
 
     def test_admin_can_view_own_followed_mentors(self):
         MentorFollow.objects.create(
