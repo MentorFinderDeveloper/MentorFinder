@@ -71,6 +71,8 @@ def build_ai_summary_with_fallback(
         "1) 先概览趋势，再点名2-3个亮点方向；\n"
         "2) 用客观表述，不夸张；\n"
         "3) 不要编造不存在的数据。\n\n"
+        " 格式要求：只返回纯文本内容,不要使用任何 Markdown 格式"
+        "不要使用 *、#、** 等标记符号,使用数字+点（如'1. '）或直接换行,使用自然语言和普通标点符号"
         f"周范围: {week_start.isoformat()} ~ {week_end.isoformat()}\n"
         f"固定摘要: {fixed_summary}\n\n"
         "论文样本:\n"
