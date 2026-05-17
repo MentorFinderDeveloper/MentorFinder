@@ -1478,6 +1478,181 @@ class TimelineViewTest(TestCase):
         self.assertEqual(len(data["papers"]), 1)
         self.assertEqual(data["papers"][0]["id"], self.paper_ai_old.id)
 
+    def test_timeline_calendar_metadata_returns_available_dates(self):
+        same_day_followup = Paper.objects.create(
+            title="AI 同日补充论文",
+            abstract="摘要6",
+            publish_date=date(2024, 2, 12),
+            author_names="李四",
+            subjects="cs.AI",
+            arxiv_url="https://arxiv.org/abs/6666.6666",
+            tldr="tldr6",
+        )
+
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "人工智能 (Artificial Intelligence)",
+                "calendar": 1,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["direction"], "人工智能 (Artificial Intelligence)")
+        self.assertEqual(data["default_date"], "2024-02-12")
+        self.assertEqual(data["latest_date"], "2024-02-12")
+        self.assertEqual(data["earliest_date"], "2024-01-10")
+        self.assertEqual(data["available_dates"], [
+            {"date": "2024-02-12", "paper_count": 2},
+            {"date": "2024-01-10", "paper_count": 1},
+        ])
+        self.assertGreater(same_day_followup.id, self.paper_ai_new.id)
+
+    def test_timeline_date_mode_returns_only_selected_day_and_day_stats(self):
+        same_day_followup = Paper.objects.create(
+            title="AI 同日补充论文",
+            abstract="摘要6",
+            publish_date=date(2024, 2, 12),
+            author_names="李四",
+            subjects="cs.AI",
+            arxiv_url="https://arxiv.org/abs/6666.6666",
+            tldr="tldr6",
+        )
+
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "人工智能 (Artificial Intelligence)",
+                "date": "2024-02-12",
+                "limit": 6,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["direction"], "人工智能 (Artificial Intelligence)")
+        self.assertEqual(data["limit"], 6)
+        self.assertEqual(data["total_papers"], 3)
+        self.assertFalse(data["has_newer"])
+        self.assertTrue(data["has_older"])
+        self.assertEqual([paper["id"] for paper in data["papers"]], [
+            same_day_followup.id,
+            self.paper_ai_new.id,
+        ])
+        self.assertEqual(
+            [(paper["day_sequence"], paper["day_total"]) for paper in data["papers"]],
+            [(1, 2), (2, 2)],
+        )
+
+    def test_timeline_before_cursor_supports_cross_day_loading(self):
+        Paper.objects.create(
+            title="AI 同日补充论文",
+            abstract="摘要6",
+            publish_date=date(2024, 2, 12),
+            author_names="李四",
+            subjects="cs.AI",
+            arxiv_url="https://arxiv.org/abs/6666.6666",
+            tldr="tldr6",
+        )
+        middle_paper = Paper.objects.create(
+            title="AI 中间论文",
+            abstract="摘要7",
+            publish_date=date(2024, 2, 11),
+            author_names="李四",
+            subjects="cs.AI",
+            arxiv_url="https://arxiv.org/abs/7777.7777",
+            tldr="tldr7",
+        )
+
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "人工智能 (Artificial Intelligence)",
+                "before_date": "2024-02-12",
+                "before_id": self.paper_ai_new.id,
+                "limit": 5,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["has_newer"])
+        self.assertFalse(data["has_older"])
+        self.assertEqual([paper["id"] for paper in data["papers"]], [
+            middle_paper.id,
+            self.paper_ai_old.id,
+        ])
+        self.assertEqual(
+            [(paper["publish_date"], paper["day_sequence"], paper["day_total"]) for paper in data["papers"]],
+            [("2024-02-11", 1, 1), ("2024-01-10", 1, 1)],
+        )
+
+    def test_timeline_after_cursor_supports_cross_day_loading(self):
+        older_day_paper = Paper.objects.create(
+            title="AI 旧日论文",
+            abstract="摘要6",
+            publish_date=date(2024, 2, 11),
+            author_names="李四",
+            subjects="cs.AI",
+            arxiv_url="https://arxiv.org/abs/6666.6666",
+            tldr="tldr6",
+        )
+        same_day_followup = Paper.objects.create(
+            title="AI 同日补充论文",
+            abstract="摘要7",
+            publish_date=date(2024, 2, 12),
+            author_names="李四",
+            subjects="cs.AI",
+            arxiv_url="https://arxiv.org/abs/7777.7777",
+            tldr="tldr7",
+        )
+        newest_paper = Paper.objects.create(
+            title="AI 更新论文",
+            abstract="摘要8",
+            publish_date=date(2024, 2, 13),
+            author_names="李四",
+            subjects="cs.AI",
+            arxiv_url="https://arxiv.org/abs/8888.8888",
+            tldr="tldr8",
+        )
+
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "人工智能 (Artificial Intelligence)",
+                "after_date": "2024-02-11",
+                "after_id": older_day_paper.id,
+                "limit": 5,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertFalse(data["has_newer"])
+        self.assertTrue(data["has_older"])
+        self.assertEqual([paper["id"] for paper in data["papers"]], [
+            newest_paper.id,
+            same_day_followup.id,
+            self.paper_ai_new.id,
+        ])
+        self.assertEqual(
+            [(paper["publish_date"], paper["day_sequence"], paper["day_total"]) for paper in data["papers"]],
+            [("2024-02-13", 1, 1), ("2024-02-12", 1, 2), ("2024-02-12", 2, 2)],
+        )
+
+    def test_timeline_date_mode_rejects_bad_date(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "人工智能 (Artificial Intelligence)",
+                "date": "2024-02-31",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], -2)
+
     def test_timeline_unknown_direction_returns_empty_page(self):
         response = self.client.get(
             "/timeline/",

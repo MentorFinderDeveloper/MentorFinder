@@ -1,5 +1,6 @@
 import json
-from datetime import timedelta
+from collections import defaultdict
+from datetime import date, timedelta
 
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
@@ -23,9 +24,6 @@ from dataset.services.weekly_push_summary import (
 from utils.utils_jwt import check_jwt_token
 from utils.utils_request import BAD_METHOD, request_failed, request_success
 from utils.utils_require import CheckRequire, MAX_CHAR_LENGTH, require
-from collections import defaultdict
-
-
 PRIVATE_MENTOR_LIMIT = 10
 TIMELINE_DEFAULT_PAGE_SIZE = 20
 TIMELINE_MAX_PAGE_SIZE = 100
@@ -635,18 +633,215 @@ def _filter_timeline_papers_by_direction(direction: str):
     return base_query.filter(subjects__icontains=direction)
 
 
-def _serialize_timeline_paper(paper: Paper) -> dict:
+def _parse_iso_date(raw_value: str | None) -> date | None:
+    value = str(raw_value or "").strip()
+    if value == "":
+        return None
+
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _get_timeline_day_stats_map(papers_query) -> dict[date, dict[str, int]]:
+    ordered_papers = list(
+        papers_query
+        .values_list("id", "publish_date")
+        .order_by("-publish_date", "-id")
+    )
+    day_total_by_date: dict[date, int] = defaultdict(int)
+    for _, publish_date in ordered_papers:
+        if publish_date is not None:
+            day_total_by_date[publish_date] += 1
+
+    day_position_by_id: dict[int, int] = {}
+    seen_per_day: dict[date, int] = defaultdict(int)
+    for paper_id, publish_date in ordered_papers:
+        if publish_date is None:
+            continue
+        seen_per_day[publish_date] += 1
+        day_position_by_id[paper_id] = seen_per_day[publish_date]
+
+    return {
+        publish_date: {
+            "day_total": day_total,
+        }
+        for publish_date, day_total in day_total_by_date.items()
+    } | {
+        paper_id: {
+            "day_sequence": day_sequence,
+        }
+        for paper_id, day_sequence in day_position_by_id.items()
+    }
+
+
+def _build_timeline_day_sequence_map(papers_query) -> tuple[dict[int, int], dict[date, int]]:
+    ordered_papers = list(
+        papers_query
+        .values_list("id", "publish_date")
+        .order_by("-publish_date", "-id")
+    )
+    day_total_by_date: dict[date, int] = defaultdict(int)
+    for _, publish_date in ordered_papers:
+        if publish_date is not None:
+            day_total_by_date[publish_date] += 1
+
+    day_sequence_by_id: dict[int, int] = {}
+    seen_per_day: dict[date, int] = defaultdict(int)
+    for paper_id, publish_date in ordered_papers:
+        if publish_date is None:
+            continue
+        seen_per_day[publish_date] += 1
+        day_sequence_by_id[paper_id] = seen_per_day[publish_date]
+
+    return day_sequence_by_id, day_total_by_date
+
+
+def _serialize_timeline_paper(
+    paper: Paper,
+    day_sequence_by_id: dict[int, int] | None = None,
+    day_total_by_date: dict[date, int] | None = None,
+) -> dict:
+    publish_date = paper.publish_date
     return {
         "id": paper.id,
         "title": paper.title,
-        "publish_date": str(paper.publish_date) if paper.publish_date else None,
+        "publish_date": str(publish_date) if publish_date else None,
         "author_names": paper.author_names,
         "mentor_ids": paper.get_author_mentor_ids(),
         "subjects": paper.subjects,
         "abstract": paper.abstract,
         "arxiv_url": paper.arxiv_url,
         "tldr": paper.tldr,
+        "day_sequence": (
+            day_sequence_by_id.get(paper.id)
+            if day_sequence_by_id is not None
+            else None
+        ),
+        "day_total": (
+            day_total_by_date.get(publish_date)
+            if day_total_by_date is not None and publish_date is not None
+            else None
+        ),
     }
+
+
+def _build_timeline_available_dates(papers_query) -> list[dict[str, object]]:
+    counts_by_date: dict[date, int] = defaultdict(int)
+    for publish_date in papers_query.values_list("publish_date", flat=True):
+        if publish_date is not None:
+            counts_by_date[publish_date] += 1
+
+    return [
+        {
+            "date": publish_date.isoformat(),
+            "paper_count": paper_count,
+        }
+        for publish_date, paper_count in sorted(counts_by_date.items(), key=lambda item: item[0], reverse=True)
+    ]
+
+
+def _build_timeline_calendar_payload(direction: str, papers_query):
+    available_dates = _build_timeline_available_dates(papers_query)
+    latest_date = available_dates[0]["date"] if available_dates else ""
+    earliest_date = available_dates[-1]["date"] if available_dates else ""
+    return {
+        "direction": direction,
+        "default_date": latest_date,
+        "latest_date": latest_date,
+        "earliest_date": earliest_date,
+        "available_dates": available_dates,
+    }
+
+
+def _slice_timeline_papers_for_day(papers_query, target_date: date, limit: int):
+    day_papers = list(
+        papers_query
+        .filter(publish_date=target_date)
+        .order_by("-publish_date", "-id")[:limit]
+    )
+    if not day_papers:
+        return [], False, False
+
+    first_paper = day_papers[0]
+    last_paper = day_papers[-1]
+    has_newer = papers_query.filter(
+        Q(publish_date__gt=first_paper.publish_date)
+        | Q(publish_date=first_paper.publish_date, id__gt=first_paper.id)
+    ).exists()
+    has_older = papers_query.filter(
+        Q(publish_date__lt=last_paper.publish_date)
+        | Q(publish_date=last_paper.publish_date, id__lt=last_paper.id)
+    ).exists()
+    return day_papers, has_newer, has_older
+
+
+def _slice_timeline_papers_before_cursor(papers_query, before_date: date, before_id: int, limit: int):
+    sliced_papers = list(
+        papers_query
+        .filter(
+            Q(publish_date__lt=before_date)
+            | Q(publish_date=before_date, id__lt=before_id)
+        )
+        .order_by("-publish_date", "-id")[:limit]
+    )
+    if not sliced_papers:
+        return [], False, False
+
+    first_paper = sliced_papers[0]
+    last_paper = sliced_papers[-1]
+    has_newer = papers_query.filter(
+        Q(publish_date__gt=first_paper.publish_date)
+        | Q(publish_date=first_paper.publish_date, id__gt=first_paper.id)
+    ).exists()
+    has_older = papers_query.filter(
+        Q(publish_date__lt=last_paper.publish_date)
+        | Q(publish_date=last_paper.publish_date, id__lt=last_paper.id)
+    ).exists()
+    return sliced_papers, has_newer, has_older
+
+
+def _slice_timeline_papers_after_cursor(papers_query, after_date: date, after_id: int, limit: int):
+    # Query newer items first, then reverse to preserve global descending order in the response.
+    newer_candidates = list(
+        papers_query
+        .filter(
+            Q(publish_date__gt=after_date)
+            | Q(publish_date=after_date, id__gt=after_id)
+        )
+        .order_by("publish_date", "id")[:limit]
+    )
+    if not newer_candidates:
+        return [], False, False
+
+    sliced_papers = list(reversed(newer_candidates))
+    first_paper = sliced_papers[0]
+    last_paper = sliced_papers[-1]
+    has_newer = papers_query.filter(
+        Q(publish_date__gt=first_paper.publish_date)
+        | Q(publish_date=first_paper.publish_date, id__gt=first_paper.id)
+    ).exists()
+    has_older = papers_query.filter(
+        Q(publish_date__lt=last_paper.publish_date)
+        | Q(publish_date=last_paper.publish_date, id__lt=last_paper.id)
+    ).exists()
+    return sliced_papers, has_newer, has_older
+
+
+def _build_timeline_date_mode_response(direction: str, papers_query, papers: list[Paper], has_newer: bool, has_older: bool, limit: int):
+    day_sequence_by_id, day_total_by_date = _build_timeline_day_sequence_map(papers_query)
+    return request_success({
+        "direction": direction,
+        "limit": limit,
+        "total_papers": papers_query.count(),
+        "has_newer": has_newer,
+        "has_older": has_older,
+        "papers": [
+            _serialize_timeline_paper(paper, day_sequence_by_id, day_total_by_date)
+            for paper in papers
+        ],
+    })
 
 
 # 把论文按研究方向分类，先返回方向概览，再按方向分页拉取论文
@@ -655,6 +850,12 @@ def paper_timeline_view(request):
         return BAD_METHOD
 
     direction = str(request.GET.get("direction", "")).strip()
+    calendar_flag = str(request.GET.get("calendar", "")).strip()
+    date_param = str(request.GET.get("date", "")).strip()
+    before_date_param = str(request.GET.get("before_date", "")).strip()
+    before_id = _parse_positive_int(request.GET.get("before_id"), 0, minimum=0)
+    after_date_param = str(request.GET.get("after_date", "")).strip()
+    after_id = _parse_positive_int(request.GET.get("after_id"), 0, minimum=0)
     page = _parse_positive_int(request.GET.get("page"), 1)
     page_size = _parse_positive_int(
         request.GET.get("page_size"),
@@ -685,6 +886,34 @@ def paper_timeline_view(request):
         })
 
     papers_query = _filter_timeline_papers_by_direction(direction).order_by("-publish_date", "-id")
+    if calendar_flag == "1":
+        return request_success(_build_timeline_calendar_payload(direction, papers_query))
+
+    if date_param != "":
+        target_date = _parse_iso_date(date_param)
+        if target_date is None:
+            return request_failed(-2, "Invalid parameters. [date] must be YYYY-MM-DD", 400)
+        sliced_papers, has_newer, has_older = _slice_timeline_papers_for_day(papers_query, target_date, limit)
+        return _build_timeline_date_mode_response(direction, papers_query, sliced_papers, has_newer, has_older, limit)
+
+    if before_date_param != "":
+        target_date = _parse_iso_date(before_date_param)
+        if target_date is None:
+            return request_failed(-2, "Invalid parameters. [before_date] must be YYYY-MM-DD", 400)
+        if before_id <= 0:
+            return request_failed(-2, "Invalid parameters. [before_id] must be a positive integer", 400)
+        sliced_papers, has_newer, has_older = _slice_timeline_papers_before_cursor(papers_query, target_date, before_id, limit)
+        return _build_timeline_date_mode_response(direction, papers_query, sliced_papers, has_newer, has_older, limit)
+
+    if after_date_param != "":
+        target_date = _parse_iso_date(after_date_param)
+        if target_date is None:
+            return request_failed(-2, "Invalid parameters. [after_date] must be YYYY-MM-DD", 400)
+        if after_id <= 0:
+            return request_failed(-2, "Invalid parameters. [after_id] must be a positive integer", 400)
+        sliced_papers, has_newer, has_older = _slice_timeline_papers_after_cursor(papers_query, target_date, after_id, limit)
+        return _build_timeline_date_mode_response(direction, papers_query, sliced_papers, has_newer, has_older, limit)
+
     total_papers = papers_query.count()
     if use_offset_limit:
         if total_papers > 0:
