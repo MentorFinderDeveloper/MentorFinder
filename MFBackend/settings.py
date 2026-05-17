@@ -167,9 +167,11 @@ EMAIL_VERIFICATION_BYPASS_PREFIX = os.environ.get('EMAIL_VERIFICATION_BYPASS_PRE
 
 # AI weekly push (OpenAI-compatible API provided by THU CS lab)
 # Keep API key empty in repo, fill through environment variable in deployment.
-THUCS_API_BASE_URL = os.environ.get('THUCS_API_BASE_URL', 'https://api-ai.thucs.cn')
-THUCS_API_KEY = os.environ.get('THUCS_API_KEY', 'sk-7SwlMoXweFz18Xv8eI7Z1A')
-THUCS_MODEL_NAME = os.environ.get('THUCS_MODEL_NAME', 'qwen-plus')
+# THUCS_API_BASE_URL = os.environ.get('THUCS_API_BASE_URL', 'https://api-ai.thucs.cn')
+THUCS_API_BASE_URL = os.environ.get('THUCS_API_BASE_URL', "https://dashscope.aliyuncs.com/compatible-mode")
+THUCS_API_KEY = os.environ.get('THUCS_API_KEY', 'sk-f0a508fdb3c44799a4d55ebd55e5853f')
+# THUCS_MODEL_NAME = os.environ.get('THUCS_MODEL_NAME', 'qwen-plus')
+THUCS_MODEL_NAME = os.environ.get('THUCS_MODEL_NAME', 'deepseek-v4-flash')
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.1/ref/settings/#default-auto-field
