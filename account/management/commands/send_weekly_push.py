@@ -50,6 +50,16 @@ class Command(BaseCommand):
             "--period-end",
             help="Override weekly period end datetime in ISO format, for example 2026-04-22T23:59:59+08:00",
         )
+        parser.add_argument(
+            "--force",
+            action="store_true",
+            help=(
+                "Force-resend even to users already marked as sent for this period. "
+                "Failures only log without aborting, and the current cycle is NOT archived/promoted, "
+                "so the scheduled push still runs normally afterward. "
+                "Users without personal updates are still skipped."
+            ),
+        )
     def handle(self, *args, **options):
         delivery_context = _load_weekly_delivery_context(
             options["cycle"],
@@ -90,6 +100,7 @@ class Command(BaseCommand):
                 period_start=period_start,
                 period_end=period_end,
                 stdout=self.stdout,
+                force=options.get("force", False),
             )
             if skipped:
                 continue
@@ -102,6 +113,13 @@ class Command(BaseCommand):
             self.stdout.write(
                 f"Weekly push period {period_key}: completed delivery attempts for {len(pending_users)} user(s)."
             )
+
+        if options.get("force"):
+            # --force 是手动测试通道，不应当推进归档/桶轮转，免得搅乱本周正式发送。
+            self.stdout.write(
+                f"Weekly push period {period_key}: --force run, skipped archive and cycle promotion."
+            )
+            return
 
         if not delivery_context["uses_current_cycle"]:
             self.stdout.write(
@@ -227,6 +245,7 @@ def _deliver_weekly_push_for_user(
     period_start: datetime,
     period_end: datetime,
     stdout,
+    force: bool = False,
 ) -> bool:
     push_record = _get_or_create_weekly_push_record(
         user=user,
@@ -235,7 +254,7 @@ def _deliver_weekly_push_for_user(
         period_end=period_end,
     )
 
-    if push_record.status == PushRecord.STATUS_SENT:
+    if not force and push_record.status == PushRecord.STATUS_SENT:
         stdout.write(
             f"{user.username}: skipped, already sent for weekly period {period_key}."
         )
@@ -248,6 +267,8 @@ def _deliver_weekly_push_for_user(
         _mark_push_record_failed(push_record, error_message)
         stdout.write(f"{user.username}: failed before email delivery completed.")
         stdout.write(f"{user.username}: failure reason: {error_message}")
+        if force:
+            return False
         raise CommandError(
             f"Weekly push email failed for user {user.username}: {error_message}"
         ) from exc
@@ -277,6 +298,8 @@ def _deliver_weekly_push_for_user(
     )
     if not result["sent"]:
         stdout.write(f"{user.username}: failure reason: {error_message}")
+        if force:
+            return False
         raise CommandError(
             f"Weekly push email failed for user {user.username}: {error_message}"
         )

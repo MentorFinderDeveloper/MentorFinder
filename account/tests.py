@@ -2329,6 +2329,72 @@ class WeeklyPushCommandTests(TestCase):
         self.assertIn("weekly_user: skipped, already sent for weekly period 20260416_20260422.", out.getvalue())
 
     @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
+    def test_weekly_push_command_force_resends_to_already_sent_user(self, mock_send_weekly_push_email):
+        # --force 通道：忽略 PushRecord.STATUS_SENT 检查，强制重新发邮件；
+        # 同时不应当推进归档/桶轮转，免得搅乱当周正式发送。
+        mock_send_weekly_push_email.return_value = {
+            "sent": True,
+            "digest": {"totalPaperCount": 1},
+        }
+        PushRecord.objects.create(
+            user=self.user,
+            type=PushRecord.TYPE_WEEKLY,
+            period_key=self.current_period_key,
+            period_start=timezone.datetime(2026, 4, 16, 0, 0, tzinfo=timezone.get_current_timezone()),
+            period_end=timezone.datetime(2026, 4, 22, 23, 59, 59, tzinfo=timezone.get_current_timezone()),
+            status=PushRecord.STATUS_SENT,
+            sent_at=timezone.now(),
+        )
+
+        out = StringIO()
+        call_command(
+            "send_weekly_push",
+            "--force",
+            "--user",
+            "weekly_user",
+            *self.current_period_args(),
+            stdout=out,
+        )
+
+        # 已发用户也应当被再次调用一次 service，而不是直接 skip。
+        self.assertEqual(mock_send_weekly_push_email.call_count, 1)
+        self.assertNotIn("already sent for weekly period", out.getvalue())
+        self.assertIn("--force run, skipped archive and cycle promotion", out.getvalue())
+        # --force 不归档：当前周期桶应保留
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT).count(),
+            1,
+        )
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_ARCHIVED).count(),
+            0,
+        )
+
+    @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
+    def test_weekly_push_command_force_logs_failure_without_aborting(self, mock_send_weekly_push_email):
+        # --force 模式下任何用户失败都不应抛 CommandError，让循环把所有用户跑完。
+        mock_send_weekly_push_email.return_value = {
+            "sent": False,
+            "digest": {"totalPaperCount": 0},
+            "errorMessage": "smtp timeout",
+        }
+
+        out = StringIO()
+        # 不应抛错：用 call_command 直接调用，没有 assertRaises 包裹。
+        call_command(
+            "send_weekly_push",
+            "--force",
+            "--user",
+            "weekly_user",
+            *self.current_period_args(),
+            stdout=out,
+        )
+
+        self.assertIn("weekly_user: failure reason: smtp timeout", out.getvalue())
+        push_record = PushRecord.objects.get(user=self.user, period_key=self.current_period_key)
+        self.assertEqual(push_record.status, PushRecord.STATUS_FAILED)
+
+    @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
     def test_weekly_push_command_retries_failed_user_without_duplicate_success(self, mock_send_weekly_push_email):
         mock_send_weekly_push_email.return_value = {
             "sent": True,
