@@ -7,13 +7,13 @@ from django.http import HttpRequest
 from django.db.models import Q
 from django.utils.timezone import localtime
 
-from account.models import MentorVerificationRequest, User, UserFollow, UserProfile
+from account.models import MentorVerificationRequest, SubjectFollow, User, UserFollow, UserProfile
 from utils.utils_jwt import generate_jwt_token
 from utils.utils_request import BAD_METHOD, request_failed, request_success
 from utils.utils_require import CheckRequire, MAX_CHAR_LENGTH, require
 
 from utils.utils_jwt import check_jwt_token
-from dataset.models import Mentor
+from dataset.models import Mentor, Paper
 from account.models import MentorFollow
 from search.serializers import MentorSerializer
 
@@ -171,6 +171,54 @@ def _serialize_follow_user(user: User, current_user: User | None = None):
         "avatarUrl": profile.avatar_url if profile is not None else "",
         "signature": profile.signature if profile is not None else "",
         "followed": followed,
+    }
+
+
+def _split_subjects(subjects: str | None) -> list[str]:
+    if not subjects:
+        return []
+    return [subject.strip() for subject in subjects.split(",") if subject.strip()]
+
+
+def _collect_subject_counts() -> dict[str, int]:
+    subject_counts: dict[str, int] = {}
+    subjects_query = Paper.objects.values_list("subjects", flat=True).iterator(chunk_size=500)
+    for subjects in subjects_query:
+        for subject in _split_subjects(subjects):
+            subject_counts[subject] = subject_counts.get(subject, 0) + 1
+    return subject_counts
+
+
+def _papers_for_subject(subject: str):
+    return [
+        paper
+        for paper in Paper.objects.filter(subjects__icontains=subject).order_by("-publish_date", "-id")
+        if subject in _split_subjects(paper.subjects)
+    ]
+
+
+def _serialize_subject_paper(paper: Paper):
+    return {
+        "id": paper.id,
+        "title": paper.title,
+        "abstract": paper.abstract,
+        "tldr": paper.tldr,
+        "publish_date": str(paper.publish_date) if paper.publish_date else "",
+        "author_names": paper.author_names,
+        "subjects": paper.subjects,
+        "arxiv_id": paper.arxiv_id,
+        "arxiv_url": paper.arxiv_url,
+        "mentor_ids": paper.get_author_mentor_ids(),
+    }
+
+
+def _serialize_subject_follow(subject: str, subject_counts: dict[str, int] | None = None):
+    counts = subject_counts if subject_counts is not None else _collect_subject_counts()
+    papers = _papers_for_subject(subject)
+    return {
+        "subject": subject,
+        "paperCount": counts.get(subject, len(papers)),
+        "recentPapers": [_serialize_subject_paper(paper) for paper in papers[:8]],
     }
 
 
@@ -415,6 +463,71 @@ def followed_users(req: HttpRequest):
 
     return request_success({
         "users": users,
+    })
+
+
+@CheckRequire
+def followed_subjects(req: HttpRequest):
+    if req.method != "GET":
+        return BAD_METHOD
+
+    user, auth_error = _require_user(req)
+    if auth_error is not None:
+        return auth_error
+
+    subject_counts = _collect_subject_counts()
+    followed_subjects_set = set(
+        SubjectFollow.objects.filter(user=user).values_list("subject", flat=True)
+    )
+    available_subjects = [
+        {
+            "subject": subject,
+            "paperCount": count,
+            "followed": subject in followed_subjects_set,
+        }
+        for subject, count in sorted(subject_counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+    followed_subjects_data = [
+        _serialize_subject_follow(subject, subject_counts)
+        for subject in SubjectFollow.objects.filter(user=user).values_list("subject", flat=True)
+    ]
+
+    return request_success({
+        "subjects": followed_subjects_data,
+        "availableSubjects": available_subjects,
+    })
+
+
+@CheckRequire
+def follow_subject(req: HttpRequest, subject: str):
+    if req.method not in ["POST", "DELETE"]:
+        return BAD_METHOD
+
+    user, auth_error = _require_user(req)
+    if auth_error is not None:
+        return auth_error
+
+    normalized_subject = subject.strip()
+    if normalized_subject == "":
+        return request_failed(-2, "Invalid parameters. [subject] cannot be empty", 400)
+    if len(normalized_subject) > 100:
+        return request_failed(-2, "Invalid parameters. [subject] is too long", 400)
+
+    subject_counts = _collect_subject_counts()
+    if normalized_subject not in subject_counts:
+        return request_failed(2, "Subject not found", 404)
+
+    if req.method == "POST":
+        SubjectFollow.objects.get_or_create(user=user, subject=normalized_subject)
+        return request_success({
+            "followed": True,
+            "subject": _serialize_subject_follow(normalized_subject, subject_counts),
+        })
+
+    SubjectFollow.objects.filter(user=user, subject=normalized_subject).delete()
+    return request_success({
+        "followed": False,
+        "subject": normalized_subject,
     })
 
 
