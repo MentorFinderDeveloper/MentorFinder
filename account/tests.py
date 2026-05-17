@@ -1617,7 +1617,7 @@ class WeeklyPushDigestTests(TestCase):
         self.assertEqual(digest["totalPaperCount"], 2)
         self.assertEqual(
             digest["title"],
-            "[MentorFinder]你关注的导师本周有 2 篇新论文",
+            "[MentorFinder]你关注的导师或板块本周有 2 篇新论文",
         )
 
         mentor_names = {
@@ -1714,7 +1714,53 @@ class WeeklyPushDigestTests(TestCase):
         self.assertEqual(digest["summary"], "本周无论文更新")
         self.assertEqual(digest["totalPaperCount"], 0)
         self.assertEqual(digest["mentorGroups"], [])
+        self.assertEqual(digest["subjectGroups"], [])
         self.assertEqual(digest["subjectDistribution"], [])
+
+    def test_build_weekly_digest_groups_followed_subject_papers(self):
+        SubjectFollow.objects.create(user=self.user, subject="cs.DB")
+
+        digest = build_weekly_push_digest(
+            self.user,
+            [
+                [self.unrelated_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        self.assertEqual(digest["hasUpdates"], True)
+        self.assertEqual(digest["totalPaperCount"], 1)
+        self.assertEqual(digest["mentorGroups"], [])
+        self.assertEqual(len(digest["subjectGroups"]), 1)
+        self.assertEqual(digest["subjectGroups"][0]["subject"], "cs.DB")
+        self.assertEqual(digest["subjectGroups"][0]["paperCount"], 1)
+        self.assertEqual(digest["subjectGroups"][0]["papers"][0]["title"], "不应推送的论文")
+
+    def test_build_weekly_digest_deduplicates_mentor_and_subject_matches(self):
+        SubjectFollow.objects.create(user=self.user, subject="cs.AI")
+
+        digest = build_weekly_push_digest(
+            self.user,
+            [
+                [self.followed_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        self.assertEqual(digest["totalPaperCount"], 1)
+        self.assertEqual(len(digest["mentorGroups"]), 1)
+        self.assertEqual(len(digest["subjectGroups"]), 1)
+        self.assertEqual(digest["subjectGroups"][0]["papers"][0]["title"], "机器学习方法研究")
 
     def test_render_weekly_push_email_includes_digest_sections(self):
         digest = build_weekly_push_digest(
@@ -1734,7 +1780,7 @@ class WeeklyPushDigestTests(TestCase):
 
         self.assertEqual(
             email_content["subject"],
-            "[MentorFinder]你关注的导师本周有 2 篇新论文",
+            "[MentorFinder]你关注的导师或板块本周有 2 篇新论文",
         )
         self.assertIn("按导师分组：", email_content["body"])
         self.assertIn("- 张三：1 篇", email_content["body"])
@@ -1768,6 +1814,28 @@ class WeeklyPushDigestTests(TestCase):
             "系统当前未检测到你关注的导师或私有导师有新增论文。",
             email_content["body"],
         )
+        self.assertIn("你关注的板块本周也暂无新增论文。", email_content["body"])
+
+    def test_render_weekly_push_email_includes_subject_groups(self):
+        SubjectFollow.objects.create(user=self.user, subject="cs.DB")
+        digest = build_weekly_push_digest(
+            self.user,
+            [
+                [self.unrelated_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        email_content = render_weekly_push_email(digest)
+
+        self.assertIn("按关注板块分组：", email_content["body"])
+        self.assertIn("- cs.DB：1 篇", email_content["body"])
+        self.assertIn("1. 不应推送的论文", email_content["body"])
 
     @patch("account.services.weekly_push.send_mail")
     def test_send_weekly_push_email_sends_rendered_digest(self, mock_send_mail):
@@ -1795,7 +1863,7 @@ class WeeklyPushDigestTests(TestCase):
         send_kwargs = mock_send_mail.call_args.kwargs
         self.assertEqual(
             send_kwargs["subject"],
-            "[MentorFinder]你关注的导师本周有 2 篇新论文",
+            "[MentorFinder]你关注的导师或板块本周有 2 篇新论文",
         )
         self.assertEqual(send_kwargs["recipient_list"], ["digest_user@example.com"])
         self.assertEqual(send_kwargs["fail_silently"], False)
