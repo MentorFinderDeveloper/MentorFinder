@@ -12,6 +12,10 @@ build:
     - export BUILD_IMAGE_TAG=$CI_COMMIT_REF_SLUG
     - export BUILD_IMAGE_USERNAME=$CI_REGISTRY_USER
     - export BUILD_IMAGE_PASSWORD=$CI_REGISTRY_PASSWORD
+    # 把 GitLab CI/CD Variables 中的 163 SMTP 凭据写成 .env，
+    # 然后由 Dockerfile 的 COPY . . 随镜像带入，容器启动时由 load_dotenv 读取。
+    - echo "EMAIL_HOST_USER=$EMAIL_HOST_USER" > .env
+    - echo "EMAIL_HOST_PASSWORD=$EMAIL_HOST_PASSWORD" >> .env
     - deployer build
 
 unit-test:
