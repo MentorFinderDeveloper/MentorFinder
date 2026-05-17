@@ -16,6 +16,9 @@ build:
     # 然后由 Dockerfile 的 COPY . . 随镜像带入，容器启动时由 load_dotenv 读取。
     - echo "EMAIL_HOST_USER=$EMAIL_HOST_USER" > .env
     - echo "EMAIL_HOST_PASSWORD=$EMAIL_HOST_PASSWORD" >> .env
+    - echo "DJANGO_SUPERUSER_USERNAME=$DJANGO_SUPERUSER_USERNAME" >> .env
+    - echo "DJANGO_SUPERUSER_EMAIL=$DJANGO_SUPERUSER_EMAIL" >> .env
+    - echo "DJANGO_SUPERUSER_PASSWORD=$DJANGO_SUPERUSER_PASSWORD" >> .env
     - deployer build
 
 unit-test:
