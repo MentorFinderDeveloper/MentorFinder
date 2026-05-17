@@ -9,6 +9,8 @@ urlpatterns = [
     path('register/verification-code', views.send_email_verification_code),
     path("follow/mentors", views.followed_mentors),
     path("follow/mentors/<int:mentor_id>", views.follow_mentor),
+    path("follow/subjects", views.followed_subjects),
+    path("follow/subjects/<str:subject>", views.follow_subject),
     path("follow/users", views.followed_users),
     path("follow/followers", views.follower_users),
     path("follow/users/<int:user_id>", views.follow_user),

@@ -197,6 +197,23 @@ class UserFollow(models.Model):
         return f"{self.follower.username} follows {self.following.username}"
 
 
+class SubjectFollow(models.Model):
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="subject_follows",
+    )
+    subject = models.CharField(max_length=100, verbose_name="关注板块")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("user", "subject")
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.user.username} follows {self.subject}"
+
+
 class WeeklyPushPaperBucket(models.Model):
     CYCLE_CURRENT = "current"
     CYCLE_NEXT = "next"
