@@ -24,7 +24,8 @@ from dataset.services.author_matching import (
     is_exact_english_author_match,
     normalize_english_name,
 )
-from account.models import User as AccountUser, WeeklyPushPaperBucket
+from dataset.services.weekly_push_summary import resolve_week_range
+from account.models import MentorFollow, User as AccountUser, WeeklyPushPaperBucket
 from account.services.weekly_push_files import build_weekly_push_bucket_period_key
 from utils.utils_jwt import generate_jwt_token
 
@@ -1257,6 +1258,76 @@ class TimelineViewTest(TestCase):
         self.assertEqual(data["papers"][0]["subjects"], "cs.AI, cs.LG")
         self.assertEqual(data["papers"][0]["mentor_ids"], [self.mentor_li.id])
 
+    def test_timeline_direction_response_supports_offset_limit_slicing(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "人工智能 (Artificial Intelligence)",
+                "offset": 0,
+                "limit": 1,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["direction"], "人工智能 (Artificial Intelligence)")
+        self.assertEqual(data["offset"], 0)
+        self.assertEqual(data["limit"], 1)
+        self.assertEqual(data["total_papers"], 2)
+        self.assertFalse(data["has_previous"])
+        self.assertTrue(data["has_next"])
+        self.assertEqual(len(data["papers"]), 1)
+        self.assertEqual(data["papers"][0]["id"], self.paper_ai_new.id)
+
+    def test_timeline_offset_limit_middle_slice_reports_both_directions(self):
+        middle_paper = Paper.objects.create(
+            title="AI 中间论文",
+            abstract="摘要中间",
+            publish_date=date(2024, 2, 1),
+            author_names="李四",
+            subjects="cs.AI",
+            arxiv_url="https://arxiv.org/abs/5555.5555",
+            tldr="tldr-middle",
+        )
+
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "人工智能 (Artificial Intelligence)",
+                "offset": 1,
+                "limit": 1,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["offset"], 1)
+        self.assertEqual(data["limit"], 1)
+        self.assertEqual(data["total_papers"], 3)
+        self.assertTrue(data["has_previous"])
+        self.assertTrue(data["has_next"])
+        self.assertEqual(len(data["papers"]), 1)
+        self.assertEqual(data["papers"][0]["id"], middle_paper.id)
+
+    def test_timeline_offset_limit_tail_slice_reports_no_next(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "人工智能 (Artificial Intelligence)",
+                "offset": 1,
+                "limit": 5,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["offset"], 1)
+        self.assertEqual(data["limit"], 5)
+        self.assertTrue(data["has_previous"])
+        self.assertFalse(data["has_next"])
+        self.assertEqual(len(data["papers"]), 1)
+        self.assertEqual(data["papers"][0]["id"], self.paper_ai_old.id)
+
     def test_timeline_papers_return_author_aligned_mentor_ids(self):
         mixed_paper = Paper.objects.create(
             title="混合作者论文",
@@ -1296,6 +1367,25 @@ class TimelineViewTest(TestCase):
         data = response.json()
         self.assertEqual(data["page_size"], 100)
         self.assertEqual(data["total_papers"], 1)
+        self.assertEqual(data["papers"][0]["id"], self.paper_other.id)
+
+    def test_timeline_offset_and_limit_are_normalized(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "其他/未分类",
+                "offset": -2,
+                "limit": 999,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["offset"], 0)
+        self.assertEqual(data["limit"], 100)
+        self.assertFalse(data["has_previous"])
+        self.assertFalse(data["has_next"])
+        self.assertEqual(len(data["papers"]), 1)
         self.assertEqual(data["papers"][0]["id"], self.paper_other.id)
 
     def test_timeline_rejects_bad_method(self):
@@ -1368,6 +1458,24 @@ class TimelineViewTest(TestCase):
         self.assertEqual(data["page"], 2)
         self.assertFalse(data["has_next"])
         self.assertTrue(data["has_previous"])
+        self.assertEqual(data["papers"][0]["id"], self.paper_ai_old.id)
+
+    def test_timeline_offset_above_total_clamps_to_last_available_item(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": "人工智能 (Artificial Intelligence)",
+                "offset": 999,
+                "limit": 5,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["offset"], 1)
+        self.assertTrue(data["has_previous"])
+        self.assertFalse(data["has_next"])
+        self.assertEqual(len(data["papers"]), 1)
         self.assertEqual(data["papers"][0]["id"], self.paper_ai_old.id)
 
     def test_timeline_unknown_direction_returns_empty_page(self):
@@ -1747,6 +1855,123 @@ class DatasetViewBoundaryTest(TestCase):
 
         self.assertEqual(response.status_code, 403)
         self.assertTrue(Mentor.objects.filter(id=self.mentor.id).exists())
+
+
+class PersonalizedWeeklyPushViewTest(TestCase):
+    """测试首页专属周报接口"""
+
+    def setUp(self):
+        self.client = Client()
+        self.user = AccountUser.objects.create_user(
+            username="personalized_user",
+            email="personalized@example.com",
+            password="student12345",
+            role="student",
+        )
+        self.token = generate_jwt_token("personalized_user")
+        self.other_user = AccountUser.objects.create_user(
+            username="other_personalized_user",
+            email="other-personalized@example.com",
+            password="student12345",
+            role="student",
+        )
+
+        self.followed_mentor = Mentor.objects.create(
+            Chinese_name="关注导师",
+            English_name="Followed Mentor",
+            research_direction="机器学习",
+        )
+        self.private_mentor = Mentor.objects.create(
+            Chinese_name="私有导师",
+            English_name="Private Mentor",
+            research_direction="自然语言处理",
+            owner=self.user,
+        )
+        self.unrelated_mentor = Mentor.objects.create(
+            Chinese_name="无关导师",
+            English_name="Other Mentor",
+            research_direction="数据库",
+            owner=self.other_user,
+        )
+        MentorFollow.objects.create(student=self.user, mentor=self.followed_mentor)
+
+        week_start, week_end = resolve_week_range(0, today=timezone.localdate())
+        self.followed_paper = Paper.objects.create(
+            title="关注导师本周论文",
+            abstract="关注导师的论文摘要",
+            publish_date=week_end,
+            author_names="关注导师, Alice",
+            subjects="cs.LG",
+            arxiv_id="2605.00001",
+        )
+        self.private_paper = Paper.objects.create(
+            title="私有导师本周论文",
+            abstract="私有导师的论文摘要",
+            publish_date=week_end - timedelta(days=1),
+            author_names="私有导师, Bob",
+            subjects="cs.CL",
+        )
+        self.unrelated_paper = Paper.objects.create(
+            title="无关导师本周论文",
+            abstract="无关摘要",
+            publish_date=week_end - timedelta(days=2),
+            author_names="无关导师",
+            subjects="cs.DB",
+        )
+        self.old_followed_paper = Paper.objects.create(
+            title="关注导师旧论文",
+            abstract="旧论文摘要",
+            publish_date=week_start - timedelta(days=1),
+            author_names="关注导师, Alice",
+            subjects="cs.AI",
+        )
+
+        self.followed_mentor.add_paper(self.followed_paper.id)
+        self.followed_mentor.add_paper(self.old_followed_paper.id)
+        self.private_mentor.add_paper(self.private_paper.id)
+        self.unrelated_mentor.add_paper(self.unrelated_paper.id)
+
+    def test_personalized_weekly_push_requires_login(self):
+        response = self.client.post("/dataset/weekly-push/personalized")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json()["code"], 2)
+
+    @patch("dataset.services.weekly_push_summary.build_ai_summary_with_fallback")
+    def test_personalized_weekly_push_only_uses_followed_and_private_mentor_weekly_papers(self, mock_ai_summary):
+        mock_ai_summary.return_value = ("AI专属周报总结", "thucs-openai")
+
+        response = self.client.post(
+            "/dataset/weekly-push/personalized",
+            HTTP_AUTHORIZATION=f"Bearer {self.token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["weeklyPush"]
+        self.assertEqual(payload["paperCount"], 2)
+        self.assertEqual(payload["trackedMentorCount"], 2)
+        self.assertEqual(payload["activeMentorCount"], 2)
+        self.assertEqual(payload["generatedBy"], "thucs-openai")
+        self.assertEqual(payload["aiSummary"], "AI专属周报总结")
+
+        returned_titles = [paper["title"] for paper in payload["papers"]]
+        self.assertEqual(
+            returned_titles,
+            ["关注导师本周论文", "私有导师本周论文"],
+        )
+        self.assertEqual(payload["papers"][0]["mentorNames"], ["关注导师"])
+        self.assertEqual(payload["papers"][1]["mentorNames"], ["私有导师"])
+
+        mentor_group_names = [group["mentorName"] for group in payload["mentorGroups"]]
+        self.assertEqual(mentor_group_names, ["关注导师", "私有导师"])
+        self.assertEqual(
+            payload["subjectDistribution"],
+            [
+                {"subject": "cs.CL", "count": 1},
+                {"subject": "cs.LG", "count": 1},
+            ],
+        )
+        self.assertIn("AI专属周报总结", payload["content"])
 
 
 class MentorRecentDirectionAnalysisViewTest(TestCase):

@@ -1,7 +1,7 @@
 import json
 import tempfile
 from io import StringIO
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from unittest.mock import patch
 from pathlib import Path
 
@@ -11,7 +11,7 @@ from django.core.management.base import CommandError
 from django.test import TestCase
 from django.utils import timezone
 
-from account.models import MentorVerificationRequest, PushRecord, User, MentorFollow, SubjectFollow, UserFollow, UserProfile, WeeklyPushPaperBucket
+from account.models import EmailVerificationCode, MentorVerificationRequest, PushRecord, User, MentorFollow, SubjectFollow, UserFollow, UserProfile, WeeklyPushPaperBucket
 from account.management.commands.send_weekly_push import _build_weekly_period_metadata
 from account.services import weekly_push_files
 from account.services.weekly_push_files import (
@@ -46,6 +46,17 @@ class AccountAuthTests(TestCase):
 
     def post_json(self, path: str, payload: dict):
         return self.client.post(path, data=json.dumps(payload), content_type="application/json")
+
+    def issue_verification_code(self, email: str, code: str = "123456", expires_in: timedelta = timedelta(minutes=10)) -> str:
+        """预置一条有效验证码记录，返回 6 位 code，供 register 测试用。"""
+        EmailVerificationCode.objects.update_or_create(
+            email=email.strip(),
+            defaults={
+                "code": code,
+                "expires_at": timezone.now() + expires_in,
+            },
+        )
+        return code
 
     def test_login_existing_user_correct_password(self):
         res = self.post_json("/login", {"username": "Ashitemaru", "password": "abc12345"})
@@ -86,9 +97,10 @@ class AccountAuthTests(TestCase):
         self.assertEqual(res.json()["info"], "Wrong password")
 
     def test_register_success(self):
+        code = self.issue_verification_code("newuser@example.com")
         res = self.post_json(
             "/register",
-            {"username": "NewUser", "password": "abc12345", "email": "newuser@example.com"},
+            {"username": "NewUser", "password": "abc12345", "email": "newuser@example.com", "verificationCode": code},
         )
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
@@ -100,9 +112,10 @@ class AccountAuthTests(TestCase):
         self.assertTrue(check_password("abc12345", user.password))
 
     def test_register_success_with_underscore_and_hyphen_username(self):
+        code = self.issue_verification_code("new-user@example.com")
         res = self.post_json(
             "/register",
-            {"username": "new_user-1", "password": "abc12345", "email": "new-user@example.com"},
+            {"username": "new_user-1", "password": "abc12345", "email": "new-user@example.com", "verificationCode": code},
         )
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
@@ -163,17 +176,19 @@ class AccountAuthTests(TestCase):
         self.assertEqual(res.json()["code"], -2)
 
     def test_register_valid_email_with_plus_tag(self):
+        code = self.issue_verification_code("user+tag@example.com")
         res = self.post_json(
             "/register",
-            {"username": "PlusTagUser", "password": "abc12345", "email": "user+tag@example.com"},
+            {"username": "PlusTagUser", "password": "abc12345", "email": "user+tag@example.com", "verificationCode": code},
         )
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
 
     def test_register_email_with_surrounding_spaces(self):
+        code = self.issue_verification_code("trim@example.com")
         res = self.post_json(
             "/register",
-            {"username": "TrimEmailUser", "password": "abc12345", "email": "  trim@example.com  "},
+            {"username": "TrimEmailUser", "password": "abc12345", "email": "  trim@example.com  ", "verificationCode": code},
         )
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
@@ -219,6 +234,107 @@ class AccountAuthTests(TestCase):
 
     def test_register_bad_method(self):
         res = self.client.get("/register")
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+    def test_register_requires_verification_code(self):
+        res = self.post_json(
+            "/register",
+            {"username": "NoCodeUser", "password": "abc12345", "email": "nocode@example.com"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], 5)
+        self.assertFalse(User.objects.filter(username="NoCodeUser").exists())
+
+    def test_register_invalid_verification_code(self):
+        self.issue_verification_code("badcode@example.com", code="111111")
+        res = self.post_json(
+            "/register",
+            {"username": "BadCodeUser", "password": "abc12345", "email": "badcode@example.com", "verificationCode": "999999"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], 5)
+        self.assertFalse(User.objects.filter(username="BadCodeUser").exists())
+        # 错误码不应被消费，原记录仍在
+        self.assertTrue(EmailVerificationCode.objects.filter(email="badcode@example.com").exists())
+
+    def test_register_expired_verification_code_rejected(self):
+        self.issue_verification_code("expired@example.com", code="123456", expires_in=timedelta(seconds=-1))
+        res = self.post_json(
+            "/register",
+            {"username": "ExpiredUser", "password": "abc12345", "email": "expired@example.com", "verificationCode": "123456"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], 5)
+        # 过期记录在校验时被清理
+        self.assertFalse(EmailVerificationCode.objects.filter(email="expired@example.com").exists())
+
+    def test_register_consumes_verification_code(self):
+        code = self.issue_verification_code("consume@example.com")
+        res = self.post_json(
+            "/register",
+            {"username": "ConsumeUser", "password": "abc12345", "email": "consume@example.com", "verificationCode": code},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        # 注册成功后验证码记录应被消费
+        self.assertFalse(EmailVerificationCode.objects.filter(email="consume@example.com").exists())
+
+    def test_register_bypass_email_skips_verification(self):
+        res = self.post_json(
+            "/register",
+            {"username": "BypassUser", "password": "abc12345", "email": "bypass-tester@example.com"},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertTrue(User.objects.filter(username="BypassUser", email="bypass-tester@example.com").exists())
+
+    def test_register_bypass_prefix_is_case_insensitive(self):
+        res = self.post_json(
+            "/register",
+            {"username": "BypassMixed", "password": "abc12345", "email": "ByPaSStester2@example.com"},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+
+    def test_send_verification_code_success(self):
+        res = self.post_json("/register/verification-code", {"email": "fresh@example.com"})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["bypass"], False)
+        self.assertEqual(res.json()["cooldownSeconds"], 60)
+        record = EmailVerificationCode.objects.filter(email="fresh@example.com").first()
+        self.assertIsNotNone(record)
+        self.assertEqual(len(record.code), 6)
+        self.assertTrue(record.code.isdigit())
+
+    def test_send_verification_code_bypass_email_returns_bypass_flag(self):
+        res = self.post_json("/register/verification-code", {"email": "bypassuser@example.com"})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertTrue(res.json()["bypass"])
+        # bypass 路径不应落库
+        self.assertFalse(EmailVerificationCode.objects.filter(email="bypassuser@example.com").exists())
+
+    def test_send_verification_code_duplicate_email_rejected(self):
+        res = self.post_json("/register/verification-code", {"email": "ashitemaru@example.com"})
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.json()["code"], 4)
+
+    def test_send_verification_code_invalid_email_format(self):
+        res = self.post_json("/register/verification-code", {"email": "not-an-email"})
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_send_verification_code_cooldown(self):
+        first = self.post_json("/register/verification-code", {"email": "cool@example.com"})
+        self.assertEqual(first.json()["code"], 0)
+        second = self.post_json("/register/verification-code", {"email": "cool@example.com"})
+        self.assertEqual(second.status_code, 429)
+        self.assertEqual(second.json()["code"], 6)
+
+    def test_send_verification_code_bad_method(self):
+        res = self.client.get("/register/verification-code")
         self.assertEqual(res.status_code, 405)
         self.assertEqual(res.json()["code"], -3)
 
@@ -1687,8 +1803,36 @@ class WeeklyPushDigestTests(TestCase):
 
     @patch("account.services.weekly_push.send_mail")
     def test_send_weekly_push_email_reports_send_failure(self, mock_send_mail):
+        # hasUpdates 必须为 True 才会真正调用 send_mail，否则会被跳过返回 skipped=True。
         mock_send_mail.return_value = 0
 
+        result = send_weekly_push_email(
+            self.user,
+            [
+                [self.followed_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        self.assertEqual(result["sent"], False)
+        self.assertEqual(result["sentCount"], 0)
+        self.assertEqual(result["digest"]["hasUpdates"], True)
+        self.assertFalse(result.get("skipped"))
+        self.assertEqual(
+            result["errorMessage"],
+            "Email backend reported zero successful deliveries.",
+        )
+        mock_send_mail.assert_called_once()
+
+    @patch("account.services.weekly_push.send_mail")
+    def test_send_weekly_push_email_skips_when_no_updates(self, mock_send_mail):
+        # 当用户个人周报为空（hasUpdates=False）时，service 层不应触发 SMTP 调用，
+        # 也不应当作失败：返回 skipped=True 以便上游标记 PushRecord 为 sent。
         result = send_weekly_push_email(
             self.user,
             [
@@ -1705,11 +1849,10 @@ class WeeklyPushDigestTests(TestCase):
         self.assertEqual(result["sent"], False)
         self.assertEqual(result["sentCount"], 0)
         self.assertEqual(result["digest"]["hasUpdates"], False)
-        self.assertEqual(
-            result["errorMessage"],
-            "Email backend reported zero successful deliveries.",
-        )
-        mock_send_mail.assert_called_once()
+        self.assertTrue(result.get("skipped"))
+        self.assertEqual(result["skipReason"], "no_personal_updates")
+        self.assertEqual(result["errorMessage"], "")
+        mock_send_mail.assert_not_called()
 
     @patch("account.services.weekly_push.send_mail")
     def test_send_weekly_push_email_captures_send_exception_reason(self, mock_send_mail):
@@ -1995,6 +2138,37 @@ class WeeklyPushCommandTests(TestCase):
             0,
         )
         self.assertIn("weekly_user: failure reason: smtp timeout", out.getvalue())
+
+    @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
+    def test_weekly_push_command_marks_skipped_users_as_sent(self, mock_send_weekly_push_email):
+        # 当 service 返回 skipped=True（用户本周个人周报为空），管理命令应：
+        # 1) 不抛 CommandError；
+        # 2) 把 PushRecord 标为 sent，避免后续 retry 反复重发；
+        # 3) 在 stdout 中输出 "skipped" 提示；
+        # 4) 归档桶照常推进。
+        mock_send_weekly_push_email.return_value = {
+            "sent": False,
+            "sentCount": 0,
+            "errorMessage": "",
+            "skipped": True,
+            "skipReason": "no_personal_updates",
+            "digest": {"totalPaperCount": 0},
+            "email": {"subject": "", "body": ""},
+        }
+
+        out = StringIO()
+        call_command(
+            "send_weekly_push",
+            "--user",
+            "weekly_user",
+            *self.current_period_args(),
+            stdout=out,
+        )
+
+        push_record = PushRecord.objects.get(user=self.user, period_key=self.current_period_key)
+        self.assertEqual(push_record.status, PushRecord.STATUS_SENT)
+        self.assertEqual(push_record.error_message, "")
+        self.assertIn("weekly_user: skipped, no personal updates this week", out.getvalue())
 
     @patch("account.management.commands.send_weekly_push.send_weekly_push_email")
     def test_weekly_push_command_captures_delivery_exception_reason(self, mock_send_weekly_push_email):

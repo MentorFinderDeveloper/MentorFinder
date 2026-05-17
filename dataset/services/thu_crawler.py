@@ -13,18 +13,33 @@ BASE_HEADERS = {
     # "Cookie": "JSESSIONID=9BADD2F3B34224773C1E64E4F391F457.yunxing21"
 }
 
+BRACKETED_TEXT_RE = re.compile(r"\s*[\(（][^()（）]*[\)）]\s*")
+
 def fetch_html(url: str) -> str:
     resp = requests.get(url, headers=BASE_HEADERS, timeout=15)
     resp.raise_for_status()
     resp.encoding = resp.apparent_encoding
     return resp.text
 
+
+def strip_bracketed_name_content(name: str) -> str:
+    normalized = str(name or "").replace("\u3000", " ").strip()
+    if normalized == "":
+        return ""
+
+    previous = None
+    while previous != normalized:
+        previous = normalized
+        normalized = BRACKETED_TEXT_RE.sub(" ", normalized)
+
+    return " ".join(normalized.split()).strip()
+
 def get_english_name(chinese_name: str) -> str:
     """将中文姓名转换为英文拼音，格式为 '名 姓' (例如 'Guangwen Yang')"""
+    chinese_name = strip_bracketed_name_content(chinese_name)
     if not chinese_name:
         return ""
-    
-    chinese_name = chinese_name.strip()
+
     # lazy_pinyin('黄振春') 会返回 ['huang', 'zhen', 'chun']
     pinyin_list = lazy_pinyin(chinese_name)
     
@@ -55,7 +70,7 @@ def parse_mentor_list(ch_url: str) -> list[dict]:
 
 def build_given_name_surname_pinyin(chinese_name: str) -> str:
     """将中文姓名转换为名-姓全拼，例如“唐杰” -> "jie-tang"。"""
-    normalized = chinese_name.strip()
+    normalized = strip_bracketed_name_content(chinese_name)
     if normalized == "":
         return ""
 
@@ -71,7 +86,7 @@ def build_given_name_surname_pinyin(chinese_name: str) -> str:
 
 
 def _normalize_name(name: str) -> str:
-    lowered = name.strip().lower()
+    lowered = strip_bracketed_name_content(name).lower()
     # Support inputs like "jie-tang" and "tang, jie" by normalizing separators.
     lowered = lowered.replace("-", " ").replace(",", " ")
     return " ".join(lowered.split())
@@ -91,7 +106,7 @@ def _english_name_variants(english_name: str) -> set[str]:
 
 
 def crawl_mentor_by_name(chinese_name: str = "", english_name: str = "") -> dict | None:
-    target_cn = chinese_name.strip()
+    target_cn = strip_bracketed_name_content(chinese_name)
     target_en_variants = _english_name_variants(english_name)
 
     if target_cn == "" and not target_en_variants:
@@ -120,14 +135,15 @@ def crawl_mentor_by_name(chinese_name: str = "", english_name: str = "") -> dict
 def parse_mentor_detail(detail_url: str) -> dict:
     html = fetch_html(detail_url)
     soup = BeautifulSoup(html, "lxml")
-    
+    #查找研究领域
     start_node = soup.find(lambda tag: tag.name == "p" and "研究领域" in tag.get_text())
     direction_list = []
 
     if start_node:
         for sibling in start_node.find_next_siblings():
             if sibling.find('strong') or sibling.name=='h4' or "研究概况" in sibling.get_text(strip = True)  \
-                or "讲授课程" in sibling.get_text(strip = True) or "工作履历" in sibling.get_text(strip = True):
+                or "讲授课程" in sibling.get_text(strip = True) or "工作履历" in sibling.get_text(strip = True)  \
+                or "研究概况" in sibling.get_text(strip = True) or "奖励与荣誉" in sibling.get_text(strip = True):
                 break
             text = sibling.get_text(strip=True)
             if text:
@@ -151,7 +167,7 @@ def parse_mentor_detail(detail_url: str) -> dict:
         if start_node:
             for sibling in start_node.find_next_siblings():
                 if sibling.find('strong') or "学术成果" in sibling.get_text(strip = True)   \
-                    or "代表性论文" in sibling.get_text(strip = True):
+                    or "代表性论文" in sibling.get_text(strip = True) or "研究概况" in sibling.get_text(strip = True) or "奖励与荣誉" in sibling.get_text(strip = True):
                     break
                 text = sibling.get_text(strip=True)
                 if text:
@@ -162,7 +178,7 @@ def parse_mentor_detail(detail_url: str) -> dict:
 
     # 提取中文名
     chinese_name_raw = soup.select_one("title").get_text().split('-')[0]
-    chinese_name = chinese_name_raw.strip() if chinese_name_raw else ""
+    chinese_name = strip_bracketed_name_content(chinese_name_raw)
 
     return {
         "Chinese_name": chinese_name,

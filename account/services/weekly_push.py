@@ -20,7 +20,7 @@ def build_weekly_push_digest(
     mentor_groups = []
     matched_papers_by_id = {}
 
-    for mentor in _collect_target_mentors(user):
+    for mentor in collect_target_mentors(user):
         mentor_papers = _match_mentor_papers(mentor, weekly_papers)
         if not mentor_papers:
             continue
@@ -126,6 +126,19 @@ def send_weekly_push_email(
     digest = build_weekly_push_digest(user, daily_paper_lists)
     email_content = render_weekly_push_email(digest)
 
+    # 仅在用户个人周报有内容（匹配到关注/私有导师的新论文）时才真正发送邮件，
+    # 通用空白周报不发邮件，避免打扰用户。
+    if not digest.get("hasUpdates"):
+        return {
+            "digest": digest,
+            "email": email_content,
+            "sent": False,
+            "sentCount": 0,
+            "errorMessage": "",
+            "skipped": True,
+            "skipReason": "no_personal_updates",
+        }
+
     sent_count = 0
     error_message = ""
     try:
@@ -148,6 +161,8 @@ def send_weekly_push_email(
         "sent": sent_count > 0,
         "sentCount": sent_count,
         "errorMessage": error_message,
+        "skipped": False,
+        "skipReason": "",
     }
 
 
@@ -168,7 +183,7 @@ def _collect_unique_papers(daily_paper_lists: Iterable[Iterable[Paper]]) -> dict
     return papers_by_id
 
 
-def _collect_target_mentors(user: User) -> list[Mentor]:
+def collect_target_mentors(user: User) -> list[Mentor]:
     followed_mentors = (
         MentorFollow.objects
         .filter(student=user)
