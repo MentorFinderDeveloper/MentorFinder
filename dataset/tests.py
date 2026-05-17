@@ -25,7 +25,7 @@ from dataset.services.author_matching import (
     normalize_english_name,
 )
 from dataset.services.weekly_push_summary import resolve_week_range
-from account.models import MentorFollow, User as AccountUser, WeeklyPushPaperBucket
+from account.models import MentorFollow, SubjectFollow, User as AccountUser, WeeklyPushPaperBucket
 from account.services.weekly_push_files import build_weekly_push_bucket_period_key
 from utils.utils_jwt import generate_jwt_token
 
@@ -1951,6 +1951,8 @@ class PersonalizedWeeklyPushViewTest(TestCase):
         self.assertEqual(payload["paperCount"], 2)
         self.assertEqual(payload["trackedMentorCount"], 2)
         self.assertEqual(payload["activeMentorCount"], 2)
+        self.assertEqual(payload["trackedSubjectCount"], 0)
+        self.assertEqual(payload["activeSubjectCount"], 0)
         self.assertEqual(payload["generatedBy"], "thucs-openai")
         self.assertEqual(payload["aiSummary"], "AI专属周报总结")
 
@@ -1972,6 +1974,38 @@ class PersonalizedWeeklyPushViewTest(TestCase):
             ],
         )
         self.assertIn("AI专属周报总结", payload["content"])
+
+    @patch("dataset.services.weekly_push_summary.build_ai_summary_with_fallback")
+    def test_personalized_weekly_push_includes_followed_subject_weekly_papers(self, mock_ai_summary):
+        mock_ai_summary.return_value = ("AI专属周报总结", "thucs-openai")
+        SubjectFollow.objects.create(user=self.user, subject="cs.DB")
+
+        response = self.client.post(
+            "/dataset/weekly-push/personalized",
+            HTTP_AUTHORIZATION=f"Bearer {self.token}",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["weeklyPush"]
+        self.assertEqual(payload["paperCount"], 3)
+        self.assertEqual(payload["trackedSubjectCount"], 1)
+        self.assertEqual(payload["activeSubjectCount"], 1)
+
+        returned_titles = [paper["title"] for paper in payload["papers"]]
+        self.assertEqual(
+            returned_titles,
+            ["关注导师本周论文", "私有导师本周论文", "无关导师本周论文"],
+        )
+        self.assertEqual(payload["subjectGroups"][0]["subject"], "cs.DB")
+        self.assertEqual(payload["subjectGroups"][0]["papers"][0]["title"], "无关导师本周论文")
+        self.assertEqual(
+            payload["subjectDistribution"],
+            [
+                {"subject": "cs.CL", "count": 1},
+                {"subject": "cs.DB", "count": 1},
+                {"subject": "cs.LG", "count": 1},
+            ],
+        )
 
 
 class MentorRecentDirectionAnalysisViewTest(TestCase):

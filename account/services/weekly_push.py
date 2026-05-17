@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from django.conf import settings
 from django.core.mail import send_mail
 
-from account.models import MentorFollow, User
+from account.models import MentorFollow, SubjectFollow, User
 from dataset.models import Mentor, Paper
 
 
@@ -18,6 +18,7 @@ def build_weekly_push_digest(
     """Build one user's weekly paper digest from mocked crawler increments."""
     weekly_papers = _collect_unique_papers(daily_paper_lists)
     mentor_groups = []
+    subject_groups = []
     matched_papers_by_id = {}
 
     for mentor in collect_target_mentors(user):
@@ -43,6 +44,25 @@ def build_weekly_push_digest(
             }
         )
 
+    for subject in collect_target_subjects(user):
+        subject_papers = _match_subject_papers(subject, weekly_papers)
+        if not subject_papers:
+            continue
+
+        for paper in subject_papers:
+            matched_papers_by_id[paper.id] = paper
+
+        subject_groups.append(
+            {
+                "subject": subject,
+                "paperCount": len(subject_papers),
+                "papers": [
+                    _serialize_subject_digest_paper(paper, subject)
+                    for paper in subject_papers
+                ],
+            }
+        )
+
     total_paper_count = len(matched_papers_by_id)
     has_updates = total_paper_count > 0
 
@@ -54,6 +74,7 @@ def build_weekly_push_digest(
         "summary": _build_digest_summary(total_paper_count),
         "totalPaperCount": total_paper_count,
         "mentorGroups": mentor_groups,
+        "subjectGroups": subject_groups,
         "subjectDistribution": _build_subject_distribution(matched_papers_by_id.values()),
     }
 
@@ -68,6 +89,7 @@ def render_weekly_push_email(digest: dict) -> dict:
                 str(digest.get("summary") or "本周无论文更新"),
                 "",
                 "系统当前未检测到你关注的导师或私有导师有新增论文。",
+                "你关注的板块本周也暂无新增论文。",
             ]
         )
         return {
@@ -81,33 +103,51 @@ def render_weekly_push_email(digest: dict) -> dict:
         str(digest.get("summary") or ""),
         f"本周共发现 {digest.get('totalPaperCount', 0)} 篇新增论文。",
         "",
-        "按导师分组：",
     ]
 
-    for group in digest.get("mentorGroups", []):
-        mentor_name = str(group.get("mentorName") or "未命名导师")
-        if group.get("isPrivate"):
-            mentor_name = f"{mentor_name}（私有导师）"
+    if digest.get("mentorGroups"):
+        body_lines.extend(["按导师分组："])
+        for group in digest.get("mentorGroups", []):
+            mentor_name = str(group.get("mentorName") or "未命名导师")
+            if group.get("isPrivate"):
+                mentor_name = f"{mentor_name}（私有导师）"
 
-        body_lines.append(f"- {mentor_name}：{group.get('paperCount', 0)} 篇")
-        body_lines.append(
-            f"  研究方向：{group.get('mentorResearchDirection') or '未提供'}"
-        )
-
-        for index, paper in enumerate(group.get("papers", []), start=1):
-            body_lines.extend(
-                [
-                    f"  {index}. {paper.get('title') or '未命名论文'}",
-                    f"     发表时间：{paper.get('publishDate') or '未知日期'}",
-                    f"     作者：{paper.get('authorNames') or '未提供'}",
-                    f"     所属导师：{paper.get('mentorName') or mentor_name}",
-                    f"     研究方向：{paper.get('researchDirection') or '未提供'}",
-                    f"     分类：{_format_subjects_for_email(paper.get('subjects', []))}",
-                    f"     摘要简述：{paper.get('abstractPreview') or '暂无摘要'}",
-                ]
+            body_lines.append(f"- {mentor_name}：{group.get('paperCount', 0)} 篇")
+            body_lines.append(
+                f"  研究方向：{group.get('mentorResearchDirection') or '未提供'}"
             )
 
-        body_lines.append("")
+            for index, paper in enumerate(group.get("papers", []), start=1):
+                body_lines.extend(
+                    [
+                        f"  {index}. {paper.get('title') or '未命名论文'}",
+                        f"     发表时间：{paper.get('publishDate') or '未知日期'}",
+                        f"     作者：{paper.get('authorNames') or '未提供'}",
+                        f"     所属导师：{paper.get('mentorName') or mentor_name}",
+                        f"     研究方向：{paper.get('researchDirection') or '未提供'}",
+                        f"     分类：{_format_subjects_for_email(paper.get('subjects', []))}",
+                        f"     摘要简述：{paper.get('abstractPreview') or '暂无摘要'}",
+                    ]
+                )
+
+            body_lines.append("")
+
+    if digest.get("subjectGroups"):
+        body_lines.extend(["按关注板块分组："])
+        for group in digest.get("subjectGroups", []):
+            subject = str(group.get("subject") or "未命名板块")
+            body_lines.append(f"- {subject}：{group.get('paperCount', 0)} 篇")
+            for index, paper in enumerate(group.get("papers", []), start=1):
+                body_lines.extend(
+                    [
+                        f"  {index}. {paper.get('title') or '未命名论文'}",
+                        f"     发表时间：{paper.get('publishDate') or '未知日期'}",
+                        f"     作者：{paper.get('authorNames') or '未提供'}",
+                        f"     分类：{_format_subjects_for_email(paper.get('subjects', []))}",
+                        f"     摘要简述：{paper.get('abstractPreview') or '暂无摘要'}",
+                    ]
+                )
+            body_lines.append("")
 
     body_lines.extend(
         _build_subject_distribution_lines(digest.get("subjectDistribution", []))
@@ -210,6 +250,15 @@ def collect_target_mentors(user: User) -> list[Mentor]:
     return mentors
 
 
+def collect_target_subjects(user: User) -> list[str]:
+    return list(
+        SubjectFollow.objects
+        .filter(user=user)
+        .order_by("subject")
+        .values_list("subject", flat=True)
+    )
+
+
 def _match_mentor_papers(mentor: Mentor, weekly_papers: dict[int, Paper]) -> list[Paper]:
     papers = []
     seen_paper_ids = set()
@@ -221,6 +270,14 @@ def _match_mentor_papers(mentor: Mentor, weekly_papers: dict[int, Paper]) -> lis
     return papers
 
 
+def _match_subject_papers(subject: str, weekly_papers: dict[int, Paper]) -> list[Paper]:
+    return [
+        paper
+        for paper in weekly_papers.values()
+        if subject in _split_subjects(paper.subjects)
+    ]
+
+
 def _serialize_digest_paper(paper: Paper, mentor: Mentor) -> dict:
     return {
         "id": paper.id,
@@ -230,6 +287,18 @@ def _serialize_digest_paper(paper: Paper, mentor: Mentor) -> dict:
         "mentorId": mentor.id,
         "mentorName": mentor.Chinese_name,
         "researchDirection": mentor.research_direction,
+        "subjects": _split_subjects(paper.subjects),
+        "abstractPreview": _build_abstract_preview(paper.abstract),
+    }
+
+
+def _serialize_subject_digest_paper(paper: Paper, subject: str) -> dict:
+    return {
+        "id": paper.id,
+        "title": paper.title,
+        "publishDate": paper.publish_date.isoformat() if paper.publish_date else None,
+        "authorNames": paper.author_names,
+        "subject": subject,
         "subjects": _split_subjects(paper.subjects),
         "abstractPreview": _build_abstract_preview(paper.abstract),
     }
@@ -291,10 +360,10 @@ def _build_subject_distribution_lines(subject_distribution: list[dict]) -> list[
 def _build_digest_title(total_paper_count: int) -> str:
     if total_paper_count == 0:
         return "[MentorFinder]本周无论文更新"
-    return f"[MentorFinder]你关注的导师本周有 {total_paper_count} 篇新论文"
+    return f"[MentorFinder]你关注的导师或板块本周有 {total_paper_count} 篇新论文"
 
 
 def _build_digest_summary(total_paper_count: int) -> str:
     if total_paper_count == 0:
         return "本周无论文更新"
-    return f"你关注的导师本周有 {total_paper_count} 篇新论文"
+    return f"你关注的导师或板块本周有 {total_paper_count} 篇新论文"

@@ -8,7 +8,7 @@ from django.http import HttpRequest
 from django.utils import timezone
 
 from account.models import User
-from account.services.weekly_push import build_weekly_push_digest, collect_target_mentors
+from account.services.weekly_push import build_weekly_push_digest, collect_target_mentors, collect_target_subjects
 from dataset.models import Mentor, Paper, WeeklyPaperPush
 from dataset.services.author_matching import is_exact_english_author_match
 from dataset.services.research_analysis import (
@@ -787,13 +787,26 @@ def _build_personalized_weekly_push(user: User, week_offset: int = 0):
                 continue
             mentor_names_by_paper_id[paper_id].append(mentor_name)
 
+    subject_names_by_paper_id = defaultdict(list)
+    for group in digest.get("subjectGroups", []):
+        subject = str(group.get("subject") or "").strip()
+        if subject == "":
+            continue
+        for paper in group.get("papers", []):
+            paper_id = int(paper.get("id") or 0)
+            if paper_id == 0 or subject in subject_names_by_paper_id[paper_id]:
+                continue
+            subject_names_by_paper_id[paper_id].append(subject)
+
+    matched_paper_ids = set(mentor_names_by_paper_id) | set(subject_names_by_paper_id)
     matched_papers = [
         paper
         for paper in weekly_papers
-        if paper.id in mentor_names_by_paper_id
+        if paper.id in matched_paper_ids
     ]
     title = f"专属周报（{week_start.isoformat()} ~ {week_end.isoformat()}）"
     tracked_mentors = collect_target_mentors(user)
+    tracked_subjects = collect_target_subjects(user)
 
     return build_weekly_push_payload(
         title=title,
@@ -804,9 +817,12 @@ def _build_personalized_weekly_push(user: User, week_offset: int = 0):
         mentor_names_by_paper_id=dict(mentor_names_by_paper_id),
         extra_fields={
             "mentorGroups": digest.get("mentorGroups", []),
+            "subjectGroups": digest.get("subjectGroups", []),
             "subjectDistribution": digest.get("subjectDistribution", []),
             "trackedMentorCount": len(tracked_mentors),
             "activeMentorCount": len(digest.get("mentorGroups", [])),
+            "trackedSubjectCount": len(tracked_subjects),
+            "activeSubjectCount": len(digest.get("subjectGroups", [])),
         },
     )
 
