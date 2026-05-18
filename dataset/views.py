@@ -644,38 +644,6 @@ def _parse_iso_date(raw_value: str | None) -> date | None:
         return None
 
 
-def _get_timeline_day_stats_map(papers_query) -> dict[date, dict[str, int]]:
-    ordered_papers = list(
-        papers_query
-        .values_list("id", "publish_date")
-        .order_by("-publish_date", "-id")
-    )
-    day_total_by_date: dict[date, int] = defaultdict(int)
-    for _, publish_date in ordered_papers:
-        if publish_date is not None:
-            day_total_by_date[publish_date] += 1
-
-    day_position_by_id: dict[int, int] = {}
-    seen_per_day: dict[date, int] = defaultdict(int)
-    for paper_id, publish_date in ordered_papers:
-        if publish_date is None:
-            continue
-        seen_per_day[publish_date] += 1
-        day_position_by_id[paper_id] = seen_per_day[publish_date]
-
-    return {
-        publish_date: {
-            "day_total": day_total,
-        }
-        for publish_date, day_total in day_total_by_date.items()
-    } | {
-        paper_id: {
-            "day_sequence": day_sequence,
-        }
-        for paper_id, day_sequence in day_position_by_id.items()
-    }
-
-
 def _build_timeline_day_sequence_map(papers_query) -> tuple[dict[int, int], dict[date, int]]:
     ordered_papers = list(
         papers_query

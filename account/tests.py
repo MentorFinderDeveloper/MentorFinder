@@ -3873,3 +3873,677 @@ class WeeklyPushFilesServiceTests(TestCase):
 
         self.assertFalse(WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT).exists())
         self.assertTrue(WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_NEXT).exists())
+
+
+class EmailVerificationViewExtraTest(TestCase):
+    """覆盖 account/views.py 中邮件验证码与密码重置剩余分支"""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="reset_user",
+            email="reset_user@example.com",
+            password="abc12345",
+        )
+        self.banned_user = User.objects.create_user(
+            username="reset_banned",
+            email="reset_banned@example.com",
+            password="abc12345",
+            role=User.ROLE_BANNED,
+        )
+
+    def post_json(self, path: str, payload: dict):
+        return self.client.post(path, data=json.dumps(payload), content_type="application/json")
+
+    def test_password_reset_verification_code_bypass_for_existing_user(self):
+        User.objects.create_user(
+            username="bypass_reset_user",
+            email="bypass-reset@example.com",
+            password="abc12345",
+        )
+
+        res = self.post_json(
+            "/password-reset/verification-code",
+            {"email": "bypass-reset@example.com"},
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res.json()["bypass"])
+        # bypass 路径不会落库验证码
+        self.assertFalse(
+            EmailVerificationCode.objects.filter(email="bypass-reset@example.com").exists()
+        )
+
+    def test_password_reset_verification_code_cooldown(self):
+        first = self.post_json(
+            "/password-reset/verification-code",
+            {"email": "reset_user@example.com"},
+        )
+        self.assertEqual(first.status_code, 200)
+
+        second = self.post_json(
+            "/password-reset/verification-code",
+            {"email": "reset_user@example.com"},
+        )
+        self.assertEqual(second.status_code, 429)
+        self.assertEqual(second.json()["code"], 6)
+
+    def test_password_reset_verification_code_rejects_banned_user(self):
+        res = self.post_json(
+            "/password-reset/verification-code",
+            {"email": "reset_banned@example.com"},
+        )
+
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.json()["code"], 3)
+
+    def test_password_reset_verification_code_rejects_empty_email(self):
+        res = self.post_json(
+            "/password-reset/verification-code",
+            {"email": "   "},
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    @patch("account.views.send_password_reset_email")
+    def test_password_reset_verification_code_reports_smtp_failure(self, mock_send):
+        mock_send.side_effect = RuntimeError("smtp boom")
+
+        res = self.post_json(
+            "/password-reset/verification-code",
+            {"email": "reset_user@example.com"},
+        )
+
+        self.assertEqual(res.status_code, 502)
+        self.assertEqual(res.json()["code"], 7)
+        self.assertIn("smtp boom", res.json()["info"])
+
+    @patch("account.views.send_verification_email")
+    def test_register_verification_code_reports_smtp_failure(self, mock_send):
+        mock_send.side_effect = RuntimeError("send mail failed")
+
+        res = self.post_json(
+            "/register/verification-code",
+            {"email": "new-smtp-fail@example.com"},
+        )
+
+        self.assertEqual(res.status_code, 502)
+        self.assertEqual(res.json()["code"], 7)
+        self.assertIn("send mail failed", res.json()["info"])
+
+    def test_register_rejects_non_string_verification_code(self):
+        res = self.post_json(
+            "/register",
+            {
+                "username": "BadTypeUser",
+                "password": "abc12345",
+                "email": "bad-type-code@example.com",
+                "verificationCode": 123456,
+            },
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertFalse(User.objects.filter(username="BadTypeUser").exists())
+
+    def test_reset_password_rejects_non_string_verification_code(self):
+        res = self.post_json(
+            "/password-reset",
+            {
+                "email": "reset_user@example.com",
+                "password": "newpass123",
+                "verificationCode": ["bad", "type"],
+            },
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+
+class UserSocialEndpointsTest(TestCase):
+    """覆盖 search_users / follow_user / followed_users 等用户社交接口"""
+
+    def setUp(self):
+        self.alice = User.objects.create_user(
+            username="alice_social",
+            email="alice@example.com",
+            password="abc12345",
+            real_name="爱丽丝",
+        )
+        self.bob = User.objects.create_user(
+            username="bob_social",
+            email="bob@example.com",
+            password="abc12345",
+        )
+        self.banned = User.objects.create_user(
+            username="banned_social",
+            email="banned-social@example.com",
+            password="abc12345",
+            role=User.ROLE_BANNED,
+        )
+        self.alice_token = generate_jwt_token("alice_social")
+        self.bob_token = generate_jwt_token("bob_social")
+
+    def auth(self, token: str):
+        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    def test_search_users_requires_login(self):
+        res = self.client.get("/search/users")
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_search_users_excludes_self_and_banned_users(self):
+        res = self.client.get("/search/users", **self.auth(self.alice_token))
+
+        self.assertEqual(res.status_code, 200)
+        usernames = {user["username"] for user in res.json()["users"]}
+        self.assertEqual(usernames, {"bob_social"})
+
+    def test_search_users_filters_by_keyword(self):
+        res = self.client.get(
+            "/search/users",
+            {"keyword": "爱丽丝"},
+            **self.auth(self.bob_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        usernames = {user["username"] for user in res.json()["users"]}
+        self.assertEqual(usernames, {"alice_social"})
+
+    def test_search_users_rejects_keyword_too_long(self):
+        res = self.client.get(
+            "/search/users",
+            {"keyword": "x" * 256},
+            **self.auth(self.alice_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_search_users_bad_method(self):
+        res = self.client.post("/search/users", **self.auth(self.alice_token))
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+    def test_follow_user_requires_login(self):
+        res = self.client.post(f"/follow/users/{self.bob.id}")
+
+        self.assertEqual(res.status_code, 401)
+
+    def test_follow_user_rejects_self_follow(self):
+        res = self.client.post(
+            f"/follow/users/{self.alice.id}",
+            **self.auth(self.alice_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], 3)
+
+    def test_follow_user_returns_404_for_unknown_user(self):
+        res = self.client.post(
+            "/follow/users/999999",
+            **self.auth(self.alice_token),
+        )
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_follow_user_returns_404_for_banned_target(self):
+        res = self.client.post(
+            f"/follow/users/{self.banned.id}",
+            **self.auth(self.alice_token),
+        )
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_follow_user_succeeds_and_is_idempotent(self):
+        first = self.client.post(
+            f"/follow/users/{self.bob.id}",
+            **self.auth(self.alice_token),
+        )
+        second = self.client.post(
+            f"/follow/users/{self.bob.id}",
+            **self.auth(self.alice_token),
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertTrue(first.json()["followed"])
+        self.assertEqual(
+            UserFollow.objects.filter(follower=self.alice, following=self.bob).count(),
+            1,
+        )
+
+    def test_unfollow_user_clears_relation(self):
+        UserFollow.objects.create(follower=self.alice, following=self.bob)
+
+        res = self.client.delete(
+            f"/follow/users/{self.bob.id}",
+            **self.auth(self.alice_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(res.json()["followed"])
+        self.assertFalse(
+            UserFollow.objects.filter(follower=self.alice, following=self.bob).exists()
+        )
+
+    def test_follow_user_rejects_bad_method(self):
+        res = self.client.get(
+            f"/follow/users/{self.bob.id}",
+            **self.auth(self.alice_token),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+    def test_followed_users_requires_login(self):
+        res = self.client.get("/follow/users")
+
+        self.assertEqual(res.status_code, 401)
+
+    def test_followed_users_excludes_banned_users(self):
+        UserFollow.objects.create(follower=self.alice, following=self.bob)
+        UserFollow.objects.create(follower=self.alice, following=self.banned)
+
+        res = self.client.get("/follow/users", **self.auth(self.alice_token))
+
+        self.assertEqual(res.status_code, 200)
+        usernames = {user["username"] for user in res.json()["users"]}
+        self.assertEqual(usernames, {"bob_social"})
+
+    def test_followed_users_rejects_bad_method(self):
+        res = self.client.post("/follow/users", **self.auth(self.alice_token))
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+
+class PublicUserProfileViewTest(TestCase):
+    """覆盖 /users/<id>/profile 公共资料视图与隐私开关"""
+
+    def setUp(self):
+        self.viewer = User.objects.create_user(
+            username="profile_viewer",
+            email="profile_viewer@example.com",
+            password="abc12345",
+        )
+        self.target = User.objects.create_user(
+            username="profile_target",
+            email="profile_target@example.com",
+            password="abc12345",
+        )
+        self.banned = User.objects.create_user(
+            username="profile_banned",
+            email="profile_banned@example.com",
+            password="abc12345",
+            role=User.ROLE_BANNED,
+        )
+        self.viewer_token = generate_jwt_token("profile_viewer")
+        UserProfile.objects.create(
+            user=self.target,
+            avatar_url="https://example.com/avatar.png",
+            signature="签名",
+            personal_intro="个人简介",
+            research_experience="科研经历",
+            honors="荣誉",
+            project_experience="项目经历",
+            show_personal_intro=True,
+            show_research_experience=False,
+            show_honors=False,
+            show_project_experience=True,
+        )
+
+    def auth(self, token: str):
+        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    def test_public_profile_requires_login(self):
+        res = self.client.get(f"/users/{self.target.id}/profile")
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_public_profile_returns_404_for_missing_user(self):
+        res = self.client.get(
+            "/users/999999/profile",
+            **self.auth(self.viewer_token),
+        )
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_public_profile_returns_404_for_banned_user(self):
+        res = self.client.get(
+            f"/users/{self.banned.id}/profile",
+            **self.auth(self.viewer_token),
+        )
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_public_profile_rejects_bad_method(self):
+        res = self.client.post(
+            f"/users/{self.target.id}/profile",
+            **self.auth(self.viewer_token),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+
+class EmailVerificationServiceTest(TestCase):
+    """单元测试 account/services/email_verification.py 中的纯函数"""
+
+    def test_email_matches_bypass_recognizes_prefix_case_insensitively(self):
+        from account.services.email_verification import email_matches_bypass
+
+        self.assertTrue(email_matches_bypass("bypass-tester@example.com"))
+        self.assertTrue(email_matches_bypass("ByPaSS-tester@example.com"))
+        self.assertTrue(email_matches_bypass("  bypass-tester@example.com  "))
+        self.assertFalse(email_matches_bypass("user@example.com"))
+
+    def test_email_matches_bypass_returns_false_when_prefix_empty(self):
+        from account.services.email_verification import email_matches_bypass
+
+        with self.settings(EMAIL_VERIFICATION_BYPASS_PREFIX=""):
+            self.assertFalse(email_matches_bypass("bypass-tester@example.com"))
+
+    def test_generate_verification_code_returns_six_digit_numeric(self):
+        from account.services.email_verification import (
+            CODE_LENGTH,
+            generate_verification_code,
+        )
+
+        code = generate_verification_code()
+
+        self.assertEqual(len(code), CODE_LENGTH)
+        self.assertTrue(code.isdigit())
+
+    def test_issue_verification_code_writes_and_refreshes_record(self):
+        from account.services.email_verification import issue_verification_code
+
+        code1, record1 = issue_verification_code("issue@example.com")
+        code2, record2 = issue_verification_code("issue@example.com")
+
+        # 二次签发应当复写同一条记录而不是新建
+        self.assertEqual(record1.pk, record2.pk)
+        self.assertEqual(record2.code, code2)
+        self.assertGreaterEqual(
+            (record2.expires_at - timezone.now()).total_seconds(),
+            60,
+        )
+
+    def test_get_remaining_cooldown_returns_zero_when_no_record(self):
+        from account.services.email_verification import get_remaining_cooldown
+
+        self.assertEqual(get_remaining_cooldown("missing@example.com"), 0)
+
+    def test_get_remaining_cooldown_returns_positive_for_recent_record(self):
+        from account.services.email_verification import (
+            get_remaining_cooldown,
+            issue_verification_code,
+        )
+
+        issue_verification_code("recent@example.com")
+
+        self.assertGreater(get_remaining_cooldown("recent@example.com"), 0)
+
+    def test_verify_code_consumes_correct_code(self):
+        from account.services.email_verification import (
+            issue_verification_code,
+            verify_code,
+        )
+
+        code, _record = issue_verification_code("consume@example.com")
+
+        self.assertTrue(verify_code("consume@example.com", code))
+        # 验证后记录应被删除，下一次校验会返回 False
+        self.assertFalse(EmailVerificationCode.objects.filter(email="consume@example.com").exists())
+        self.assertFalse(verify_code("consume@example.com", code))
+
+    def test_verify_code_rejects_wrong_code_without_deleting_record(self):
+        from account.services.email_verification import (
+            issue_verification_code,
+            verify_code,
+        )
+
+        code, _record = issue_verification_code("wrong@example.com")
+
+        self.assertFalse(verify_code("wrong@example.com", "000000" if code != "000000" else "111111"))
+        # 错误验证码不应消费记录
+        self.assertTrue(EmailVerificationCode.objects.filter(email="wrong@example.com").exists())
+
+    def test_verify_code_purges_expired_record(self):
+        from account.services.email_verification import verify_code
+
+        EmailVerificationCode.objects.create(
+            email="expired@example.com",
+            code="123456",
+            expires_at=timezone.now() - timedelta(seconds=1),
+        )
+
+        self.assertFalse(verify_code("expired@example.com", "123456"))
+        self.assertFalse(EmailVerificationCode.objects.filter(email="expired@example.com").exists())
+
+    @patch("account.services.email_verification.send_mail")
+    def test_send_verification_email_passes_subject_body_and_recipient(self, mock_send_mail):
+        from account.services.email_verification import send_verification_email
+
+        send_verification_email("notify@example.com", "234567")
+
+        mock_send_mail.assert_called_once()
+        kwargs = mock_send_mail.call_args.kwargs
+        self.assertIn("234567", kwargs["message"])
+        self.assertEqual(kwargs["recipient_list"], ["notify@example.com"])
+        self.assertIn("注册邮箱验证码", kwargs["subject"])
+
+    @patch("account.services.email_verification.send_mail")
+    def test_send_password_reset_email_uses_reset_subject(self, mock_send_mail):
+        from account.services.email_verification import send_password_reset_email
+
+        send_password_reset_email("reset-recipient@example.com", "345678")
+
+        mock_send_mail.assert_called_once()
+        kwargs = mock_send_mail.call_args.kwargs
+        self.assertIn("345678", kwargs["message"])
+        self.assertIn("修改密码邮箱验证码", kwargs["subject"])
+        self.assertEqual(kwargs["recipient_list"], ["reset-recipient@example.com"])
+
+
+class MentorVerificationRequestEdgeTest(TestCase):
+    """覆盖 /profile/mentor-verification-request 剩余分支"""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="verify_edge_user",
+            email="verify_edge@example.com",
+            password="abc12345",
+        )
+        self.token = generate_jwt_token("verify_edge_user")
+
+    def auth(self):
+        return {"HTTP_AUTHORIZATION": f"Bearer {self.token}"}
+
+    def test_mentor_verification_request_requires_login(self):
+        res = self.client.post(
+            "/profile/mentor-verification-request",
+            data=json.dumps({"submittedName": "张三"}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_mentor_verification_request_rejects_non_object_body(self):
+        res = self.client.post(
+            "/profile/mentor-verification-request",
+            data=json.dumps(["not", "an", "object"]),
+            content_type="application/json",
+            **self.auth(),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_mentor_verification_request_rejects_submitted_name_too_long(self):
+        res = self.client.post(
+            "/profile/mentor-verification-request",
+            data=json.dumps({"submittedName": "x" * 101}),
+            content_type="application/json",
+            **self.auth(),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertIn("too long", res.json()["info"])
+
+    def test_mentor_verification_request_rejects_bad_method(self):
+        res = self.client.get(
+            "/profile/mentor-verification-request",
+            **self.auth(),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+
+class RunWeeklyPushSchedulerWrapperTest(TestCase):
+    """覆盖 account/management/commands/run_weekly_push_scheduler.run_weekly_push_job"""
+
+    @patch("account.management.commands.run_weekly_push_scheduler.call_command")
+    def test_run_weekly_push_job_invokes_send_weekly_push(self, mock_call_command):
+        from account.management.commands.run_weekly_push_scheduler import (
+            run_weekly_push_job,
+        )
+
+        run_weekly_push_job()
+
+        mock_call_command.assert_called_once_with("send_weekly_push")
+
+    @patch("account.management.commands.run_weekly_push_scheduler.call_command")
+    def test_run_weekly_push_job_swallows_exceptions(self, mock_call_command):
+        from account.management.commands.run_weekly_push_scheduler import (
+            run_weekly_push_job,
+        )
+
+        mock_call_command.side_effect = RuntimeError("scheduler boom")
+
+        # 调度器循环依赖此函数不抛异常
+        run_weekly_push_job()
+        mock_call_command.assert_called_once_with("send_weekly_push")
+
+
+class AuthorizationHeaderParsingTest(TestCase):
+    """覆盖 _extract_token / _require_user 对 Authorization 头的解析分支"""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="auth_parsing_user",
+            email="auth_parsing@example.com",
+            password="abc12345",
+        )
+        self.token = generate_jwt_token("auth_parsing_user")
+
+    def test_authorization_header_supports_bare_token_without_bearer_prefix(self):
+        # 视图允许直接传 token，不强制 Bearer 前缀
+        res = self.client.get("/profile/me", HTTP_AUTHORIZATION=self.token)
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["userId"], self.user.id)
+
+    def test_authorization_header_supports_bearer_prefix_case_insensitive(self):
+        res = self.client.get(
+            "/profile/me",
+            HTTP_AUTHORIZATION=f"bEaReR {self.token}",
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+
+    def test_authorization_header_blank_treated_as_unauthorized(self):
+        res = self.client.get("/profile/me", HTTP_AUTHORIZATION="   ")
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_authorization_header_invalid_token_returns_unauthorized(self):
+        res = self.client.get(
+            "/profile/me",
+            HTTP_AUTHORIZATION="Bearer not-a-real-token",
+        )
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_authorization_header_with_missing_user_returns_unauthorized(self):
+        # token 合法但用户记录已被删除
+        token = generate_jwt_token("ghost_user")
+
+        res = self.client.get("/profile/me", HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+
+class AdminUsersDoubleFilterTest(TestCase):
+    """覆盖 /management/users 同时使用 keyword + role 过滤的分支"""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="double_filter_admin",
+            email="double_filter_admin@example.com",
+            password="abc12345",
+            role=User.ROLE_ADMIN,
+        )
+        self.admin_token = generate_jwt_token("double_filter_admin")
+        self.public_mentor = Mentor.objects.create(
+            Chinese_name="过滤导师",
+            English_name="Filter Mentor",
+            research_direction="可信人工智能",
+        )
+        # 三个 mentor 角色用户，keyword 只命中一个
+        self.match_user = User.objects.create_user(
+            username="mentor_alice",
+            email="mentor_alice@example.com",
+            password="abc12345",
+            role=User.ROLE_MENTOR,
+            mentor_profile=self.public_mentor,
+        )
+        self.other_mentor_profile = Mentor.objects.create(
+            Chinese_name="另一导师",
+            English_name="Another Mentor",
+            research_direction="机器学习",
+        )
+        self.other_mentor_user = User.objects.create_user(
+            username="mentor_bob",
+            email="mentor_bob@example.com",
+            password="abc12345",
+            role=User.ROLE_MENTOR,
+            mentor_profile=self.other_mentor_profile,
+        )
+        # 用 keyword "alice" 但角色为 student，不应被命中
+        User.objects.create_user(
+            username="student_alice",
+            email="student_alice@example.com",
+            password="abc12345",
+            role=User.ROLE_STUDENT,
+        )
+
+    def auth(self):
+        return {"HTTP_AUTHORIZATION": f"Bearer {self.admin_token}"}
+
+    def test_admin_users_filters_by_keyword_and_role_together(self):
+        res = self.client.get(
+            "/management/users",
+            {"keyword": "alice", "role": User.ROLE_MENTOR},
+            **self.auth(),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        usernames = [user["username"] for user in res.json()["users"]]
+        self.assertEqual(usernames, ["mentor_alice"])
+        self.assertEqual(res.json()["roleFilter"], User.ROLE_MENTOR)

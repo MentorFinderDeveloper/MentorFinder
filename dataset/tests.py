@@ -24,10 +24,17 @@ from dataset.services.author_matching import (
     is_exact_english_author_match,
     normalize_english_name,
 )
-from dataset.services.weekly_push_summary import resolve_week_range
+from dataset.services.weekly_push_summary import (
+    build_fixed_summary,
+    compose_weekly_push_content,
+    resolve_week_range,
+    serialize_weekly_push_paper,
+)
 from account.models import MentorFollow, SubjectFollow, User as AccountUser, WeeklyPushPaperBucket
 from account.services.weekly_push_files import build_weekly_push_bucket_period_key
 from utils.utils_jwt import generate_jwt_token
+from utils.utils_request import return_field
+from utils.utils_time import get_timestamp
 
 
 class PaperModelTest(TestCase):
@@ -2222,3 +2229,1277 @@ class MentorRecentDirectionAnalysisViewTest(TestCase):
         self.assertEqual(payload["analysis"], "导师近一年主要关注智能体与推理。")
         self.assertEqual(len(payload["papers"]), 1)
         self.assertEqual(payload["papers"][0]["title"], "Recent Paper")
+
+
+class UtilsRequestAndTimeTest(TestCase):
+    """覆盖 utils/utils_request.py 与 utils/utils_time.py 中尚未测试的函数"""
+
+    def test_return_field_returns_only_listed_keys(self):
+        source = {"a": 1, "b": 2, "c": 3}
+
+        self.assertEqual(return_field(source, ["a", "c"]), {"a": 1, "c": 3})
+
+    def test_return_field_returns_empty_dict_for_empty_field_list(self):
+        self.assertEqual(return_field({"a": 1}, []), {})
+
+    def test_return_field_raises_when_field_is_missing(self):
+        with self.assertRaises(AssertionError):
+            return_field({"a": 1}, ["a", "missing"])
+
+    def test_get_timestamp_returns_positive_float(self):
+        ts = get_timestamp()
+
+        self.assertIsInstance(ts, float)
+        self.assertGreater(ts, 0)
+
+
+class WeeklyPushSummaryPureFunctionTest(TestCase):
+    """覆盖 dataset/services/weekly_push_summary.py 中的纯函数"""
+
+    def setUp(self):
+        self.week_start = date(2026, 4, 13)
+        self.week_end = date(2026, 4, 19)
+        self.paper_a = Paper.objects.create(
+            title="周报论文A",
+            abstract="abstract A",
+            publish_date=date(2026, 4, 18),
+            author_names="Author A",
+            subjects="cs.AI, cs.LG",
+            arxiv_id="2604.00001",
+            arxiv_url="https://arxiv.org/abs/2604.00001",
+            tldr="TLDR A",
+        )
+        self.paper_b = Paper.objects.create(
+            title="周报论文B",
+            abstract="abstract B",
+            publish_date=date(2026, 4, 14),
+            author_names="Author B",
+            subjects="",
+            arxiv_id="2604.00002",
+        )
+        self.paper_no_date = Paper.objects.create(
+            title="无日期论文",
+            abstract="abstract C",
+            publish_date=None,
+            author_names="Author C",
+            subjects="cs.CL",
+        )
+
+    def test_build_fixed_summary_returns_empty_message_without_papers(self):
+        summary = build_fixed_summary(self.week_start, self.week_end, [])
+
+        self.assertEqual(summary, "2026-04-13 到 2026-04-19 无新增论文。")
+
+    def test_build_fixed_summary_aggregates_subjects_and_dates(self):
+        summary = build_fixed_summary(
+            self.week_start,
+            self.week_end,
+            [self.paper_a, self.paper_b],
+        )
+
+        self.assertIn("共收录 2 篇论文", summary)
+        self.assertIn("2026-04-14 至 2026-04-18", summary)
+        self.assertIn("cs.AI(1)", summary)
+        self.assertIn("cs.LG(1)", summary)
+        self.assertIn("其他/未分类(1)", summary)
+
+    def test_build_fixed_summary_marks_unknown_dates_when_publish_date_missing(self):
+        summary = build_fixed_summary(
+            self.week_start,
+            self.week_end,
+            [self.paper_no_date],
+        )
+
+        self.assertIn("未知 至 未知", summary)
+        self.assertIn("cs.CL(1)", summary)
+
+    def test_compose_weekly_push_content_collapses_duplicate_summary(self):
+        self.assertEqual(compose_weekly_push_content("fixed", "fixed"), "fixed")
+
+    def test_compose_weekly_push_content_appends_ai_summary_section(self):
+        composed = compose_weekly_push_content("fixed", "ai-summary")
+
+        self.assertIn("【AI总结】", composed)
+        self.assertTrue(composed.startswith("fixed"))
+        self.assertTrue(composed.endswith("ai-summary"))
+
+    def test_serialize_weekly_push_paper_resolves_arxiv_url_from_id(self):
+        paper = Paper.objects.create(
+            title="仅有 arXiv id",
+            abstract="abstract",
+            publish_date=date(2026, 4, 20),
+            author_names="Author X",
+            subjects="cs.AI",
+            arxiv_id="2604.99999",
+            arxiv_url="",
+            tldr="tldr",
+        )
+
+        item = serialize_weekly_push_paper(paper)
+
+        self.assertEqual(item["arxivUrl"], "https://arxiv.org/abs/2604.99999")
+        self.assertEqual(item["arxivId"], "2604.99999")
+        self.assertNotIn("mentorNames", item)
+        self.assertEqual(item["publishDate"], "2026-04-20")
+
+    def test_serialize_weekly_push_paper_keeps_existing_url_and_attaches_mentor_names(self):
+        item = serialize_weekly_push_paper(self.paper_a, mentor_names=["张三", "李四"])
+
+        self.assertEqual(item["arxivUrl"], "https://arxiv.org/abs/2604.00001")
+        self.assertEqual(item["mentorNames"], ["张三", "李四"])
+        self.assertEqual(item["tldr"], "TLDR A")
+
+    def test_serialize_weekly_push_paper_handles_null_publish_date(self):
+        item = serialize_weekly_push_paper(self.paper_no_date)
+
+        self.assertIsNone(item["publishDate"])
+        self.assertIsNone(item["arxivUrl"])
+
+    def test_resolve_week_range_returns_previous_full_week_by_default(self):
+        start, end = resolve_week_range(0, today=date(2026, 4, 22))
+
+        self.assertEqual(start, date(2026, 4, 13))
+        self.assertEqual(end, date(2026, 4, 19))
+
+    def test_resolve_week_range_supports_positive_offsets(self):
+        start, end = resolve_week_range(1, today=date(2026, 4, 22))
+
+        self.assertEqual(start, date(2026, 4, 6))
+        self.assertEqual(end, date(2026, 4, 12))
+
+    @patch("dataset.services.weekly_push_summary.requests.post")
+    def test_build_ai_summary_with_fallback_returns_rule_when_api_key_missing(self, mock_post):
+        from dataset.services.weekly_push_summary import build_ai_summary_with_fallback
+
+        with self.settings(THUCS_API_KEY=""):
+            summary, generated_by = build_ai_summary_with_fallback(
+                self.week_start,
+                self.week_end,
+                [self.paper_a],
+                fixed_summary="fixed",
+            )
+
+        self.assertEqual(summary, "fixed")
+        self.assertEqual(generated_by, "rule")
+        mock_post.assert_not_called()
+
+    @patch("dataset.services.weekly_push_summary.requests.post")
+    def test_build_ai_summary_with_fallback_returns_ai_text_when_api_returns_content(self, mock_post):
+        from dataset.services.weekly_push_summary import build_ai_summary_with_fallback
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            "choices": [{"message": {"content": "AI 生成的周报"}}],
+        }
+        mock_post.return_value = mock_response
+
+        with self.settings(THUCS_API_KEY="dummy-key"):
+            summary, generated_by = build_ai_summary_with_fallback(
+                self.week_start,
+                self.week_end,
+                [self.paper_a, self.paper_b],
+                fixed_summary="fixed",
+                purpose_text="单元测试",
+                mentor_names_by_paper_id={self.paper_a.id: ["张三"]},
+            )
+
+        self.assertEqual(summary, "AI 生成的周报")
+        self.assertEqual(generated_by, "thucs-openai")
+        mock_post.assert_called_once()
+
+    @patch("dataset.services.weekly_push_summary.requests.post")
+    def test_build_ai_summary_with_fallback_falls_back_on_empty_response(self, mock_post):
+        from dataset.services.weekly_push_summary import build_ai_summary_with_fallback
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {"choices": [{"message": {"content": "   "}}]}
+        mock_post.return_value = mock_response
+
+        with self.settings(THUCS_API_KEY="dummy-key"):
+            summary, generated_by = build_ai_summary_with_fallback(
+                self.week_start,
+                self.week_end,
+                [],
+                fixed_summary="fixed-fallback",
+            )
+
+        self.assertEqual(summary, "fixed-fallback")
+        self.assertEqual(generated_by, "rule")
+
+    @patch("dataset.services.weekly_push_summary.requests.post")
+    def test_build_ai_summary_with_fallback_swallows_request_exceptions(self, mock_post):
+        from dataset.services.weekly_push_summary import build_ai_summary_with_fallback
+
+        mock_post.side_effect = RuntimeError("network down")
+
+        with self.settings(THUCS_API_KEY="dummy-key"):
+            summary, generated_by = build_ai_summary_with_fallback(
+                self.week_start,
+                self.week_end,
+                [self.paper_a],
+                fixed_summary="fixed-on-error",
+            )
+
+        self.assertEqual(summary, "fixed-on-error")
+        self.assertEqual(generated_by, "rule")
+
+    @patch("dataset.services.weekly_push_summary.build_ai_summary_with_fallback")
+    def test_build_weekly_push_payload_serializes_papers_and_extra_fields(self, mock_ai_summary):
+        from dataset.services.weekly_push_summary import build_weekly_push_payload
+
+        mock_ai_summary.return_value = ("AI 总结", "thucs-openai")
+
+        payload = build_weekly_push_payload(
+            title="测试周报",
+            week_start=self.week_start,
+            week_end=self.week_end,
+            papers=[self.paper_a, self.paper_b],
+            purpose_text="单元测试",
+            mentor_names_by_paper_id={self.paper_a.id: ["导师A"]},
+            extra_fields={"customMetric": 42},
+        )
+
+        self.assertEqual(payload["title"], "测试周报")
+        self.assertEqual(payload["weekStart"], "2026-04-13")
+        self.assertEqual(payload["weekEnd"], "2026-04-19")
+        self.assertEqual(payload["paperCount"], 2)
+        self.assertEqual(payload["generatedBy"], "thucs-openai")
+        self.assertEqual(payload["aiSummary"], "AI 总结")
+        self.assertIn("AI 总结", payload["content"])
+        self.assertEqual(payload["customMetric"], 42)
+        self.assertEqual(payload["papers"][0]["mentorNames"], ["导师A"])
+        self.assertNotIn("mentorNames", payload["papers"][1])
+
+
+class WeeklyPushPublicViewTest(TestCase):
+    """覆盖 /dataset/weekly-push/latest 与 /dataset/weekly-push/history 公共视图"""
+
+    def setUp(self):
+        from dataset.models import WeeklyPaperPush
+
+        self.client = Client()
+        self.older = WeeklyPaperPush.objects.create(
+            week_start=date(2026, 4, 6),
+            week_end=date(2026, 4, 12),
+            paper_count=2,
+            title="较早周报",
+            fixed_summary="fixed-old",
+            ai_summary="ai-old",
+            content="content-old",
+            papers=[{"id": 1, "title": "p1"}],
+            generated_by="rule",
+        )
+        self.newer = WeeklyPaperPush.objects.create(
+            week_start=date(2026, 4, 13),
+            week_end=date(2026, 4, 19),
+            paper_count=5,
+            title="最新周报",
+            fixed_summary="fixed-new",
+            ai_summary="ai-new",
+            content="content-new",
+            papers=[{"id": 2, "title": "p2"}],
+            generated_by="thucs-openai",
+        )
+
+    def test_weekly_push_latest_returns_most_recent_push(self):
+        response = self.client.get("/dataset/weekly-push/latest")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["weeklyPush"]
+        self.assertEqual(payload["title"], "最新周报")
+        self.assertEqual(payload["paperCount"], 5)
+        self.assertEqual(payload["weekStart"], "2026-04-13")
+
+    def test_weekly_push_latest_filters_by_week_start(self):
+        response = self.client.get(
+            "/dataset/weekly-push/latest",
+            {"week_start": "2026-04-06"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["weeklyPush"]
+        self.assertEqual(payload["title"], "较早周报")
+
+    def test_weekly_push_latest_returns_404_for_unknown_week_start(self):
+        response = self.client.get(
+            "/dataset/weekly-push/latest",
+            {"week_start": "1990-01-01"},
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["code"], 2)
+
+    def test_weekly_push_latest_returns_null_when_no_push_exists(self):
+        from dataset.models import WeeklyPaperPush
+
+        WeeklyPaperPush.objects.all().delete()
+
+        response = self.client.get("/dataset/weekly-push/latest")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json()["weeklyPush"])
+
+    def test_weekly_push_latest_rejects_bad_method(self):
+        response = self.client.post("/dataset/weekly-push/latest")
+
+        self.assertEqual(response.status_code, 405)
+        self.assertEqual(response.json()["code"], -3)
+
+    def test_weekly_push_history_returns_pushes_in_reverse_order(self):
+        response = self.client.get("/dataset/weekly-push/history")
+
+        self.assertEqual(response.status_code, 200)
+        history = response.json()["history"]
+        self.assertEqual([item["title"] for item in history], ["最新周报", "较早周报"])
+        self.assertEqual(history[0]["paperCount"], 5)
+        self.assertEqual(history[0]["generatedBy"], "thucs-openai")
+        self.assertIn("updatedAt", history[0])
+
+    def test_weekly_push_history_rejects_bad_method(self):
+        response = self.client.post("/dataset/weekly-push/history")
+
+        self.assertEqual(response.status_code, 405)
+        self.assertEqual(response.json()["code"], -3)
+
+    def test_weekly_paper_push_serialize_returns_full_payload(self):
+        serialized = self.newer.serialize()
+
+        self.assertEqual(
+            set(serialized.keys()),
+            {
+                "id",
+                "weekStart",
+                "weekEnd",
+                "paperCount",
+                "title",
+                "fixedSummary",
+                "aiSummary",
+                "content",
+                "papers",
+                "generatedBy",
+                "updatedAt",
+            },
+        )
+        self.assertEqual(serialized["weekStart"], "2026-04-13")
+        self.assertEqual(serialized["papers"], [{"id": 2, "title": "p2"}])
+
+
+class RuleBasedResearchAnalysisTest(TestCase):
+    """覆盖 dataset/services/research_analysis.py"""
+
+    def setUp(self):
+        self.mentor = Mentor.objects.create(
+            Chinese_name="张三",
+            English_name="San Zhang",
+            research_direction="人工智能",
+        )
+        self.cutoff = date(2026, 4, 1)
+        self.today = date(2026, 4, 30)
+
+    def test_rule_based_analysis_handles_empty_papers(self):
+        from dataset.services.research_analysis import (
+            build_rule_based_recent_direction_analysis,
+        )
+
+        analysis = build_rule_based_recent_direction_analysis(
+            self.mentor, [], self.cutoff, self.today
+        )
+
+        self.assertIn("张三", analysis)
+        self.assertIn("2026-04-01", analysis)
+        self.assertIn("2026-04-30", analysis)
+        self.assertIn("暂无", analysis)
+
+    def test_rule_based_analysis_uses_top_subjects_and_keywords(self):
+        from dataset.services.research_analysis import (
+            build_rule_based_recent_direction_analysis,
+        )
+
+        papers = [
+            Paper.objects.create(
+                title="LLM Agents for Reasoning",
+                abstract="We study large language model agents and reasoning.",
+                publish_date=date(2026, 4, 20),
+                author_names="张三",
+                subjects="cs.AI, cs.LG",
+            ),
+            Paper.objects.create(
+                title="Multimodal Retrieval Systems",
+                abstract="A multimodal retrieval and recommendation system.",
+                publish_date=date(2026, 4, 22),
+                author_names="张三",
+                subjects="cs.LG",
+            ),
+        ]
+
+        analysis = build_rule_based_recent_direction_analysis(
+            self.mentor, papers, self.cutoff, self.today
+        )
+
+        self.assertIn("近一年共发表 2 篇", analysis)
+        self.assertIn("cs.LG", analysis)
+        # 命中关键词较多时 most_common(5) 会截断，所以只断言关键词总结句存在
+        self.assertIn("从题目与摘要关键词看", analysis)
+
+    def test_rule_based_analysis_skips_subject_and_keyword_phrases_when_absent(self):
+        from dataset.services.research_analysis import (
+            build_rule_based_recent_direction_analysis,
+        )
+
+        paper = Paper.objects.create(
+            title="一篇平淡的论文",
+            abstract="本论文无关键词",
+            publish_date=date(2026, 4, 10),
+            author_names="张三",
+            subjects="",
+            tldr="无 TLDR",
+        )
+
+        analysis = build_rule_based_recent_direction_analysis(
+            self.mentor, [paper], self.cutoff, self.today
+        )
+
+        self.assertIn("近一年共发表 1 篇", analysis)
+        self.assertNotIn("从论文分类看", analysis)
+        self.assertNotIn("从题目与摘要关键词看", analysis)
+
+    @patch("dataset.services.research_analysis.call_thucs_chat_completion")
+    def test_build_ai_recent_direction_analysis_passes_prompt_to_thucs(self, mock_call):
+        from dataset.services.research_analysis import (
+            build_ai_recent_direction_analysis,
+        )
+
+        mock_call.return_value = "AI生成的导师近期方向总结"
+        paper = Paper.objects.create(
+            title="A Paper About LLM",
+            abstract="abstract about LLM",
+            publish_date=date(2026, 4, 20),
+            author_names="张三",
+            subjects="cs.AI",
+            tldr="LLM tldr",
+        )
+
+        result = build_ai_recent_direction_analysis(
+            self.mentor, [paper], self.cutoff, self.today
+        )
+
+        self.assertEqual(result, "AI生成的导师近期方向总结")
+        mock_call.assert_called_once()
+        kwargs = mock_call.call_args.kwargs
+        self.assertIn("A Paper About LLM", kwargs["user_prompt"])
+        self.assertIn("2026-04-01", kwargs["user_prompt"])
+
+    @patch("dataset.services.research_analysis.requests.post")
+    def test_call_thucs_chat_completion_raises_when_api_key_missing(self, mock_post):
+        from dataset.services.research_analysis import call_thucs_chat_completion
+
+        with self.settings(THUCS_API_KEY=""):
+            with self.assertRaises(RuntimeError):
+                call_thucs_chat_completion(system_prompt="sys", user_prompt="user")
+        mock_post.assert_not_called()
+
+    @patch("dataset.services.research_analysis.requests.post")
+    def test_call_thucs_chat_completion_returns_stripped_content(self, mock_post):
+        from dataset.services.research_analysis import call_thucs_chat_completion
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            "choices": [{"message": {"content": "  AI 输出内容  "}}],
+        }
+        mock_post.return_value = mock_response
+
+        with self.settings(
+            THUCS_API_KEY="dummy",
+            THUCS_API_BASE_URL="https://api.example.com/",
+            THUCS_MODEL_NAME="custom-model",
+        ):
+            text = call_thucs_chat_completion(
+                system_prompt="sys", user_prompt="user", temperature=0.1, timeout=5,
+            )
+
+        self.assertEqual(text, "AI 输出内容")
+        call_kwargs = mock_post.call_args.kwargs
+        self.assertEqual(call_kwargs["timeout"], 5)
+        self.assertEqual(call_kwargs["json"]["model"], "custom-model")
+        self.assertEqual(call_kwargs["json"]["temperature"], 0.1)
+
+    @patch("dataset.services.research_analysis.requests.post")
+    def test_call_thucs_chat_completion_raises_when_content_empty(self, mock_post):
+        from dataset.services.research_analysis import call_thucs_chat_completion
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {"choices": [{"message": {"content": "   "}}]}
+        mock_post.return_value = mock_response
+
+        with self.settings(THUCS_API_KEY="dummy"):
+            with self.assertRaises(RuntimeError):
+                call_thucs_chat_completion(system_prompt="sys", user_prompt="user")
+
+
+class MentorRecentDirectionAnalysisEdgeTest(TestCase):
+    """补充 /dataset/mentors/<id>/recent-direction-analysis 仍未覆盖的分支"""
+
+    def setUp(self):
+        self.client = Client()
+        self.mentor = Mentor.objects.create(
+            Chinese_name="边界张三",
+            English_name="Boundary Zhang",
+            research_direction="人工智能",
+        )
+        self.recent_paper = Paper.objects.create(
+            title="Recent paper",
+            abstract="Recent research",
+            publish_date=timezone.localdate() - timedelta(days=30),
+            author_names="边界张三",
+        )
+        self.old_paper = Paper.objects.create(
+            title="Old paper",
+            abstract="Outdated research",
+            publish_date=timezone.localdate() - timedelta(days=500),
+            author_names="边界张三",
+        )
+        self.mentor.set_paper_id_list([self.recent_paper.id, self.old_paper.id])
+        self.mentor.save()
+
+    @patch("dataset.views.build_ai_recent_direction_analysis")
+    def test_recent_direction_analysis_falls_back_to_rule_when_ai_fails(self, mock_ai_analysis):
+        mock_ai_analysis.side_effect = RuntimeError("ai backend down")
+
+        response = self.client.post(
+            f"/dataset/mentors/{self.mentor.id}/recent-direction-analysis"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["generatedBy"], "rule")
+        self.assertEqual(payload["paperCount"], 1)
+        self.assertIn(self.mentor.Chinese_name, payload["analysis"])
+
+    def test_recent_direction_analysis_returns_rule_response_when_no_recent_papers(self):
+        self.mentor.set_paper_id_list([self.old_paper.id])
+        self.mentor.save()
+
+        response = self.client.post(
+            f"/dataset/mentors/{self.mentor.id}/recent-direction-analysis"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["paperCount"], 0)
+        self.assertEqual(payload["generatedBy"], "rule")
+        self.assertEqual(payload["papers"], [])
+        self.assertIn("暂无", payload["analysis"])
+
+    def test_recent_direction_analysis_returns_404_for_missing_mentor(self):
+        response = self.client.post("/dataset/mentors/999999/recent-direction-analysis")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["code"], 2)
+
+    def test_recent_direction_analysis_returns_404_for_invisible_private_mentor(self):
+        owner = AccountUser.objects.create_user(
+            username="recent_owner",
+            email="recent_owner@example.com",
+            password="abc12345",
+            role="student",
+        )
+        private_mentor = Mentor.objects.create(
+            Chinese_name="私有最近导师",
+            English_name="Private Recent Mentor",
+            research_direction="测试",
+            owner=owner,
+        )
+
+        response = self.client.post(
+            f"/dataset/mentors/{private_mentor.id}/recent-direction-analysis"
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["code"], 2)
+
+    def test_recent_direction_analysis_rejects_bad_method(self):
+        response = self.client.get(
+            f"/dataset/mentors/{self.mentor.id}/recent-direction-analysis"
+        )
+
+        self.assertEqual(response.status_code, 405)
+        self.assertEqual(response.json()["code"], -3)
+
+
+class FetchPapersHelperTest(TestCase):
+    """覆盖 fetch_papers Command 的纯函数及 S2 元数据抓取分支"""
+
+    def setUp(self):
+        self.command = FetchPapersCommand()
+
+    def test_extract_arxiv_id_strips_prefix_and_version(self):
+        self.assertEqual(
+            self.command._extract_arxiv_id("http://arxiv.org/abs/2504.12345v2"),
+            "2504.12345",
+        )
+        self.assertEqual(
+            self.command._extract_arxiv_id("http://arxiv.org/abs/cs/0112017v1"),
+            "cs/0112017",
+        )
+
+    def test_extract_arxiv_id_returns_empty_for_blank_or_invalid_input(self):
+        self.assertEqual(self.command._extract_arxiv_id(""), "")
+        self.assertEqual(self.command._extract_arxiv_id(None), "")
+
+    def test_build_arxiv_url_returns_canonical_url(self):
+        self.assertEqual(
+            self.command._build_arxiv_url("2504.12345"),
+            "https://arxiv.org/abs/2504.12345",
+        )
+
+    def test_build_arxiv_url_returns_empty_for_blank_id(self):
+        self.assertEqual(self.command._build_arxiv_url(""), "")
+
+    def test_is_arxiv_rate_limit_error_detects_429_substring(self):
+        self.assertTrue(self.command._is_arxiv_rate_limit_error(Exception("HTTP 429 too many requests")))
+        self.assertTrue(self.command._is_arxiv_rate_limit_error(Exception("got 429 from server")))
+        self.assertFalse(self.command._is_arxiv_rate_limit_error(Exception("HTTP 500 server error")))
+
+    def test_extract_arxiv_authors_strips_group_prefix(self):
+        author_1 = MagicMock()
+        author_1.name = "Group X"
+        author_2 = MagicMock()
+        author_2.name = ":"
+        author_3 = MagicMock()
+        author_3.name = "Alice"
+        author_4 = MagicMock()
+        author_4.name = "Bob"
+        result = MagicMock()
+        result.authors = [author_1, author_2, author_3, author_4]
+
+        cleaned = self.command._extract_arxiv_authors(result)
+
+        self.assertEqual(cleaned, ["Alice", "Bob"])
+
+    def test_extract_arxiv_authors_ignores_empty_author_objects(self):
+        author_a = MagicMock()
+        author_a.name = "   "
+        author_b = MagicMock()
+        author_b.name = "Alice"
+        result = MagicMock()
+        result.authors = [author_a, author_b]
+
+        cleaned = self.command._extract_arxiv_authors(result)
+
+        self.assertEqual(cleaned, ["Alice"])
+
+    @patch("dataset.management.commands.fetch_papers.requests.get")
+    def test_fetch_s2_metadata_returns_empty_strings_when_arxiv_id_blank(self, mock_get):
+        subjects, tldr = self.command._fetch_s2_metadata("")
+
+        self.assertEqual(subjects, "")
+        self.assertEqual(tldr, "")
+        mock_get.assert_not_called()
+
+    @patch("dataset.management.commands.fetch_papers.requests.get")
+    def test_fetch_s2_metadata_returns_empty_on_non_200_response(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_get.return_value = mock_response
+
+        subjects, tldr = self.command._fetch_s2_metadata("2504.12345")
+
+        self.assertEqual(subjects, "")
+        self.assertEqual(tldr, "")
+
+    @patch("dataset.management.commands.fetch_papers.requests.get")
+    def test_fetch_s2_metadata_parses_subjects_and_tldr(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "s2FieldsOfStudy": [
+                {"category": "Computer Science"},
+                {"category": "Computer Science"},
+                {"category": "Mathematics"},
+                {"category": ""},
+            ],
+            "tldr": {"text": "  short summary  "},
+        }
+        mock_get.return_value = mock_response
+
+        subjects, tldr = self.command._fetch_s2_metadata("2504.12345")
+
+        self.assertEqual(subjects, "Computer Science, Mathematics")
+        self.assertEqual(tldr, "short summary")
+
+    @patch("dataset.management.commands.fetch_papers.requests.get")
+    def test_fetch_s2_metadata_swallows_request_exceptions(self, mock_get):
+        mock_get.side_effect = RuntimeError("network down")
+
+        subjects, tldr = self.command._fetch_s2_metadata("2504.12345")
+
+        self.assertEqual(subjects, "")
+        self.assertEqual(tldr, "")
+
+    def test_record_new_papers_for_weekly_push_respects_explicit_cycle(self):
+        paper = Paper.objects.create(
+            title="显式 cycle 论文",
+            abstract="摘要",
+            publish_date=date(2026, 4, 18),
+            author_names="Author",
+            subjects="cs.AI",
+        )
+
+        self.command._record_new_papers_for_weekly_push(
+            paper_ids=[paper.id],
+            record_cycle=WeeklyPushPaperBucket.CYCLE_NEXT,
+            now=datetime(2026, 4, 22, 4, 0, 0),
+        )
+
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(
+                cycle=WeeklyPushPaperBucket.CYCLE_NEXT,
+                paper=paper,
+            ).count(),
+            1,
+        )
+
+
+class GenerateWeeklyPushCommandTest(TestCase):
+    """覆盖 dataset/management/commands/generate_weekly_push.py 命令"""
+
+    def setUp(self):
+        from io import StringIO
+
+        self.stdout = StringIO()
+        self.fixed_today = date(2026, 4, 22)
+        self.paper_in_range = Paper.objects.create(
+            title="本周论文",
+            abstract="本周摘要",
+            publish_date=date(2026, 4, 15),
+            author_names="Author A",
+            subjects="cs.AI",
+        )
+        Paper.objects.create(
+            title="不在本周的论文",
+            abstract="旧摘要",
+            publish_date=date(2026, 3, 1),
+            author_names="Author B",
+            subjects="cs.LG",
+        )
+
+    @patch("dataset.management.commands.generate_weekly_push.resolve_week_range")
+    @patch(
+        "dataset.management.commands.generate_weekly_push.build_weekly_push_payload"
+    )
+    def test_generate_weekly_push_creates_record(self, mock_build, mock_resolve_week):
+        from io import StringIO
+        from django.core.management import call_command
+        from dataset.models import WeeklyPaperPush
+
+        mock_resolve_week.return_value = (date(2026, 4, 13), date(2026, 4, 19))
+        mock_build.return_value = {
+            "paperCount": 1,
+            "fixedSummary": "fixed",
+            "aiSummary": "ai",
+            "content": "content",
+            "papers": [{"id": self.paper_in_range.id, "title": "本周论文"}],
+            "generatedBy": "rule",
+        }
+
+        out = StringIO()
+        call_command("generate_weekly_push", stdout=out)
+
+        record = WeeklyPaperPush.objects.get(week_start=date(2026, 4, 13))
+        self.assertEqual(record.week_end, date(2026, 4, 19))
+        self.assertEqual(record.paper_count, 1)
+        self.assertEqual(record.generated_by, "rule")
+        self.assertIn("周推送已生成", out.getvalue())
+        self.assertIn("papers=1", out.getvalue())
+
+    @patch("dataset.management.commands.generate_weekly_push.resolve_week_range")
+    @patch(
+        "dataset.management.commands.generate_weekly_push.build_weekly_push_payload"
+    )
+    def test_generate_weekly_push_overwrites_existing_record_with_warning(
+        self, mock_build, mock_resolve_week
+    ):
+        from io import StringIO
+        from django.core.management import call_command
+        from dataset.models import WeeklyPaperPush
+
+        mock_resolve_week.return_value = (date(2026, 4, 13), date(2026, 4, 19))
+        mock_build.return_value = {
+            "paperCount": 0,
+            "fixedSummary": "fixed",
+            "aiSummary": "ai",
+            "content": "content",
+            "papers": [],
+            "generatedBy": "rule",
+        }
+        WeeklyPaperPush.objects.create(
+            week_start=date(2026, 4, 13),
+            week_end=date(2026, 4, 19),
+            paper_count=99,
+            title="旧周报",
+            fixed_summary="old-fixed",
+            ai_summary="old-ai",
+            content="old-content",
+            papers=[],
+            generated_by="rule",
+        )
+
+        out = StringIO()
+        call_command("generate_weekly_push", stdout=out)
+
+        record = WeeklyPaperPush.objects.get(week_start=date(2026, 4, 13))
+        self.assertEqual(record.paper_count, 0)
+        # 没有 --force 时仍会按默认 update_or_create 更新，并输出警告
+        self.assertIn("本周推送已存在", out.getvalue())
+
+
+class TimelineCursorEdgeTest(TestCase):
+    """覆盖 paper_timeline_view 的 before/after cursor 参数校验分支"""
+
+    def setUp(self):
+        self.client = Client()
+        self.paper = Paper.objects.create(
+            title="时间线锚点论文",
+            abstract="摘要",
+            publish_date=date(2026, 4, 18),
+            author_names="时间线作者",
+            subjects="cs.AI",
+        )
+
+    def _ai_direction(self) -> str:
+        return "人工智能 (Artificial Intelligence)"
+
+    def test_timeline_before_cursor_rejects_invalid_date(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": self._ai_direction(),
+                "before_date": "not-a-date",
+                "before_id": self.paper.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], -2)
+        self.assertIn("before_date", response.json()["info"])
+
+    def test_timeline_before_cursor_rejects_non_positive_before_id(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": self._ai_direction(),
+                "before_date": "2026-04-18",
+                "before_id": 0,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], -2)
+        self.assertIn("before_id", response.json()["info"])
+
+    def test_timeline_after_cursor_rejects_invalid_date(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": self._ai_direction(),
+                "after_date": "not-a-date",
+                "after_id": self.paper.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], -2)
+        self.assertIn("after_date", response.json()["info"])
+
+    def test_timeline_after_cursor_rejects_non_positive_after_id(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": self._ai_direction(),
+                "after_date": "2026-04-18",
+                "after_id": 0,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], -2)
+        self.assertIn("after_id", response.json()["info"])
+
+    def test_timeline_before_cursor_returns_empty_window_when_nothing_older(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": self._ai_direction(),
+                "before_date": "2024-01-01",
+                "before_id": self.paper.id,
+                "limit": 5,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["papers"], [])
+        self.assertFalse(data["has_newer"])
+        self.assertFalse(data["has_older"])
+
+    def test_timeline_after_cursor_returns_empty_window_when_nothing_newer(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": self._ai_direction(),
+                "after_date": "2030-01-01",
+                "after_id": self.paper.id,
+                "limit": 5,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["papers"], [])
+        self.assertFalse(data["has_newer"])
+        self.assertFalse(data["has_older"])
+
+
+class WeeklyPushPersonalizedFallbackTest(TestCase):
+    """覆盖 /dataset/weekly-push/personalized 视图 week_offset 解析与 bad method 分支"""
+
+    def setUp(self):
+        self.client = Client()
+        self.user = AccountUser.objects.create_user(
+            username="fallback_user",
+            email="fallback_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.token = generate_jwt_token("fallback_user")
+
+    def auth(self):
+        return {"HTTP_AUTHORIZATION": f"Bearer {self.token}"}
+
+    @patch("dataset.views._build_personalized_weekly_push")
+    def test_personalized_weekly_push_falls_back_when_week_offset_not_numeric(self, mock_build):
+        mock_build.return_value = {"paperCount": 0, "papers": []}
+
+        response = self.client.post(
+            "/dataset/weekly-push/personalized?week_offset=abc",
+            **self.auth(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        mock_build.assert_called_once()
+        # 非法 week_offset 应回退为 0
+        self.assertEqual(mock_build.call_args.kwargs.get("week_offset"), 0)
+
+    @patch("dataset.views._build_personalized_weekly_push")
+    def test_personalized_weekly_push_passes_through_valid_week_offset(self, mock_build):
+        mock_build.return_value = {"paperCount": 0, "papers": []}
+
+        response = self.client.post(
+            "/dataset/weekly-push/personalized?week_offset=2",
+            **self.auth(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(mock_build.call_args.kwargs.get("week_offset"), 2)
+
+    def test_personalized_weekly_push_rejects_bad_method(self):
+        response = self.client.get(
+            "/dataset/weekly-push/personalized",
+            **self.auth(),
+        )
+
+        self.assertEqual(response.status_code, 405)
+        self.assertEqual(response.json()["code"], -3)
+
+
+class ThuCrawlerHelperTest(TestCase):
+    """补充 dataset/services/thu_crawler.py 中尚未单测的纯函数"""
+
+    def test_strip_bracketed_name_content_removes_chinese_and_english_brackets(self):
+        from dataset.services.thu_crawler import strip_bracketed_name_content
+
+        self.assertEqual(strip_bracketed_name_content("张三（教授）"), "张三")
+        self.assertEqual(strip_bracketed_name_content("Zhang San (Prof.)"), "Zhang San")
+        self.assertEqual(strip_bracketed_name_content("张三（系主任）（博士）"), "张三")
+
+    def test_strip_bracketed_name_content_returns_empty_for_blank_input(self):
+        from dataset.services.thu_crawler import strip_bracketed_name_content
+
+        self.assertEqual(strip_bracketed_name_content(""), "")
+        self.assertEqual(strip_bracketed_name_content("   "), "")
+        self.assertEqual(strip_bracketed_name_content(None), "")
+
+    def test_strip_bracketed_name_content_normalizes_full_width_spaces(self):
+        from dataset.services.thu_crawler import strip_bracketed_name_content
+
+        self.assertEqual(strip_bracketed_name_content("张　三"), "张 三")
+
+    @patch("dataset.services.thu_crawler.requests.get")
+    def test_fetch_html_raises_when_http_error(self, mock_get):
+        from dataset.services.thu_crawler import fetch_html
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.side_effect = RuntimeError("HTTP 500")
+        mock_get.return_value = mock_response
+
+        with self.assertRaises(RuntimeError):
+            fetch_html("https://example.com/teacher.htm")
+        mock_get.assert_called_once()
+
+    @patch("dataset.services.thu_crawler.requests.get")
+    def test_fetch_html_returns_decoded_text(self, mock_get):
+        from dataset.services.thu_crawler import fetch_html
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.text = "<html>hello</html>"
+        mock_response.apparent_encoding = "utf-8"
+        mock_get.return_value = mock_response
+
+        body = fetch_html("https://example.com/teacher.htm")
+
+        self.assertEqual(body, "<html>hello</html>")
+        self.assertEqual(mock_response.encoding, "utf-8")
+
+
+class SyncCommandsTest(TestCase):
+    """覆盖 sync_dataset、fetch_mentors 命令与 run_daily_sync 的 wrapper job"""
+
+    @patch("dataset.management.commands.sync_dataset.call_command")
+    def test_sync_dataset_invokes_both_subcommands_in_order(self, mock_call_command):
+        from io import StringIO
+        from django.core.management import call_command
+
+        out = StringIO()
+        call_command("sync_dataset", stdout=out)
+
+        invoked = [args[0] for args, _kwargs in mock_call_command.call_args_list]
+        self.assertEqual(invoked, ["fetch_mentors", "fetch_papers"])
+        self.assertIn("[1/2] 执行 fetch_mentors", out.getvalue())
+        self.assertIn("[2/2] 执行 fetch_papers", out.getvalue())
+        self.assertIn("同步完成", out.getvalue())
+
+    @patch("dataset.management.commands.fetch_mentors.parse_mentor_list")
+    def test_fetch_mentors_creates_and_updates_records(self, mock_parse_list):
+        from io import StringIO
+        from django.core.management import call_command
+
+        mock_parse_list.return_value = [
+            {
+                "Chinese_name": "孙七",
+                "English_name": "Qi Sun",
+                "research_direction": "数据库",
+                "email": "sunqi@example.com",
+                "profile": "档案",
+            },
+            {
+                "Chinese_name": "周八",
+                "English_name": None,
+                "research_direction": "",
+                "email": None,
+                "profile": None,
+            },
+        ]
+
+        out = StringIO()
+        call_command("fetch_mentors", stdout=out)
+
+        sunqi = Mentor.objects.get(Chinese_name="孙七", owner__isnull=True)
+        self.assertEqual(sunqi.English_name, "Qi Sun")
+        self.assertEqual(sunqi.email, "sunqi@example.com")
+        zhouba = Mentor.objects.get(Chinese_name="周八", owner__isnull=True)
+        # 缺失字段应回退为占位默认值
+        self.assertEqual(zhouba.research_direction, "未提供")
+        self.assertIsNone(zhouba.email)
+        self.assertIn("成功导入/更新 2 位导师", out.getvalue())
+
+    @patch("dataset.management.commands.fetch_mentors.parse_mentor_list")
+    def test_fetch_mentors_updates_existing_record_without_duplicate(self, mock_parse_list):
+        from io import StringIO
+        from django.core.management import call_command
+
+        Mentor.objects.create(
+            Chinese_name="王九",
+            English_name="Old Name",
+            research_direction="旧方向",
+            email="old@example.com",
+        )
+        mock_parse_list.return_value = [
+            {
+                "Chinese_name": "王九",
+                "English_name": "New Name",
+                "research_direction": "新方向",
+                "email": "new@example.com",
+                "profile": "新档案",
+            },
+        ]
+
+        call_command("fetch_mentors", stdout=StringIO())
+
+        wangjiu = Mentor.objects.get(Chinese_name="王九", owner__isnull=True)
+        self.assertEqual(wangjiu.English_name, "New Name")
+        self.assertEqual(wangjiu.research_direction, "新方向")
+        self.assertEqual(Mentor.objects.filter(Chinese_name="王九").count(), 1)
+
+    @patch("dataset.management.commands.run_daily_sync.call_command")
+    def test_run_sync_dataset_job_calls_sync_dataset(self, mock_call_command):
+        from dataset.management.commands.run_daily_sync import run_sync_dataset_job
+
+        run_sync_dataset_job()
+
+        mock_call_command.assert_called_once_with("sync_dataset")
+
+    @patch("dataset.management.commands.run_daily_sync.call_command")
+    def test_run_sync_dataset_job_swallows_exceptions(self, mock_call_command):
+        from dataset.management.commands.run_daily_sync import run_sync_dataset_job
+
+        mock_call_command.side_effect = RuntimeError("boom")
+
+        # 不应抛出异常，logger 仅记录
+        run_sync_dataset_job()
+        mock_call_command.assert_called_once_with("sync_dataset")
+
+    @patch("dataset.management.commands.run_daily_sync.call_command")
+    def test_daily_run_weekly_push_job_calls_generate_weekly_push(self, mock_call_command):
+        from dataset.management.commands.run_daily_sync import run_weekly_push_job
+
+        run_weekly_push_job()
+
+        mock_call_command.assert_called_once_with("generate_weekly_push")
+
+    @patch("dataset.management.commands.run_daily_sync.call_command")
+    def test_daily_run_weekly_push_job_swallows_exceptions(self, mock_call_command):
+        from dataset.management.commands.run_daily_sync import run_weekly_push_job
+
+        mock_call_command.side_effect = RuntimeError("boom")
+
+        run_weekly_push_job()
+        mock_call_command.assert_called_once_with("generate_weekly_push")
+
+
+class AIRecentDirectionTruncationTest(TestCase):
+    """覆盖 build_ai_recent_direction_analysis 在论文数超过 20 时的截断分支"""
+
+    def setUp(self):
+        from dataset.services.research_analysis import build_ai_recent_direction_analysis
+
+        self.build_ai = build_ai_recent_direction_analysis
+        self.mentor = Mentor.objects.create(
+            Chinese_name="截断导师",
+            English_name="Truncate Mentor",
+            research_direction="人工智能",
+        )
+        self.cutoff = date(2026, 4, 1)
+        self.today = date(2026, 4, 30)
+
+    @patch("dataset.services.research_analysis.call_thucs_chat_completion")
+    def test_build_ai_recent_direction_analysis_only_includes_first_20_papers(
+        self, mock_call
+    ):
+        mock_call.return_value = "AI 总结"
+        papers = [
+            Paper.objects.create(
+                title=f"Paper {index}",
+                abstract=f"abstract {index}",
+                publish_date=date(2026, 4, 10) + timedelta(days=index % 20),
+                author_names="截断导师",
+                subjects="cs.AI",
+            )
+            for index in range(25)
+        ]
+
+        result = self.build_ai(self.mentor, papers, self.cutoff, self.today)
+
+        self.assertEqual(result, "AI 总结")
+        mock_call.assert_called_once()
+        user_prompt = mock_call.call_args.kwargs["user_prompt"]
+        # 前 20 篇都应当出现
+        for index in range(20):
+            self.assertIn(f"Paper {index}", user_prompt)
+        # 第 21 / 22 / 23 / 24 篇不应当出现
+        for index in range(20, 25):
+            self.assertNotIn(f"Paper {index}", user_prompt)
+        # 但 mentor 元信息中应当报告完整论文数量
+        self.assertIn("论文数量: 25", user_prompt)
+
+    @patch("dataset.services.research_analysis.call_thucs_chat_completion")
+    def test_build_ai_recent_direction_analysis_truncates_long_abstract_to_600_chars(
+        self, mock_call
+    ):
+        mock_call.return_value = "AI 总结"
+        long_abstract = "甲" * 1000
+        paper = Paper.objects.create(
+            title="长摘要论文",
+            abstract=long_abstract,
+            publish_date=date(2026, 4, 20),
+            author_names="截断导师",
+            subjects="cs.AI",
+        )
+
+        self.build_ai(self.mentor, [paper], self.cutoff, self.today)
+
+        user_prompt = mock_call.call_args.kwargs["user_prompt"]
+        # 摘要应当被截断到 600 字符，原 1000 字符的整段不应当完整出现
+        self.assertNotIn(long_abstract, user_prompt)
+        self.assertIn("甲" * 600, user_prompt)
+
+    @patch("dataset.services.research_analysis.call_thucs_chat_completion")
+    def test_build_ai_recent_direction_analysis_uses_tldr_when_present(self, mock_call):
+        mock_call.return_value = "AI 总结"
+        paper = Paper.objects.create(
+            title="TLDR 优先论文",
+            abstract="原始摘要内容",
+            tldr="一句话总结优先",
+            publish_date=date(2026, 4, 22),
+            author_names="截断导师",
+            subjects="cs.AI",
+        )
+
+        self.build_ai(self.mentor, [paper], self.cutoff, self.today)
+
+        user_prompt = mock_call.call_args.kwargs["user_prompt"]
+        # tldr 优先级高于 abstract
+        self.assertIn("一句话总结优先", user_prompt)
+        self.assertNotIn("原始摘要内容", user_prompt)
+
+    @patch("dataset.services.research_analysis.call_thucs_chat_completion")
+    def test_build_ai_recent_direction_analysis_handles_paper_without_tldr_or_abstract(
+        self, mock_call
+    ):
+        mock_call.return_value = "AI 总结"
+        paper = Paper.objects.create(
+            title="无摘要论文",
+            abstract=None,
+            tldr=None,
+            publish_date=date(2026, 4, 18),
+            author_names="截断导师",
+            subjects="cs.AI",
+        )
+
+        self.build_ai(self.mentor, [paper], self.cutoff, self.today)
+
+        user_prompt = mock_call.call_args.kwargs["user_prompt"]
+        self.assertIn("暂无摘要", user_prompt)
+
+    @patch("dataset.services.research_analysis.call_thucs_chat_completion")
+    def test_build_ai_recent_direction_analysis_marks_paper_without_publish_date_as_unknown(
+        self, mock_call
+    ):
+        mock_call.return_value = "AI 总结"
+        paper = Paper.objects.create(
+            title="无日期论文",
+            abstract="测试摘要",
+            tldr="tldr",
+            publish_date=None,
+            author_names="截断导师",
+            subjects="cs.AI",
+        )
+
+        self.build_ai(self.mentor, [paper], self.cutoff, self.today)
+
+        user_prompt = mock_call.call_args.kwargs["user_prompt"]
+        self.assertIn("日期: 未知", user_prompt)
