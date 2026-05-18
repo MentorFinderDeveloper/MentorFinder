@@ -164,6 +164,15 @@ def send_weekly_push_email(
     daily_paper_lists: Iterable[Iterable[Paper]],
 ) -> dict:
     digest = build_weekly_push_digest(user, daily_paper_lists)
+    return send_weekly_push_email_from_digest(user, digest)
+
+
+def send_weekly_push_email_from_digest(user: User, digest: dict) -> dict:
+    """Send a weekly push email using a pre-built digest payload.
+
+    This is the primary entry point for the new storage-backed delivery
+    flow: the digest is loaded from UserWeeklyReport, not recomputed.
+    """
     email_content = render_weekly_push_email(digest)
 
     # 仅在用户个人周报有内容（匹配到关注/私有导师的新论文）时才真正发送邮件，
