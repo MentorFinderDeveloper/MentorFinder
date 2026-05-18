@@ -3873,3 +3873,390 @@ class WeeklyPushFilesServiceTests(TestCase):
 
         self.assertFalse(WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT).exists())
         self.assertTrue(WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_NEXT).exists())
+
+
+class EmailVerificationViewExtraTest(TestCase):
+    """覆盖 account/views.py 中邮件验证码与密码重置剩余分支"""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="reset_user",
+            email="reset_user@example.com",
+            password="abc12345",
+        )
+        self.banned_user = User.objects.create_user(
+            username="reset_banned",
+            email="reset_banned@example.com",
+            password="abc12345",
+            role=User.ROLE_BANNED,
+        )
+
+    def post_json(self, path: str, payload: dict):
+        return self.client.post(path, data=json.dumps(payload), content_type="application/json")
+
+    def test_password_reset_verification_code_bypass_for_existing_user(self):
+        User.objects.create_user(
+            username="bypass_reset_user",
+            email="bypass-reset@example.com",
+            password="abc12345",
+        )
+
+        res = self.post_json(
+            "/password-reset/verification-code",
+            {"email": "bypass-reset@example.com"},
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res.json()["bypass"])
+        # bypass 路径不会落库验证码
+        self.assertFalse(
+            EmailVerificationCode.objects.filter(email="bypass-reset@example.com").exists()
+        )
+
+    def test_password_reset_verification_code_cooldown(self):
+        first = self.post_json(
+            "/password-reset/verification-code",
+            {"email": "reset_user@example.com"},
+        )
+        self.assertEqual(first.status_code, 200)
+
+        second = self.post_json(
+            "/password-reset/verification-code",
+            {"email": "reset_user@example.com"},
+        )
+        self.assertEqual(second.status_code, 429)
+        self.assertEqual(second.json()["code"], 6)
+
+    def test_password_reset_verification_code_rejects_banned_user(self):
+        res = self.post_json(
+            "/password-reset/verification-code",
+            {"email": "reset_banned@example.com"},
+        )
+
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.json()["code"], 3)
+
+    def test_password_reset_verification_code_rejects_empty_email(self):
+        res = self.post_json(
+            "/password-reset/verification-code",
+            {"email": "   "},
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    @patch("account.views.send_password_reset_email")
+    def test_password_reset_verification_code_reports_smtp_failure(self, mock_send):
+        mock_send.side_effect = RuntimeError("smtp boom")
+
+        res = self.post_json(
+            "/password-reset/verification-code",
+            {"email": "reset_user@example.com"},
+        )
+
+        self.assertEqual(res.status_code, 502)
+        self.assertEqual(res.json()["code"], 7)
+        self.assertIn("smtp boom", res.json()["info"])
+
+    @patch("account.views.send_verification_email")
+    def test_register_verification_code_reports_smtp_failure(self, mock_send):
+        mock_send.side_effect = RuntimeError("send mail failed")
+
+        res = self.post_json(
+            "/register/verification-code",
+            {"email": "new-smtp-fail@example.com"},
+        )
+
+        self.assertEqual(res.status_code, 502)
+        self.assertEqual(res.json()["code"], 7)
+        self.assertIn("send mail failed", res.json()["info"])
+
+    def test_register_rejects_non_string_verification_code(self):
+        res = self.post_json(
+            "/register",
+            {
+                "username": "BadTypeUser",
+                "password": "abc12345",
+                "email": "bad-type-code@example.com",
+                "verificationCode": 123456,
+            },
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertFalse(User.objects.filter(username="BadTypeUser").exists())
+
+    def test_reset_password_rejects_non_string_verification_code(self):
+        res = self.post_json(
+            "/password-reset",
+            {
+                "email": "reset_user@example.com",
+                "password": "newpass123",
+                "verificationCode": ["bad", "type"],
+            },
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+
+class UserSocialEndpointsTest(TestCase):
+    """覆盖 search_users / follow_user / followed_users 等用户社交接口"""
+
+    def setUp(self):
+        self.alice = User.objects.create_user(
+            username="alice_social",
+            email="alice@example.com",
+            password="abc12345",
+            real_name="爱丽丝",
+        )
+        self.bob = User.objects.create_user(
+            username="bob_social",
+            email="bob@example.com",
+            password="abc12345",
+        )
+        self.banned = User.objects.create_user(
+            username="banned_social",
+            email="banned-social@example.com",
+            password="abc12345",
+            role=User.ROLE_BANNED,
+        )
+        self.alice_token = generate_jwt_token("alice_social")
+        self.bob_token = generate_jwt_token("bob_social")
+
+    def auth(self, token: str):
+        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    def test_search_users_requires_login(self):
+        res = self.client.get("/search/users")
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_search_users_excludes_self_and_banned_users(self):
+        res = self.client.get("/search/users", **self.auth(self.alice_token))
+
+        self.assertEqual(res.status_code, 200)
+        usernames = {user["username"] for user in res.json()["users"]}
+        self.assertEqual(usernames, {"bob_social"})
+
+    def test_search_users_filters_by_keyword(self):
+        res = self.client.get(
+            "/search/users",
+            {"keyword": "爱丽丝"},
+            **self.auth(self.bob_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        usernames = {user["username"] for user in res.json()["users"]}
+        self.assertEqual(usernames, {"alice_social"})
+
+    def test_search_users_rejects_keyword_too_long(self):
+        res = self.client.get(
+            "/search/users",
+            {"keyword": "x" * 256},
+            **self.auth(self.alice_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_search_users_bad_method(self):
+        res = self.client.post("/search/users", **self.auth(self.alice_token))
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+    def test_follow_user_requires_login(self):
+        res = self.client.post(f"/follow/users/{self.bob.id}")
+
+        self.assertEqual(res.status_code, 401)
+
+    def test_follow_user_rejects_self_follow(self):
+        res = self.client.post(
+            f"/follow/users/{self.alice.id}",
+            **self.auth(self.alice_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], 3)
+
+    def test_follow_user_returns_404_for_unknown_user(self):
+        res = self.client.post(
+            "/follow/users/999999",
+            **self.auth(self.alice_token),
+        )
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_follow_user_returns_404_for_banned_target(self):
+        res = self.client.post(
+            f"/follow/users/{self.banned.id}",
+            **self.auth(self.alice_token),
+        )
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_follow_user_succeeds_and_is_idempotent(self):
+        first = self.client.post(
+            f"/follow/users/{self.bob.id}",
+            **self.auth(self.alice_token),
+        )
+        second = self.client.post(
+            f"/follow/users/{self.bob.id}",
+            **self.auth(self.alice_token),
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertTrue(first.json()["followed"])
+        self.assertEqual(
+            UserFollow.objects.filter(follower=self.alice, following=self.bob).count(),
+            1,
+        )
+
+    def test_unfollow_user_clears_relation(self):
+        UserFollow.objects.create(follower=self.alice, following=self.bob)
+
+        res = self.client.delete(
+            f"/follow/users/{self.bob.id}",
+            **self.auth(self.alice_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(res.json()["followed"])
+        self.assertFalse(
+            UserFollow.objects.filter(follower=self.alice, following=self.bob).exists()
+        )
+
+    def test_follow_user_rejects_bad_method(self):
+        res = self.client.get(
+            f"/follow/users/{self.bob.id}",
+            **self.auth(self.alice_token),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+    def test_followed_users_requires_login(self):
+        res = self.client.get("/follow/users")
+
+        self.assertEqual(res.status_code, 401)
+
+    def test_followed_users_excludes_banned_users(self):
+        UserFollow.objects.create(follower=self.alice, following=self.bob)
+        UserFollow.objects.create(follower=self.alice, following=self.banned)
+
+        res = self.client.get("/follow/users", **self.auth(self.alice_token))
+
+        self.assertEqual(res.status_code, 200)
+        usernames = {user["username"] for user in res.json()["users"]}
+        self.assertEqual(usernames, {"bob_social"})
+
+    def test_followed_users_rejects_bad_method(self):
+        res = self.client.post("/follow/users", **self.auth(self.alice_token))
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+
+class PublicUserProfileViewTest(TestCase):
+    """覆盖 /users/<id>/profile 公共资料视图与隐私开关"""
+
+    def setUp(self):
+        self.viewer = User.objects.create_user(
+            username="profile_viewer",
+            email="profile_viewer@example.com",
+            password="abc12345",
+        )
+        self.target = User.objects.create_user(
+            username="profile_target",
+            email="profile_target@example.com",
+            password="abc12345",
+        )
+        self.banned = User.objects.create_user(
+            username="profile_banned",
+            email="profile_banned@example.com",
+            password="abc12345",
+            role=User.ROLE_BANNED,
+        )
+        self.viewer_token = generate_jwt_token("profile_viewer")
+        UserProfile.objects.create(
+            user=self.target,
+            avatar_url="https://example.com/avatar.png",
+            signature="签名",
+            personal_intro="个人简介",
+            research_experience="科研经历",
+            honors="荣誉",
+            project_experience="项目经历",
+            show_personal_intro=True,
+            show_research_experience=False,
+            show_honors=False,
+            show_project_experience=True,
+        )
+
+    def auth(self, token: str):
+        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    def test_public_profile_requires_login(self):
+        res = self.client.get(f"/users/{self.target.id}/profile")
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_public_profile_returns_404_for_missing_user(self):
+        res = self.client.get(
+            "/users/999999/profile",
+            **self.auth(self.viewer_token),
+        )
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_public_profile_returns_404_for_banned_user(self):
+        res = self.client.get(
+            f"/users/{self.banned.id}/profile",
+            **self.auth(self.viewer_token),
+        )
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_public_profile_returns_visible_fields_only(self):
+        res = self.client.get(
+            f"/users/{self.target.id}/profile",
+            **self.auth(self.viewer_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        payload = res.json()["user"]
+        self.assertEqual(payload["username"], "profile_target")
+        self.assertFalse(payload["isSelf"])
+        profile = payload["profile"]
+        # 启用展示的字段保留原文，未启用展示的字段返回空串
+        self.assertEqual(profile["personalIntro"], "个人简介")
+        self.assertEqual(profile["projectExperience"], "项目经历")
+        self.assertEqual(profile["researchExperience"], "")
+        self.assertEqual(profile["honors"], "")
+        self.assertTrue(profile["showPersonalIntro"])
+        self.assertFalse(profile["showResearchExperience"])
+
+    def test_public_profile_marks_self_when_viewing_own_page(self):
+        res = self.client.get(
+            f"/users/{self.viewer.id}/profile",
+            **self.auth(self.viewer_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res.json()["user"]["isSelf"])
+
+    def test_public_profile_rejects_bad_method(self):
+        res = self.client.post(
+            f"/users/{self.target.id}/profile",
+            **self.auth(self.viewer_token),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
