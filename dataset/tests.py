@@ -2367,6 +2367,111 @@ class WeeklyPushSummaryPureFunctionTest(TestCase):
         self.assertEqual(start, date(2026, 4, 6))
         self.assertEqual(end, date(2026, 4, 12))
 
+    @patch("dataset.services.weekly_push_summary.requests.post")
+    def test_build_ai_summary_with_fallback_returns_rule_when_api_key_missing(self, mock_post):
+        from dataset.services.weekly_push_summary import build_ai_summary_with_fallback
+
+        with self.settings(THUCS_API_KEY=""):
+            summary, generated_by = build_ai_summary_with_fallback(
+                self.week_start,
+                self.week_end,
+                [self.paper_a],
+                fixed_summary="fixed",
+            )
+
+        self.assertEqual(summary, "fixed")
+        self.assertEqual(generated_by, "rule")
+        mock_post.assert_not_called()
+
+    @patch("dataset.services.weekly_push_summary.requests.post")
+    def test_build_ai_summary_with_fallback_returns_ai_text_when_api_returns_content(self, mock_post):
+        from dataset.services.weekly_push_summary import build_ai_summary_with_fallback
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            "choices": [{"message": {"content": "AI 生成的周报"}}],
+        }
+        mock_post.return_value = mock_response
+
+        with self.settings(THUCS_API_KEY="dummy-key"):
+            summary, generated_by = build_ai_summary_with_fallback(
+                self.week_start,
+                self.week_end,
+                [self.paper_a, self.paper_b],
+                fixed_summary="fixed",
+                purpose_text="单元测试",
+                mentor_names_by_paper_id={self.paper_a.id: ["张三"]},
+            )
+
+        self.assertEqual(summary, "AI 生成的周报")
+        self.assertEqual(generated_by, "thucs-openai")
+        mock_post.assert_called_once()
+
+    @patch("dataset.services.weekly_push_summary.requests.post")
+    def test_build_ai_summary_with_fallback_falls_back_on_empty_response(self, mock_post):
+        from dataset.services.weekly_push_summary import build_ai_summary_with_fallback
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {"choices": [{"message": {"content": "   "}}]}
+        mock_post.return_value = mock_response
+
+        with self.settings(THUCS_API_KEY="dummy-key"):
+            summary, generated_by = build_ai_summary_with_fallback(
+                self.week_start,
+                self.week_end,
+                [],
+                fixed_summary="fixed-fallback",
+            )
+
+        self.assertEqual(summary, "fixed-fallback")
+        self.assertEqual(generated_by, "rule")
+
+    @patch("dataset.services.weekly_push_summary.requests.post")
+    def test_build_ai_summary_with_fallback_swallows_request_exceptions(self, mock_post):
+        from dataset.services.weekly_push_summary import build_ai_summary_with_fallback
+
+        mock_post.side_effect = RuntimeError("network down")
+
+        with self.settings(THUCS_API_KEY="dummy-key"):
+            summary, generated_by = build_ai_summary_with_fallback(
+                self.week_start,
+                self.week_end,
+                [self.paper_a],
+                fixed_summary="fixed-on-error",
+            )
+
+        self.assertEqual(summary, "fixed-on-error")
+        self.assertEqual(generated_by, "rule")
+
+    @patch("dataset.services.weekly_push_summary.build_ai_summary_with_fallback")
+    def test_build_weekly_push_payload_serializes_papers_and_extra_fields(self, mock_ai_summary):
+        from dataset.services.weekly_push_summary import build_weekly_push_payload
+
+        mock_ai_summary.return_value = ("AI 总结", "thucs-openai")
+
+        payload = build_weekly_push_payload(
+            title="测试周报",
+            week_start=self.week_start,
+            week_end=self.week_end,
+            papers=[self.paper_a, self.paper_b],
+            purpose_text="单元测试",
+            mentor_names_by_paper_id={self.paper_a.id: ["导师A"]},
+            extra_fields={"customMetric": 42},
+        )
+
+        self.assertEqual(payload["title"], "测试周报")
+        self.assertEqual(payload["weekStart"], "2026-04-13")
+        self.assertEqual(payload["weekEnd"], "2026-04-19")
+        self.assertEqual(payload["paperCount"], 2)
+        self.assertEqual(payload["generatedBy"], "thucs-openai")
+        self.assertEqual(payload["aiSummary"], "AI 总结")
+        self.assertIn("AI 总结", payload["content"])
+        self.assertEqual(payload["customMetric"], 42)
+        self.assertEqual(payload["papers"][0]["mentorNames"], ["导师A"])
+        self.assertNotIn("mentorNames", payload["papers"][1])
+
 
 class WeeklyPushPublicViewTest(TestCase):
     """覆盖 /dataset/weekly-push/latest 与 /dataset/weekly-push/history 公共视图"""
@@ -2833,6 +2938,120 @@ class FetchPapersHelperTest(TestCase):
 
         self.assertEqual(subjects, "")
         self.assertEqual(tldr, "")
+
+    def test_record_new_papers_for_weekly_push_respects_explicit_cycle(self):
+        paper = Paper.objects.create(
+            title="显式 cycle 论文",
+            abstract="摘要",
+            publish_date=date(2026, 4, 18),
+            author_names="Author",
+            subjects="cs.AI",
+        )
+
+        self.command._record_new_papers_for_weekly_push(
+            paper_ids=[paper.id],
+            record_cycle=WeeklyPushPaperBucket.CYCLE_NEXT,
+            now=datetime(2026, 4, 22, 4, 0, 0),
+        )
+
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(
+                cycle=WeeklyPushPaperBucket.CYCLE_NEXT,
+                paper=paper,
+            ).count(),
+            1,
+        )
+
+
+class GenerateWeeklyPushCommandTest(TestCase):
+    """覆盖 dataset/management/commands/generate_weekly_push.py 命令"""
+
+    def setUp(self):
+        from io import StringIO
+
+        self.stdout = StringIO()
+        self.fixed_today = date(2026, 4, 22)
+        self.paper_in_range = Paper.objects.create(
+            title="本周论文",
+            abstract="本周摘要",
+            publish_date=date(2026, 4, 15),
+            author_names="Author A",
+            subjects="cs.AI",
+        )
+        Paper.objects.create(
+            title="不在本周的论文",
+            abstract="旧摘要",
+            publish_date=date(2026, 3, 1),
+            author_names="Author B",
+            subjects="cs.LG",
+        )
+
+    @patch("dataset.management.commands.generate_weekly_push.resolve_week_range")
+    @patch(
+        "dataset.management.commands.generate_weekly_push.build_weekly_push_payload"
+    )
+    def test_generate_weekly_push_creates_record(self, mock_build, mock_resolve_week):
+        from io import StringIO
+        from django.core.management import call_command
+
+        mock_resolve_week.return_value = (date(2026, 4, 13), date(2026, 4, 19))
+        mock_build.return_value = {
+            "paperCount": 1,
+            "fixedSummary": "fixed",
+            "aiSummary": "ai",
+            "content": "content",
+            "papers": [{"id": self.paper_in_range.id, "title": "本周论文"}],
+            "generatedBy": "rule",
+        }
+
+        out = StringIO()
+        call_command("generate_weekly_push", stdout=out)
+
+        record = WeeklyPaperPush.objects.get(week_start=date(2026, 4, 13))
+        self.assertEqual(record.week_end, date(2026, 4, 19))
+        self.assertEqual(record.paper_count, 1)
+        self.assertEqual(record.generated_by, "rule")
+        self.assertIn("周推送已生成", out.getvalue())
+        self.assertIn("papers=1", out.getvalue())
+
+    @patch("dataset.management.commands.generate_weekly_push.resolve_week_range")
+    @patch(
+        "dataset.management.commands.generate_weekly_push.build_weekly_push_payload"
+    )
+    def test_generate_weekly_push_overwrites_existing_record_with_warning(
+        self, mock_build, mock_resolve_week
+    ):
+        from io import StringIO
+        from django.core.management import call_command
+
+        mock_resolve_week.return_value = (date(2026, 4, 13), date(2026, 4, 19))
+        mock_build.return_value = {
+            "paperCount": 0,
+            "fixedSummary": "fixed",
+            "aiSummary": "ai",
+            "content": "content",
+            "papers": [],
+            "generatedBy": "rule",
+        }
+        WeeklyPaperPush.objects.create(
+            week_start=date(2026, 4, 13),
+            week_end=date(2026, 4, 19),
+            paper_count=99,
+            title="旧周报",
+            fixed_summary="old-fixed",
+            ai_summary="old-ai",
+            content="old-content",
+            papers=[],
+            generated_by="rule",
+        )
+
+        out = StringIO()
+        call_command("generate_weekly_push", stdout=out)
+
+        record = WeeklyPaperPush.objects.get(week_start=date(2026, 4, 13))
+        self.assertEqual(record.paper_count, 0)
+        # 没有 --force 时仍会按默认 update_or_create 更新，并输出警告
+        self.assertIn("本周推送已存在", out.getvalue())
 
 
 class TimelineCursorEdgeTest(TestCase):

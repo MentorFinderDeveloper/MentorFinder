@@ -4260,3 +4260,122 @@ class PublicUserProfileViewTest(TestCase):
 
         self.assertEqual(res.status_code, 405)
         self.assertEqual(res.json()["code"], -3)
+
+
+class EmailVerificationServiceTest(TestCase):
+    """单元测试 account/services/email_verification.py 中的纯函数"""
+
+    def test_email_matches_bypass_recognizes_prefix_case_insensitively(self):
+        from account.services.email_verification import email_matches_bypass
+
+        self.assertTrue(email_matches_bypass("bypass-tester@example.com"))
+        self.assertTrue(email_matches_bypass("ByPaSS-tester@example.com"))
+        self.assertTrue(email_matches_bypass("  bypass-tester@example.com  "))
+        self.assertFalse(email_matches_bypass("user@example.com"))
+
+    def test_email_matches_bypass_returns_false_when_prefix_empty(self):
+        from account.services.email_verification import email_matches_bypass
+
+        with self.settings(EMAIL_VERIFICATION_BYPASS_PREFIX=""):
+            self.assertFalse(email_matches_bypass("bypass-tester@example.com"))
+
+    def test_generate_verification_code_returns_six_digit_numeric(self):
+        from account.services.email_verification import (
+            CODE_LENGTH,
+            generate_verification_code,
+        )
+
+        code = generate_verification_code()
+
+        self.assertEqual(len(code), CODE_LENGTH)
+        self.assertTrue(code.isdigit())
+
+    def test_issue_verification_code_writes_and_refreshes_record(self):
+        from account.services.email_verification import issue_verification_code
+
+        code1, record1 = issue_verification_code("issue@example.com")
+        code2, record2 = issue_verification_code("issue@example.com")
+
+        # 二次签发应当复写同一条记录而不是新建
+        self.assertEqual(record1.pk, record2.pk)
+        self.assertEqual(record2.code, code2)
+        self.assertGreaterEqual(
+            (record2.expires_at - timezone.now()).total_seconds(),
+            60,
+        )
+
+    def test_get_remaining_cooldown_returns_zero_when_no_record(self):
+        from account.services.email_verification import get_remaining_cooldown
+
+        self.assertEqual(get_remaining_cooldown("missing@example.com"), 0)
+
+    def test_get_remaining_cooldown_returns_positive_for_recent_record(self):
+        from account.services.email_verification import (
+            get_remaining_cooldown,
+            issue_verification_code,
+        )
+
+        issue_verification_code("recent@example.com")
+
+        self.assertGreater(get_remaining_cooldown("recent@example.com"), 0)
+
+    def test_verify_code_consumes_correct_code(self):
+        from account.services.email_verification import (
+            issue_verification_code,
+            verify_code,
+        )
+
+        code, _record = issue_verification_code("consume@example.com")
+
+        self.assertTrue(verify_code("consume@example.com", code))
+        # 验证后记录应被删除，下一次校验会返回 False
+        self.assertFalse(EmailVerificationCode.objects.filter(email="consume@example.com").exists())
+        self.assertFalse(verify_code("consume@example.com", code))
+
+    def test_verify_code_rejects_wrong_code_without_deleting_record(self):
+        from account.services.email_verification import (
+            issue_verification_code,
+            verify_code,
+        )
+
+        code, _record = issue_verification_code("wrong@example.com")
+
+        self.assertFalse(verify_code("wrong@example.com", "000000" if code != "000000" else "111111"))
+        # 错误验证码不应消费记录
+        self.assertTrue(EmailVerificationCode.objects.filter(email="wrong@example.com").exists())
+
+    def test_verify_code_purges_expired_record(self):
+        from account.services.email_verification import verify_code
+
+        EmailVerificationCode.objects.create(
+            email="expired@example.com",
+            code="123456",
+            expires_at=timezone.now() - timedelta(seconds=1),
+        )
+
+        self.assertFalse(verify_code("expired@example.com", "123456"))
+        self.assertFalse(EmailVerificationCode.objects.filter(email="expired@example.com").exists())
+
+    @patch("account.services.email_verification.send_mail")
+    def test_send_verification_email_passes_subject_body_and_recipient(self, mock_send_mail):
+        from account.services.email_verification import send_verification_email
+
+        send_verification_email("notify@example.com", "234567")
+
+        mock_send_mail.assert_called_once()
+        kwargs = mock_send_mail.call_args.kwargs
+        self.assertIn("234567", kwargs["message"])
+        self.assertEqual(kwargs["recipient_list"], ["notify@example.com"])
+        self.assertIn("注册邮箱验证码", kwargs["subject"])
+
+    @patch("account.services.email_verification.send_mail")
+    def test_send_password_reset_email_uses_reset_subject(self, mock_send_mail):
+        from account.services.email_verification import send_password_reset_email
+
+        send_password_reset_email("reset-recipient@example.com", "345678")
+
+        mock_send_mail.assert_called_once()
+        kwargs = mock_send_mail.call_args.kwargs
+        self.assertIn("345678", kwargs["message"])
+        self.assertIn("修改密码邮箱验证码", kwargs["subject"])
+        self.assertEqual(kwargs["recipient_list"], ["reset-recipient@example.com"])
