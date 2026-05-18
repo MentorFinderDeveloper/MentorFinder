@@ -136,6 +136,9 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
 
 # Email
 # 163 SMTP integration. When EMAIL_HOST_USER and EMAIL_HOST_PASSWORD are both set

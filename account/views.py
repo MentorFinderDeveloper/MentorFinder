@@ -1,7 +1,11 @@
 import json
 import re
+import uuid
+from pathlib import Path
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.files.storage import default_storage
 from django.core.validators import validate_email
 from django.http import HttpRequest
 from django.db.models import Q
@@ -26,6 +30,13 @@ from account.services.email_verification import (
 from search.serializers import MentorSerializer
 
 USERNAME_REGEX = re.compile(r"^[A-Za-z0-9_-]+$")
+AVATAR_MAX_SIZE = 2 * 1024 * 1024
+AVATAR_ALLOWED_CONTENT_TYPES = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+}
 MANAGEABLE_ROLES = {
     User.ROLE_STUDENT,
     User.ROLE_MENTOR,
@@ -895,6 +906,43 @@ def my_profile(req: HttpRequest):
         return request_success({"profile": profile.serialize()})
 
     return BAD_METHOD
+
+
+@CheckRequire
+def upload_avatar(req: HttpRequest):
+    user, auth_error = _require_user(req)
+    if auth_error is not None:
+        return auth_error
+
+    if req.method != "POST":
+        return BAD_METHOD
+
+    avatar_file = req.FILES.get("avatar")
+    if avatar_file is None:
+        return request_failed(-2, "Missing or error type of [avatar]", 400)
+    if avatar_file.size > AVATAR_MAX_SIZE:
+        return request_failed(-2, "Invalid parameters. [avatar] is too large", 400)
+
+    content_type = getattr(avatar_file, "content_type", "")
+    extension = AVATAR_ALLOWED_CONTENT_TYPES.get(content_type)
+    if extension is None:
+        suffix = Path(getattr(avatar_file, "name", "")).suffix.lower()
+        extension = suffix if suffix in AVATAR_ALLOWED_CONTENT_TYPES.values() else None
+    if extension is None:
+        return request_failed(-2, "Invalid parameters. [avatar] must be an image", 400)
+
+    profile, _ = UserProfile.objects.get_or_create(user=user)
+    relative_path = f"avatars/user-{user.id}-{uuid.uuid4().hex}{extension}"
+    saved_path = default_storage.save(relative_path, avatar_file)
+    avatar_url = settings.MEDIA_URL + saved_path
+
+    profile.avatar_url = avatar_url
+    profile.save(update_fields=["avatar_url", "updated_at"])
+
+    return request_success({
+        "avatarUrl": avatar_url,
+        "profile": profile.serialize(),
+    })
 
 
 @CheckRequire

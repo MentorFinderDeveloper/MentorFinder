@@ -6,6 +6,7 @@ from unittest.mock import patch
 from pathlib import Path
 
 from django.contrib.auth.hashers import check_password
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase
@@ -971,6 +972,48 @@ class UserProfileViewTests(TestCase):
 
         self.assertEqual(res.status_code, 405)
         self.assertEqual(res.json()["code"], -3)
+
+    def test_upload_avatar_saves_image_and_updates_profile(self):
+        with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
+            image = SimpleUploadedFile(
+                "avatar.png",
+                b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR",
+                content_type="image/png",
+            )
+
+            res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": image},
+                **self.auth_headers(self.token),
+            )
+
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.json()["code"], 0)
+            self.assertTrue(res.json()["avatarUrl"].startswith("/media/avatars/user-"))
+            profile = UserProfile.objects.get(user=self.user)
+            self.assertEqual(profile.avatar_url, res.json()["avatarUrl"])
+            media_res = self.client.get(res.json()["avatarUrl"])
+            self.assertEqual(media_res.status_code, 200)
+
+    def test_upload_avatar_requires_login(self):
+        image = SimpleUploadedFile("avatar.png", b"fake", content_type="image/png")
+
+        res = self.client.post("/profile/avatar", data={"avatar": image})
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_upload_avatar_rejects_non_image(self):
+        text_file = SimpleUploadedFile("avatar.txt", b"not image", content_type="text/plain")
+
+        res = self.client.post(
+            "/profile/avatar",
+            data={"avatar": text_file},
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
 
     def test_student_can_submit_mentor_verification_request(self):
         res = self.client.post(
