@@ -11,7 +11,9 @@ from django.utils import timezone
 from account.models import User
 from account.services.user_weekly_report import (
     generate_user_weekly_report,
+    get_user_weekly_report_by_week,
     get_latest_user_weekly_report,
+    list_user_weekly_reports,
 )
 from dataset.models import Mentor, Paper, WeeklyPaperPush
 from dataset.services.author_matching import is_exact_english_author_match
@@ -972,6 +974,17 @@ def weekly_push_personalized(request):
         return auth_error
 
     if request.method == "GET":
+        week_start_raw = str(request.GET.get("week_start", "")).strip()
+        if week_start_raw != "":
+            week_start = _parse_iso_date(week_start_raw)
+            if week_start is None:
+                return request_failed(-2, "Invalid parameters. [week_start] must be YYYY-MM-DD", 400)
+
+            report = get_user_weekly_report_by_week(user, week_start)
+            if report is None:
+                return request_failed(2, "Weekly push not found", 404)
+            return request_success({"weeklyPush": report.payload})
+
         report = get_latest_user_weekly_report(user)
         if report is None:
             return request_success({"weeklyPush": None})
@@ -989,3 +1002,28 @@ def weekly_push_personalized(request):
         generated_by_kind="user",
     )
     return request_success({"weeklyPush": report.payload})
+
+
+@CheckRequire
+def weekly_push_personalized_history(request):
+    if request.method != "GET":
+        return BAD_METHOD
+
+    user, auth_error = _require_user(request)
+    if auth_error is not None:
+        return auth_error
+
+    reports = list_user_weekly_reports(user)
+    return request_success({
+        "history": [
+            {
+                "weekStart": report.week_start.isoformat(),
+                "weekEnd": report.week_end.isoformat(),
+                "title": str(report.payload.get("title") or report.title),
+                "paperCount": int(report.payload.get("paperCount") or report.total_paper_count or 0),
+                "generatedBy": str(report.payload.get("generatedBy") or "rule"),
+                "updatedAt": report.generated_at.isoformat(sep=" ", timespec="seconds") if report.generated_at else "",
+            }
+            for report in reports
+        ]
+    })
