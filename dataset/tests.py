@@ -3376,3 +3376,127 @@ class SyncCommandsTest(TestCase):
 
         run_weekly_push_job()
         mock_call_command.assert_called_once_with("generate_weekly_push")
+
+
+class AIRecentDirectionTruncationTest(TestCase):
+    """覆盖 build_ai_recent_direction_analysis 在论文数超过 20 时的截断分支"""
+
+    def setUp(self):
+        from dataset.services.research_analysis import build_ai_recent_direction_analysis
+
+        self.build_ai = build_ai_recent_direction_analysis
+        self.mentor = Mentor.objects.create(
+            Chinese_name="截断导师",
+            English_name="Truncate Mentor",
+            research_direction="人工智能",
+        )
+        self.cutoff = date(2026, 4, 1)
+        self.today = date(2026, 4, 30)
+
+    @patch("dataset.services.research_analysis.call_thucs_chat_completion")
+    def test_build_ai_recent_direction_analysis_only_includes_first_20_papers(
+        self, mock_call
+    ):
+        mock_call.return_value = "AI 总结"
+        papers = [
+            Paper.objects.create(
+                title=f"Paper {index}",
+                abstract=f"abstract {index}",
+                publish_date=date(2026, 4, 10) + timedelta(days=index % 20),
+                author_names="截断导师",
+                subjects="cs.AI",
+            )
+            for index in range(25)
+        ]
+
+        result = self.build_ai(self.mentor, papers, self.cutoff, self.today)
+
+        self.assertEqual(result, "AI 总结")
+        mock_call.assert_called_once()
+        user_prompt = mock_call.call_args.kwargs["user_prompt"]
+        # 前 20 篇都应当出现
+        for index in range(20):
+            self.assertIn(f"Paper {index}", user_prompt)
+        # 第 21 / 22 / 23 / 24 篇不应当出现
+        for index in range(20, 25):
+            self.assertNotIn(f"Paper {index}", user_prompt)
+        # 但 mentor 元信息中应当报告完整论文数量
+        self.assertIn("论文数量: 25", user_prompt)
+
+    @patch("dataset.services.research_analysis.call_thucs_chat_completion")
+    def test_build_ai_recent_direction_analysis_truncates_long_abstract_to_600_chars(
+        self, mock_call
+    ):
+        mock_call.return_value = "AI 总结"
+        long_abstract = "甲" * 1000
+        paper = Paper.objects.create(
+            title="长摘要论文",
+            abstract=long_abstract,
+            publish_date=date(2026, 4, 20),
+            author_names="截断导师",
+            subjects="cs.AI",
+        )
+
+        self.build_ai(self.mentor, [paper], self.cutoff, self.today)
+
+        user_prompt = mock_call.call_args.kwargs["user_prompt"]
+        # 摘要应当被截断到 600 字符，原 1000 字符的整段不应当完整出现
+        self.assertNotIn(long_abstract, user_prompt)
+        self.assertIn("甲" * 600, user_prompt)
+
+    @patch("dataset.services.research_analysis.call_thucs_chat_completion")
+    def test_build_ai_recent_direction_analysis_uses_tldr_when_present(self, mock_call):
+        mock_call.return_value = "AI 总结"
+        paper = Paper.objects.create(
+            title="TLDR 优先论文",
+            abstract="原始摘要内容",
+            tldr="一句话总结优先",
+            publish_date=date(2026, 4, 22),
+            author_names="截断导师",
+            subjects="cs.AI",
+        )
+
+        self.build_ai(self.mentor, [paper], self.cutoff, self.today)
+
+        user_prompt = mock_call.call_args.kwargs["user_prompt"]
+        # tldr 优先级高于 abstract
+        self.assertIn("一句话总结优先", user_prompt)
+        self.assertNotIn("原始摘要内容", user_prompt)
+
+    @patch("dataset.services.research_analysis.call_thucs_chat_completion")
+    def test_build_ai_recent_direction_analysis_handles_paper_without_tldr_or_abstract(
+        self, mock_call
+    ):
+        mock_call.return_value = "AI 总结"
+        paper = Paper.objects.create(
+            title="无摘要论文",
+            abstract=None,
+            tldr=None,
+            publish_date=date(2026, 4, 18),
+            author_names="截断导师",
+            subjects="cs.AI",
+        )
+
+        self.build_ai(self.mentor, [paper], self.cutoff, self.today)
+
+        user_prompt = mock_call.call_args.kwargs["user_prompt"]
+        self.assertIn("暂无摘要", user_prompt)
+
+    @patch("dataset.services.research_analysis.call_thucs_chat_completion")
+    def test_build_ai_recent_direction_analysis_marks_paper_without_publish_date_as_unknown(
+        self, mock_call
+    ):
+        mock_call.return_value = "AI 总结"
+        paper = Paper.objects.create(
+            title="无日期论文",
+            abstract="测试摘要",
+            tldr="tldr",
+            publish_date=None,
+            author_names="截断导师",
+            subjects="cs.AI",
+        )
+
+        self.build_ai(self.mentor, [paper], self.cutoff, self.today)
+
+        user_prompt = mock_call.call_args.kwargs["user_prompt"]
+        self.assertIn("日期: 未知", user_prompt)

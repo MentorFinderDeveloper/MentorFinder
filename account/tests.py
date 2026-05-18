@@ -4434,3 +4434,116 @@ class RunWeeklyPushSchedulerWrapperTest(TestCase):
         # 调度器循环依赖此函数不抛异常
         run_weekly_push_job()
         mock_call_command.assert_called_once_with("send_weekly_push")
+
+
+class AuthorizationHeaderParsingTest(TestCase):
+    """覆盖 _extract_token / _require_user 对 Authorization 头的解析分支"""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="auth_parsing_user",
+            email="auth_parsing@example.com",
+            password="abc12345",
+        )
+        self.token = generate_jwt_token("auth_parsing_user")
+
+    def test_authorization_header_supports_bare_token_without_bearer_prefix(self):
+        # 视图允许直接传 token，不强制 Bearer 前缀
+        res = self.client.get("/profile/me", HTTP_AUTHORIZATION=self.token)
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["userId"], self.user.id)
+
+    def test_authorization_header_supports_bearer_prefix_case_insensitive(self):
+        res = self.client.get(
+            "/profile/me",
+            HTTP_AUTHORIZATION=f"bEaReR {self.token}",
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+
+    def test_authorization_header_blank_treated_as_unauthorized(self):
+        res = self.client.get("/profile/me", HTTP_AUTHORIZATION="   ")
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_authorization_header_invalid_token_returns_unauthorized(self):
+        res = self.client.get(
+            "/profile/me",
+            HTTP_AUTHORIZATION="Bearer not-a-real-token",
+        )
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_authorization_header_with_missing_user_returns_unauthorized(self):
+        # token 合法但用户记录已被删除
+        token = generate_jwt_token("ghost_user")
+
+        res = self.client.get("/profile/me", HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+
+class AdminUsersDoubleFilterTest(TestCase):
+    """覆盖 /management/users 同时使用 keyword + role 过滤的分支"""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="double_filter_admin",
+            email="double_filter_admin@example.com",
+            password="abc12345",
+            role=User.ROLE_ADMIN,
+        )
+        self.admin_token = generate_jwt_token("double_filter_admin")
+        self.public_mentor = Mentor.objects.create(
+            Chinese_name="过滤导师",
+            English_name="Filter Mentor",
+            research_direction="可信人工智能",
+        )
+        # 三个 mentor 角色用户，keyword 只命中一个
+        self.match_user = User.objects.create_user(
+            username="mentor_alice",
+            email="mentor_alice@example.com",
+            password="abc12345",
+            role=User.ROLE_MENTOR,
+            mentor_profile=self.public_mentor,
+        )
+        self.other_mentor_profile = Mentor.objects.create(
+            Chinese_name="另一导师",
+            English_name="Another Mentor",
+            research_direction="机器学习",
+        )
+        self.other_mentor_user = User.objects.create_user(
+            username="mentor_bob",
+            email="mentor_bob@example.com",
+            password="abc12345",
+            role=User.ROLE_MENTOR,
+            mentor_profile=self.other_mentor_profile,
+        )
+        # 用 keyword "alice" 但角色为 student，不应被命中
+        User.objects.create_user(
+            username="student_alice",
+            email="student_alice@example.com",
+            password="abc12345",
+            role=User.ROLE_STUDENT,
+        )
+
+    def auth(self):
+        return {"HTTP_AUTHORIZATION": f"Bearer {self.admin_token}"}
+
+    def test_admin_users_filters_by_keyword_and_role_together(self):
+        res = self.client.get(
+            "/management/users",
+            {"keyword": "alice", "role": User.ROLE_MENTOR},
+            **self.auth(),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        usernames = [user["username"] for user in res.json()["users"]]
+        self.assertEqual(usernames, ["mentor_alice"])
+        self.assertEqual(res.json()["roleFilter"], User.ROLE_MENTOR)
