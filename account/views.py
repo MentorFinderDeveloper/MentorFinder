@@ -18,6 +18,7 @@ from utils.utils_require import CheckRequire, MAX_CHAR_LENGTH, require
 
 from utils.utils_jwt import check_jwt_token
 from dataset.models import Mentor, Paper
+from dataset.views import ARXIV_SUBJECT_MAPPING
 from account.models import MentorFollow
 from account.services.email_verification import (
     email_matches_bypass,
@@ -43,6 +44,10 @@ MANAGEABLE_ROLES = {
     User.ROLE_ADMIN,
     User.ROLE_BANNED,
 }
+
+
+def _subject_display_name(subject: str) -> str:
+    return ARXIV_SUBJECT_MAPPING.get(subject, subject)
 
 
 def _validate_password(password: str):
@@ -384,6 +389,7 @@ def _serialize_subject_follow(subject: str, subject_counts: dict[str, int] | Non
     papers = _papers_for_subject(subject)
     return {
         "subject": subject,
+        "subjectName": _subject_display_name(subject),
         "paperCount": counts.get(subject, len(papers)),
         "recentPapers": [_serialize_subject_paper(paper) for paper in papers[:8]],
     }
@@ -649,6 +655,7 @@ def followed_subjects(req: HttpRequest):
     available_subjects = [
         {
             "subject": subject,
+            "subjectName": _subject_display_name(subject),
             "paperCount": count,
             "followed": subject in followed_subjects_set,
         }
