@@ -2632,3 +2632,311 @@ class RuleBasedResearchAnalysisTest(TestCase):
         with self.settings(THUCS_API_KEY="dummy"):
             with self.assertRaises(RuntimeError):
                 call_thucs_chat_completion(system_prompt="sys", user_prompt="user")
+
+
+class MentorRecentDirectionAnalysisEdgeTest(TestCase):
+    """补充 /dataset/mentors/<id>/recent-direction-analysis 仍未覆盖的分支"""
+
+    def setUp(self):
+        self.client = Client()
+        self.mentor = Mentor.objects.create(
+            Chinese_name="边界张三",
+            English_name="Boundary Zhang",
+            research_direction="人工智能",
+        )
+        self.recent_paper = Paper.objects.create(
+            title="Recent paper",
+            abstract="Recent research",
+            publish_date=timezone.localdate() - timedelta(days=30),
+            author_names="边界张三",
+        )
+        self.old_paper = Paper.objects.create(
+            title="Old paper",
+            abstract="Outdated research",
+            publish_date=timezone.localdate() - timedelta(days=500),
+            author_names="边界张三",
+        )
+        self.mentor.set_paper_id_list([self.recent_paper.id, self.old_paper.id])
+        self.mentor.save()
+
+    @patch("dataset.views.build_ai_recent_direction_analysis")
+    def test_recent_direction_analysis_falls_back_to_rule_when_ai_fails(self, mock_ai_analysis):
+        mock_ai_analysis.side_effect = RuntimeError("ai backend down")
+
+        response = self.client.post(
+            f"/dataset/mentors/{self.mentor.id}/recent-direction-analysis"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["generatedBy"], "rule")
+        self.assertEqual(payload["paperCount"], 1)
+        self.assertIn(self.mentor.Chinese_name, payload["analysis"])
+
+    def test_recent_direction_analysis_returns_rule_response_when_no_recent_papers(self):
+        self.mentor.set_paper_id_list([self.old_paper.id])
+        self.mentor.save()
+
+        response = self.client.post(
+            f"/dataset/mentors/{self.mentor.id}/recent-direction-analysis"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["paperCount"], 0)
+        self.assertEqual(payload["generatedBy"], "rule")
+        self.assertEqual(payload["papers"], [])
+        self.assertIn("暂无", payload["analysis"])
+
+    def test_recent_direction_analysis_returns_404_for_missing_mentor(self):
+        response = self.client.post("/dataset/mentors/999999/recent-direction-analysis")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["code"], 2)
+
+    def test_recent_direction_analysis_returns_404_for_invisible_private_mentor(self):
+        owner = AccountUser.objects.create_user(
+            username="recent_owner",
+            email="recent_owner@example.com",
+            password="abc12345",
+            role="student",
+        )
+        private_mentor = Mentor.objects.create(
+            Chinese_name="私有最近导师",
+            English_name="Private Recent Mentor",
+            research_direction="测试",
+            owner=owner,
+        )
+
+        response = self.client.post(
+            f"/dataset/mentors/{private_mentor.id}/recent-direction-analysis"
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["code"], 2)
+
+    def test_recent_direction_analysis_rejects_bad_method(self):
+        response = self.client.get(
+            f"/dataset/mentors/{self.mentor.id}/recent-direction-analysis"
+        )
+
+        self.assertEqual(response.status_code, 405)
+        self.assertEqual(response.json()["code"], -3)
+
+
+class FetchPapersHelperTest(TestCase):
+    """覆盖 fetch_papers Command 的纯函数及 S2 元数据抓取分支"""
+
+    def setUp(self):
+        self.command = FetchPapersCommand()
+
+    def test_extract_arxiv_id_strips_prefix_and_version(self):
+        self.assertEqual(
+            self.command._extract_arxiv_id("http://arxiv.org/abs/2504.12345v2"),
+            "2504.12345",
+        )
+        self.assertEqual(
+            self.command._extract_arxiv_id("http://arxiv.org/abs/cs/0112017v1"),
+            "cs/0112017",
+        )
+
+    def test_extract_arxiv_id_returns_empty_for_blank_or_invalid_input(self):
+        self.assertEqual(self.command._extract_arxiv_id(""), "")
+        self.assertEqual(self.command._extract_arxiv_id(None), "")
+
+    def test_build_arxiv_url_returns_canonical_url(self):
+        self.assertEqual(
+            self.command._build_arxiv_url("2504.12345"),
+            "https://arxiv.org/abs/2504.12345",
+        )
+
+    def test_build_arxiv_url_returns_empty_for_blank_id(self):
+        self.assertEqual(self.command._build_arxiv_url(""), "")
+
+    def test_is_arxiv_rate_limit_error_detects_429_substring(self):
+        self.assertTrue(self.command._is_arxiv_rate_limit_error(Exception("HTTP 429 too many requests")))
+        self.assertTrue(self.command._is_arxiv_rate_limit_error(Exception("got 429 from server")))
+        self.assertFalse(self.command._is_arxiv_rate_limit_error(Exception("HTTP 500 server error")))
+
+    def test_extract_arxiv_authors_strips_group_prefix(self):
+        author_1 = MagicMock()
+        author_1.name = "Group X"
+        author_2 = MagicMock()
+        author_2.name = ":"
+        author_3 = MagicMock()
+        author_3.name = "Alice"
+        author_4 = MagicMock()
+        author_4.name = "Bob"
+        result = MagicMock()
+        result.authors = [author_1, author_2, author_3, author_4]
+
+        cleaned = self.command._extract_arxiv_authors(result)
+
+        self.assertEqual(cleaned, ["Alice", "Bob"])
+
+    def test_extract_arxiv_authors_ignores_empty_author_objects(self):
+        author_a = MagicMock()
+        author_a.name = "   "
+        author_b = MagicMock()
+        author_b.name = "Alice"
+        result = MagicMock()
+        result.authors = [author_a, author_b]
+
+        cleaned = self.command._extract_arxiv_authors(result)
+
+        self.assertEqual(cleaned, ["Alice"])
+
+    @patch("dataset.management.commands.fetch_papers.requests.get")
+    def test_fetch_s2_metadata_returns_empty_strings_when_arxiv_id_blank(self, mock_get):
+        subjects, tldr = self.command._fetch_s2_metadata("")
+
+        self.assertEqual(subjects, "")
+        self.assertEqual(tldr, "")
+        mock_get.assert_not_called()
+
+    @patch("dataset.management.commands.fetch_papers.requests.get")
+    def test_fetch_s2_metadata_returns_empty_on_non_200_response(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_get.return_value = mock_response
+
+        subjects, tldr = self.command._fetch_s2_metadata("2504.12345")
+
+        self.assertEqual(subjects, "")
+        self.assertEqual(tldr, "")
+
+    @patch("dataset.management.commands.fetch_papers.requests.get")
+    def test_fetch_s2_metadata_parses_subjects_and_tldr(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "s2FieldsOfStudy": [
+                {"category": "Computer Science"},
+                {"category": "Computer Science"},
+                {"category": "Mathematics"},
+                {"category": ""},
+            ],
+            "tldr": {"text": "  short summary  "},
+        }
+        mock_get.return_value = mock_response
+
+        subjects, tldr = self.command._fetch_s2_metadata("2504.12345")
+
+        self.assertEqual(subjects, "Computer Science, Mathematics")
+        self.assertEqual(tldr, "short summary")
+
+    @patch("dataset.management.commands.fetch_papers.requests.get")
+    def test_fetch_s2_metadata_swallows_request_exceptions(self, mock_get):
+        mock_get.side_effect = RuntimeError("network down")
+
+        subjects, tldr = self.command._fetch_s2_metadata("2504.12345")
+
+        self.assertEqual(subjects, "")
+        self.assertEqual(tldr, "")
+
+
+class TimelineCursorEdgeTest(TestCase):
+    """覆盖 paper_timeline_view 的 before/after cursor 参数校验分支"""
+
+    def setUp(self):
+        self.client = Client()
+        self.paper = Paper.objects.create(
+            title="时间线锚点论文",
+            abstract="摘要",
+            publish_date=date(2026, 4, 18),
+            author_names="时间线作者",
+            subjects="cs.AI",
+        )
+
+    def _ai_direction(self) -> str:
+        return "人工智能 (Artificial Intelligence)"
+
+    def test_timeline_before_cursor_rejects_invalid_date(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": self._ai_direction(),
+                "before_date": "not-a-date",
+                "before_id": self.paper.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], -2)
+        self.assertIn("before_date", response.json()["info"])
+
+    def test_timeline_before_cursor_rejects_non_positive_before_id(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": self._ai_direction(),
+                "before_date": "2026-04-18",
+                "before_id": 0,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], -2)
+        self.assertIn("before_id", response.json()["info"])
+
+    def test_timeline_after_cursor_rejects_invalid_date(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": self._ai_direction(),
+                "after_date": "not-a-date",
+                "after_id": self.paper.id,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], -2)
+        self.assertIn("after_date", response.json()["info"])
+
+    def test_timeline_after_cursor_rejects_non_positive_after_id(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": self._ai_direction(),
+                "after_date": "2026-04-18",
+                "after_id": 0,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["code"], -2)
+        self.assertIn("after_id", response.json()["info"])
+
+    def test_timeline_before_cursor_returns_empty_window_when_nothing_older(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": self._ai_direction(),
+                "before_date": "2024-01-01",
+                "before_id": self.paper.id,
+                "limit": 5,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["papers"], [])
+        self.assertFalse(data["has_newer"])
+        self.assertFalse(data["has_older"])
+
+    def test_timeline_after_cursor_returns_empty_window_when_nothing_newer(self):
+        response = self.client.get(
+            "/timeline/",
+            {
+                "direction": self._ai_direction(),
+                "after_date": "2030-01-01",
+                "after_id": self.paper.id,
+                "limit": 5,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["papers"], [])
+        self.assertFalse(data["has_newer"])
+        self.assertFalse(data["has_older"])

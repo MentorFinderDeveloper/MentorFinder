@@ -717,3 +717,78 @@ class SearchTests(TestCase):
 
         self.assertEqual(res.status_code, 405)
         self.assertEqual(res.json()["code"], -3)
+
+    def test_search_mentors_visibility_mine_returns_only_owned_private_mentors(self):
+        res = self.client.get(
+            "/search/mentors",
+            {"keyword": "", "visibility": "mine"},
+            **self.auth_headers(self.owner_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        names = [mentor["Chinese_name"] for mentor in res.json()["mentors"]]
+        self.assertEqual(names, ["王五"])
+
+    def test_search_mentors_visibility_public_excludes_private_owned_mentors(self):
+        res = self.client.get(
+            "/search/mentors",
+            {"keyword": "", "visibility": "public"},
+            **self.auth_headers(self.owner_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        names = {mentor["Chinese_name"] for mentor in res.json()["mentors"]}
+        self.assertEqual(names, {"张三", "李四"})
+
+    def test_search_mentors_invalid_visibility_falls_back_to_all(self):
+        res = self.client.get(
+            "/search/mentors",
+            {"keyword": "", "visibility": "unknown"},
+            **self.auth_headers(self.owner_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        names = {mentor["Chinese_name"] for mentor in res.json()["mentors"]}
+        self.assertEqual(names, {"张三", "李四", "王五"})
+
+    def test_search_mentors_rejects_invalid_token_silently_and_returns_public(self):
+        res = self.client.get(
+            "/search/mentors",
+            {"keyword": ""},
+            HTTP_AUTHORIZATION="Bearer not-a-real-token",
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        names = {mentor["Chinese_name"] for mentor in res.json()["mentors"]}
+        self.assertEqual(names, {"张三", "李四"})
+
+    def test_search_mentors_treats_blank_bearer_token_as_anonymous(self):
+        res = self.client.get(
+            "/search/mentors",
+            {"keyword": ""},
+            HTTP_AUTHORIZATION="Bearer    ",
+        )
+
+        self.assertEqual(res.status_code, 200)
+        names = {mentor["Chinese_name"] for mentor in res.json()["mentors"]}
+        self.assertEqual(names, {"张三", "李四"})
+
+    def test_search_mentors_invalid_page_inputs_fall_back_to_defaults(self):
+        res = self.client.get(
+            "/search/mentors",
+            {
+                "keyword": "",
+                "page": "not-number",
+                "page_size": "not-number",
+            },
+        )
+
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["page"], 1)
+        self.assertEqual(data["page_size"], 10)
+
