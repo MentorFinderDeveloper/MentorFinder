@@ -9,7 +9,10 @@ from django.http import HttpRequest
 from django.utils import timezone
 
 from account.models import User
-from account.services.weekly_push import build_weekly_push_digest, collect_target_mentors, collect_target_subjects
+from account.services.user_weekly_report import (
+    generate_user_weekly_report,
+    get_latest_user_weekly_report,
+)
 from dataset.models import Mentor, Paper, WeeklyPaperPush
 from dataset.services.author_matching import is_exact_english_author_match
 from dataset.services.research_analysis import (
@@ -17,10 +20,6 @@ from dataset.services.research_analysis import (
     build_rule_based_recent_direction_analysis,
 )
 from dataset.services.thu_crawler import get_english_name
-from dataset.services.weekly_push_summary import (
-    build_weekly_push_payload,
-    resolve_week_range,
-)
 from utils.utils_jwt import check_jwt_token
 from utils.utils_request import BAD_METHOD, request_failed, request_success
 from utils.utils_require import CheckRequire, MAX_CHAR_LENGTH, require
@@ -963,75 +962,20 @@ def weekly_push_history(request):
     })
 
 
-def _build_personalized_weekly_push(user: User, week_offset: int = 0):
-    week_start, week_end = resolve_week_range(week_offset)
-    weekly_papers = list(
-        Paper.objects.filter(
-            publish_date__gte=week_start,
-            publish_date__lte=week_end,
-        ).order_by("-publish_date", "-id")
-    )
-    digest = build_weekly_push_digest(user, [weekly_papers])
-    mentor_names_by_paper_id = defaultdict(list)
-
-    for group in digest.get("mentorGroups", []):
-        mentor_name = str(group.get("mentorName") or "").strip()
-        if mentor_name == "":
-            continue
-        for paper in group.get("papers", []):
-            paper_id = int(paper.get("id") or 0)
-            if paper_id == 0 or mentor_name in mentor_names_by_paper_id[paper_id]:
-                continue
-            mentor_names_by_paper_id[paper_id].append(mentor_name)
-
-    subject_names_by_paper_id = defaultdict(list)
-    for group in digest.get("subjectGroups", []):
-        subject = str(group.get("subject") or "").strip()
-        if subject == "":
-            continue
-        for paper in group.get("papers", []):
-            paper_id = int(paper.get("id") or 0)
-            if paper_id == 0 or subject in subject_names_by_paper_id[paper_id]:
-                continue
-            subject_names_by_paper_id[paper_id].append(subject)
-
-    matched_paper_ids = set(mentor_names_by_paper_id) | set(subject_names_by_paper_id)
-    matched_papers = [
-        paper
-        for paper in weekly_papers
-        if paper.id in matched_paper_ids
-    ]
-    title = f"专属周报（{week_start.isoformat()} ~ {week_end.isoformat()}）"
-    tracked_mentors = collect_target_mentors(user)
-    tracked_subjects = collect_target_subjects(user)
-
-    return build_weekly_push_payload(
-        title=title,
-        week_start=week_start,
-        week_end=week_end,
-        papers=matched_papers,
-        purpose_text="用户专属周报",
-        mentor_names_by_paper_id=dict(mentor_names_by_paper_id),
-        extra_fields={
-            "mentorGroups": digest.get("mentorGroups", []),
-            "subjectGroups": digest.get("subjectGroups", []),
-            "subjectDistribution": digest.get("subjectDistribution", []),
-            "trackedMentorCount": len(tracked_mentors),
-            "activeMentorCount": len(digest.get("mentorGroups", [])),
-            "trackedSubjectCount": len(tracked_subjects),
-            "activeSubjectCount": len(digest.get("subjectGroups", [])),
-        },
-    )
-
-
 @CheckRequire
 def weekly_push_personalized(request):
-    if request.method != "POST":
+    if request.method not in ("POST", "GET"):
         return BAD_METHOD
 
     user, auth_error = _require_user(request)
     if auth_error is not None:
         return auth_error
+
+    if request.method == "GET":
+        report = get_latest_user_weekly_report(user)
+        if report is None:
+            return request_success({"weeklyPush": None})
+        return request_success({"weeklyPush": report.payload})
 
     week_offset_raw = str(request.GET.get("week_offset", "0")).strip()
     try:
@@ -1039,5 +983,9 @@ def weekly_push_personalized(request):
     except ValueError:
         week_offset = 0
 
-    personalized_push = _build_personalized_weekly_push(user, week_offset=week_offset)
-    return request_success({"weeklyPush": personalized_push})
+    report = generate_user_weekly_report(
+        user,
+        week_offset=week_offset,
+        generated_by_kind="user",
+    )
+    return request_success({"weeklyPush": report.payload})

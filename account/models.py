@@ -293,3 +293,49 @@ class PushRecord(models.Model):
 
     def __str__(self) -> str:
         return f"{self.user.username}:{self.type}:{self.period_key}:{self.status}"
+
+
+class UserWeeklyReport(models.Model):
+    GENERATED_BY_USER = "user"
+    GENERATED_BY_SCHEDULED = "scheduled"
+
+    GENERATED_BY_CHOICES = (
+        (GENERATED_BY_USER, "用户手动生成"),
+        (GENERATED_BY_SCHEDULED, "定时任务生成"),
+    )
+
+    user = models.ForeignKey(
+        "User",
+        on_delete=models.CASCADE,
+        related_name="weekly_reports",
+        verbose_name="用户",
+    )
+    week_start = models.DateField(verbose_name="周开始日期")
+    week_end = models.DateField(verbose_name="周结束日期")
+    title = models.CharField(max_length=255, verbose_name="周报标题")
+    payload = models.JSONField(default=dict, blank=True, verbose_name="前端展示完整结构")
+    digest = models.JSONField(default=dict, blank=True, verbose_name="邮件构造用 digest")
+    has_updates = models.BooleanField(default=False, verbose_name="是否有命中论文")
+    total_paper_count = models.IntegerField(default=0, verbose_name="命中论文总数")
+    generated_by_kind = models.CharField(
+        max_length=20,
+        choices=GENERATED_BY_CHOICES,
+        default=GENERATED_BY_USER,
+        verbose_name="生成方式",
+    )
+    generated_at = models.DateTimeField(auto_now=True, verbose_name="最近生成时间")
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="首次生成时间")
+
+    class Meta:
+        verbose_name = "用户专属周报"
+        verbose_name_plural = verbose_name
+        ordering = ["-week_start", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "week_start"],
+                name="unique_user_weekly_report_user_week",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user.username}:{self.week_start.isoformat()}"

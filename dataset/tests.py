@@ -4,6 +4,7 @@ from django.utils import timezone
 from unittest.mock import patch, MagicMock
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 import json
 import tempfile
 
@@ -3180,9 +3181,9 @@ class WeeklyPushPersonalizedFallbackTest(TestCase):
     def auth(self):
         return {"HTTP_AUTHORIZATION": f"Bearer {self.token}"}
 
-    @patch("dataset.views._build_personalized_weekly_push")
-    def test_personalized_weekly_push_falls_back_when_week_offset_not_numeric(self, mock_build):
-        mock_build.return_value = {"paperCount": 0, "papers": []}
+    @patch("dataset.views.generate_user_weekly_report")
+    def test_personalized_weekly_push_falls_back_when_week_offset_not_numeric(self, mock_generate):
+        mock_generate.return_value = SimpleNamespace(payload={"paperCount": 0, "papers": []})
 
         response = self.client.post(
             "/dataset/weekly-push/personalized?week_offset=abc",
@@ -3190,13 +3191,13 @@ class WeeklyPushPersonalizedFallbackTest(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        mock_build.assert_called_once()
+        mock_generate.assert_called_once()
         # 非法 week_offset 应回退为 0
-        self.assertEqual(mock_build.call_args.kwargs.get("week_offset"), 0)
+        self.assertEqual(mock_generate.call_args.kwargs.get("week_offset"), 0)
 
-    @patch("dataset.views._build_personalized_weekly_push")
-    def test_personalized_weekly_push_passes_through_valid_week_offset(self, mock_build):
-        mock_build.return_value = {"paperCount": 0, "papers": []}
+    @patch("dataset.views.generate_user_weekly_report")
+    def test_personalized_weekly_push_passes_through_valid_week_offset(self, mock_generate):
+        mock_generate.return_value = SimpleNamespace(payload={"paperCount": 0, "papers": []})
 
         response = self.client.post(
             "/dataset/weekly-push/personalized?week_offset=2",
@@ -3204,10 +3205,10 @@ class WeeklyPushPersonalizedFallbackTest(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(mock_build.call_args.kwargs.get("week_offset"), 2)
+        self.assertEqual(mock_generate.call_args.kwargs.get("week_offset"), 2)
 
     def test_personalized_weekly_push_rejects_bad_method(self):
-        response = self.client.get(
+        response = self.client.delete(
             "/dataset/weekly-push/personalized",
             **self.auth(),
         )
