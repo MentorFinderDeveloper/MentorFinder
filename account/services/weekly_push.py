@@ -135,8 +135,9 @@ def render_weekly_push_email(digest: dict) -> dict:
     if digest.get("subjectGroups"):
         body_lines.extend(["按关注板块分组："])
         for group in digest.get("subjectGroups", []):
-            subject = str(group.get("subject") or "未命名板块")
-            body_lines.append(f"- {subject}：{group.get('paperCount', 0)} 篇")
+            # 不要复用外层的 subject 变量名——那是邮件标题，被覆盖会让 return 把学科名当邮件 subject 发出去。
+            group_subject = str(group.get("subject") or "未命名板块")
+            body_lines.append(f"- {group_subject}：{group.get('paperCount', 0)} 篇")
             for index, paper in enumerate(group.get("papers", []), start=1):
                 body_lines.extend(
                     [
