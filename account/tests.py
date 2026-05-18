@@ -338,6 +338,65 @@ class AccountAuthTests(TestCase):
         self.assertEqual(res.status_code, 405)
         self.assertEqual(res.json()["code"], -3)
 
+    def test_send_password_reset_code_success_for_existing_email(self):
+        res = self.post_json("/password-reset/verification-code", {"email": "ashitemaru@example.com"})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["bypass"], False)
+        record = EmailVerificationCode.objects.filter(email="ashitemaru@example.com").first()
+        self.assertIsNotNone(record)
+        self.assertEqual(len(record.code), 6)
+        self.assertTrue(record.code.isdigit())
+
+    def test_send_password_reset_code_rejects_unknown_email(self):
+        res = self.post_json("/password-reset/verification-code", {"email": "missing@example.com"})
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_reset_password_with_email_code_success(self):
+        code = self.issue_verification_code("ashitemaru@example.com")
+        res = self.post_json(
+            "/password-reset",
+            {"email": "ashitemaru@example.com", "password": "newpass123", "verificationCode": code},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["username"], "Ashitemaru")
+        user = User.objects.get(email="ashitemaru@example.com")
+        self.assertTrue(check_password("newpass123", user.password))
+        self.assertFalse(EmailVerificationCode.objects.filter(email="ashitemaru@example.com").exists())
+
+    def test_reset_password_rejects_invalid_code(self):
+        self.issue_verification_code("ashitemaru@example.com", code="111111")
+        res = self.post_json(
+            "/password-reset",
+            {"email": "ashitemaru@example.com", "password": "newpass123", "verificationCode": "999999"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], 5)
+        user = User.objects.get(email="ashitemaru@example.com")
+        self.assertTrue(check_password("abc12345", user.password))
+        self.assertTrue(EmailVerificationCode.objects.filter(email="ashitemaru@example.com").exists())
+
+    def test_reset_password_rejects_weak_password(self):
+        code = self.issue_verification_code("ashitemaru@example.com")
+        res = self.post_json(
+            "/password-reset",
+            {"email": "ashitemaru@example.com", "password": "short1", "verificationCode": code},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        user = User.objects.get(email="ashitemaru@example.com")
+        self.assertTrue(check_password("abc12345", user.password))
+
+    def test_password_reset_bad_methods(self):
+        code_res = self.client.get("/password-reset/verification-code")
+        reset_res = self.client.get("/password-reset")
+        self.assertEqual(code_res.status_code, 405)
+        self.assertEqual(code_res.json()["code"], -3)
+        self.assertEqual(reset_res.status_code, 405)
+        self.assertEqual(reset_res.json()["code"], -3)
+
 
 class MentorFollowViewTests(TestCase):
     def setUp(self):
