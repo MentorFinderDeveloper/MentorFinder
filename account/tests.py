@@ -656,14 +656,15 @@ class MentorFollowViewTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual(res.json()["subjects"][0]["subject"], "cs.AI")
+        self.assertEqual(res.json()["subjects"][0]["subjectName"], "人工智能 (Artificial Intelligence)")
         self.assertEqual(res.json()["subjects"][0]["paperCount"], 2)
         self.assertEqual(res.json()["subjects"][0]["recentPapers"][0]["title"], "New AI paper")
         self.assertIn(
-            {"subject": "cs.CL", "paperCount": 1, "followed": False},
+            {"subject": "cs.CL", "subjectName": "自然语言处理 (NLP)", "paperCount": 1, "followed": False},
             res.json()["availableSubjects"],
         )
         self.assertIn(
-            {"subject": "cs.AI", "paperCount": 2, "followed": True},
+            {"subject": "cs.AI", "subjectName": "人工智能 (Artificial Intelligence)", "paperCount": 2, "followed": True},
             res.json()["availableSubjects"],
         )
 
