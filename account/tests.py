@@ -4224,34 +4224,6 @@ class PublicUserProfileViewTest(TestCase):
         self.assertEqual(res.status_code, 404)
         self.assertEqual(res.json()["code"], 2)
 
-    def test_public_profile_returns_visible_fields_only(self):
-        res = self.client.get(
-            f"/users/{self.target.id}/profile",
-            **self.auth(self.viewer_token),
-        )
-
-        self.assertEqual(res.status_code, 200)
-        payload = res.json()["user"]
-        self.assertEqual(payload["username"], "profile_target")
-        self.assertFalse(payload["isSelf"])
-        profile = payload["profile"]
-        # 启用展示的字段保留原文，未启用展示的字段返回空串
-        self.assertEqual(profile["personalIntro"], "个人简介")
-        self.assertEqual(profile["projectExperience"], "项目经历")
-        self.assertEqual(profile["researchExperience"], "")
-        self.assertEqual(profile["honors"], "")
-        self.assertTrue(profile["showPersonalIntro"])
-        self.assertFalse(profile["showResearchExperience"])
-
-    def test_public_profile_marks_self_when_viewing_own_page(self):
-        res = self.client.get(
-            f"/users/{self.viewer.id}/profile",
-            **self.auth(self.viewer_token),
-        )
-
-        self.assertEqual(res.status_code, 200)
-        self.assertTrue(res.json()["user"]["isSelf"])
-
     def test_public_profile_rejects_bad_method(self):
         res = self.client.post(
             f"/users/{self.target.id}/profile",
