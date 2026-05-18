@@ -63,6 +63,7 @@ class AccountAuthTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
         self.assertTrue(res.json()["token"].count(".") == 2)
+        self.assertEqual(res.json()["username"], "Ashitemaru")
         self.assertEqual(res.json()["role"], "student")
 
     def test_login_with_email_correct_password(self):
@@ -70,6 +71,7 @@ class AccountAuthTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
         self.assertTrue(res.json()["token"].count(".") == 2)
+        self.assertEqual(res.json()["username"], "Ashitemaru")
         self.assertEqual(res.json()["role"], "student")
 
     def test_login_non_existing_user(self):

@@ -56,6 +56,7 @@ def login(req: HttpRequest):
     if user.check_password(password):
         return request_success({
             "token": generate_jwt_token(user.username),
+            "username": user.username,
             "role": user.role,
             "userId": user.id,
         })
