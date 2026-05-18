@@ -24,10 +24,17 @@ from dataset.services.author_matching import (
     is_exact_english_author_match,
     normalize_english_name,
 )
-from dataset.services.weekly_push_summary import resolve_week_range
+from dataset.services.weekly_push_summary import (
+    build_fixed_summary,
+    compose_weekly_push_content,
+    resolve_week_range,
+    serialize_weekly_push_paper,
+)
 from account.models import MentorFollow, SubjectFollow, User as AccountUser, WeeklyPushPaperBucket
 from account.services.weekly_push_files import build_weekly_push_bucket_period_key
 from utils.utils_jwt import generate_jwt_token
+from utils.utils_request import return_field
+from utils.utils_time import get_timestamp
 
 
 class PaperModelTest(TestCase):
@@ -2222,3 +2229,406 @@ class MentorRecentDirectionAnalysisViewTest(TestCase):
         self.assertEqual(payload["analysis"], "导师近一年主要关注智能体与推理。")
         self.assertEqual(len(payload["papers"]), 1)
         self.assertEqual(payload["papers"][0]["title"], "Recent Paper")
+
+
+class UtilsRequestAndTimeTest(TestCase):
+    """覆盖 utils/utils_request.py 与 utils/utils_time.py 中尚未测试的函数"""
+
+    def test_return_field_returns_only_listed_keys(self):
+        source = {"a": 1, "b": 2, "c": 3}
+
+        self.assertEqual(return_field(source, ["a", "c"]), {"a": 1, "c": 3})
+
+    def test_return_field_returns_empty_dict_for_empty_field_list(self):
+        self.assertEqual(return_field({"a": 1}, []), {})
+
+    def test_return_field_raises_when_field_is_missing(self):
+        with self.assertRaises(AssertionError):
+            return_field({"a": 1}, ["a", "missing"])
+
+    def test_get_timestamp_returns_positive_float(self):
+        ts = get_timestamp()
+
+        self.assertIsInstance(ts, float)
+        self.assertGreater(ts, 0)
+
+
+class WeeklyPushSummaryPureFunctionTest(TestCase):
+    """覆盖 dataset/services/weekly_push_summary.py 中的纯函数"""
+
+    def setUp(self):
+        self.week_start = date(2026, 4, 13)
+        self.week_end = date(2026, 4, 19)
+        self.paper_a = Paper.objects.create(
+            title="周报论文A",
+            abstract="abstract A",
+            publish_date=date(2026, 4, 18),
+            author_names="Author A",
+            subjects="cs.AI, cs.LG",
+            arxiv_id="2604.00001",
+            arxiv_url="https://arxiv.org/abs/2604.00001",
+            tldr="TLDR A",
+        )
+        self.paper_b = Paper.objects.create(
+            title="周报论文B",
+            abstract="abstract B",
+            publish_date=date(2026, 4, 14),
+            author_names="Author B",
+            subjects="",
+            arxiv_id="2604.00002",
+        )
+        self.paper_no_date = Paper.objects.create(
+            title="无日期论文",
+            abstract="abstract C",
+            publish_date=None,
+            author_names="Author C",
+            subjects="cs.CL",
+        )
+
+    def test_build_fixed_summary_returns_empty_message_without_papers(self):
+        summary = build_fixed_summary(self.week_start, self.week_end, [])
+
+        self.assertEqual(summary, "2026-04-13 到 2026-04-19 无新增论文。")
+
+    def test_build_fixed_summary_aggregates_subjects_and_dates(self):
+        summary = build_fixed_summary(
+            self.week_start,
+            self.week_end,
+            [self.paper_a, self.paper_b],
+        )
+
+        self.assertIn("共收录 2 篇论文", summary)
+        self.assertIn("2026-04-14 至 2026-04-18", summary)
+        self.assertIn("cs.AI(1)", summary)
+        self.assertIn("cs.LG(1)", summary)
+        self.assertIn("其他/未分类(1)", summary)
+
+    def test_build_fixed_summary_marks_unknown_dates_when_publish_date_missing(self):
+        summary = build_fixed_summary(
+            self.week_start,
+            self.week_end,
+            [self.paper_no_date],
+        )
+
+        self.assertIn("未知 至 未知", summary)
+        self.assertIn("cs.CL(1)", summary)
+
+    def test_compose_weekly_push_content_collapses_duplicate_summary(self):
+        self.assertEqual(compose_weekly_push_content("fixed", "fixed"), "fixed")
+
+    def test_compose_weekly_push_content_appends_ai_summary_section(self):
+        composed = compose_weekly_push_content("fixed", "ai-summary")
+
+        self.assertIn("【AI总结】", composed)
+        self.assertTrue(composed.startswith("fixed"))
+        self.assertTrue(composed.endswith("ai-summary"))
+
+    def test_serialize_weekly_push_paper_resolves_arxiv_url_from_id(self):
+        paper = Paper.objects.create(
+            title="仅有 arXiv id",
+            abstract="abstract",
+            publish_date=date(2026, 4, 20),
+            author_names="Author X",
+            subjects="cs.AI",
+            arxiv_id="2604.99999",
+            arxiv_url="",
+            tldr="tldr",
+        )
+
+        item = serialize_weekly_push_paper(paper)
+
+        self.assertEqual(item["arxivUrl"], "https://arxiv.org/abs/2604.99999")
+        self.assertEqual(item["arxivId"], "2604.99999")
+        self.assertNotIn("mentorNames", item)
+        self.assertEqual(item["publishDate"], "2026-04-20")
+
+    def test_serialize_weekly_push_paper_keeps_existing_url_and_attaches_mentor_names(self):
+        item = serialize_weekly_push_paper(self.paper_a, mentor_names=["张三", "李四"])
+
+        self.assertEqual(item["arxivUrl"], "https://arxiv.org/abs/2604.00001")
+        self.assertEqual(item["mentorNames"], ["张三", "李四"])
+        self.assertEqual(item["tldr"], "TLDR A")
+
+    def test_serialize_weekly_push_paper_handles_null_publish_date(self):
+        item = serialize_weekly_push_paper(self.paper_no_date)
+
+        self.assertIsNone(item["publishDate"])
+        self.assertIsNone(item["arxivUrl"])
+
+    def test_resolve_week_range_returns_previous_full_week_by_default(self):
+        start, end = resolve_week_range(0, today=date(2026, 4, 22))
+
+        self.assertEqual(start, date(2026, 4, 13))
+        self.assertEqual(end, date(2026, 4, 19))
+
+    def test_resolve_week_range_supports_positive_offsets(self):
+        start, end = resolve_week_range(1, today=date(2026, 4, 22))
+
+        self.assertEqual(start, date(2026, 4, 6))
+        self.assertEqual(end, date(2026, 4, 12))
+
+
+class WeeklyPushPublicViewTest(TestCase):
+    """覆盖 /dataset/weekly-push/latest 与 /dataset/weekly-push/history 公共视图"""
+
+    def setUp(self):
+        from dataset.models import WeeklyPaperPush
+
+        self.client = Client()
+        self.older = WeeklyPaperPush.objects.create(
+            week_start=date(2026, 4, 6),
+            week_end=date(2026, 4, 12),
+            paper_count=2,
+            title="较早周报",
+            fixed_summary="fixed-old",
+            ai_summary="ai-old",
+            content="content-old",
+            papers=[{"id": 1, "title": "p1"}],
+            generated_by="rule",
+        )
+        self.newer = WeeklyPaperPush.objects.create(
+            week_start=date(2026, 4, 13),
+            week_end=date(2026, 4, 19),
+            paper_count=5,
+            title="最新周报",
+            fixed_summary="fixed-new",
+            ai_summary="ai-new",
+            content="content-new",
+            papers=[{"id": 2, "title": "p2"}],
+            generated_by="thucs-openai",
+        )
+
+    def test_weekly_push_latest_returns_most_recent_push(self):
+        response = self.client.get("/dataset/weekly-push/latest")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["weeklyPush"]
+        self.assertEqual(payload["title"], "最新周报")
+        self.assertEqual(payload["paperCount"], 5)
+        self.assertEqual(payload["weekStart"], "2026-04-13")
+
+    def test_weekly_push_latest_filters_by_week_start(self):
+        response = self.client.get(
+            "/dataset/weekly-push/latest",
+            {"week_start": "2026-04-06"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["weeklyPush"]
+        self.assertEqual(payload["title"], "较早周报")
+
+    def test_weekly_push_latest_returns_404_for_unknown_week_start(self):
+        response = self.client.get(
+            "/dataset/weekly-push/latest",
+            {"week_start": "1990-01-01"},
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["code"], 2)
+
+    def test_weekly_push_latest_returns_null_when_no_push_exists(self):
+        from dataset.models import WeeklyPaperPush
+
+        WeeklyPaperPush.objects.all().delete()
+
+        response = self.client.get("/dataset/weekly-push/latest")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json()["weeklyPush"])
+
+    def test_weekly_push_latest_rejects_bad_method(self):
+        response = self.client.post("/dataset/weekly-push/latest")
+
+        self.assertEqual(response.status_code, 405)
+        self.assertEqual(response.json()["code"], -3)
+
+    def test_weekly_push_history_returns_pushes_in_reverse_order(self):
+        response = self.client.get("/dataset/weekly-push/history")
+
+        self.assertEqual(response.status_code, 200)
+        history = response.json()["history"]
+        self.assertEqual([item["title"] for item in history], ["最新周报", "较早周报"])
+        self.assertEqual(history[0]["paperCount"], 5)
+        self.assertEqual(history[0]["generatedBy"], "thucs-openai")
+        self.assertIn("updatedAt", history[0])
+
+    def test_weekly_push_history_rejects_bad_method(self):
+        response = self.client.post("/dataset/weekly-push/history")
+
+        self.assertEqual(response.status_code, 405)
+        self.assertEqual(response.json()["code"], -3)
+
+    def test_weekly_paper_push_serialize_returns_full_payload(self):
+        serialized = self.newer.serialize()
+
+        self.assertEqual(
+            set(serialized.keys()),
+            {
+                "id",
+                "weekStart",
+                "weekEnd",
+                "paperCount",
+                "title",
+                "fixedSummary",
+                "aiSummary",
+                "content",
+                "papers",
+                "generatedBy",
+                "updatedAt",
+            },
+        )
+        self.assertEqual(serialized["weekStart"], "2026-04-13")
+        self.assertEqual(serialized["papers"], [{"id": 2, "title": "p2"}])
+
+
+class RuleBasedResearchAnalysisTest(TestCase):
+    """覆盖 dataset/services/research_analysis.py"""
+
+    def setUp(self):
+        self.mentor = Mentor.objects.create(
+            Chinese_name="张三",
+            English_name="San Zhang",
+            research_direction="人工智能",
+        )
+        self.cutoff = date(2026, 4, 1)
+        self.today = date(2026, 4, 30)
+
+    def test_rule_based_analysis_handles_empty_papers(self):
+        from dataset.services.research_analysis import (
+            build_rule_based_recent_direction_analysis,
+        )
+
+        analysis = build_rule_based_recent_direction_analysis(
+            self.mentor, [], self.cutoff, self.today
+        )
+
+        self.assertIn("张三", analysis)
+        self.assertIn("2026-04-01", analysis)
+        self.assertIn("2026-04-30", analysis)
+        self.assertIn("暂无", analysis)
+
+    def test_rule_based_analysis_uses_top_subjects_and_keywords(self):
+        from dataset.services.research_analysis import (
+            build_rule_based_recent_direction_analysis,
+        )
+
+        papers = [
+            Paper.objects.create(
+                title="LLM Agents for Reasoning",
+                abstract="We study large language model agents and reasoning.",
+                publish_date=date(2026, 4, 20),
+                author_names="张三",
+                subjects="cs.AI, cs.LG",
+            ),
+            Paper.objects.create(
+                title="Multimodal Retrieval Systems",
+                abstract="A multimodal retrieval and recommendation system.",
+                publish_date=date(2026, 4, 22),
+                author_names="张三",
+                subjects="cs.LG",
+            ),
+        ]
+
+        analysis = build_rule_based_recent_direction_analysis(
+            self.mentor, papers, self.cutoff, self.today
+        )
+
+        self.assertIn("近一年共发表 2 篇", analysis)
+        self.assertIn("cs.LG", analysis)
+        self.assertIn("retrieval", analysis)
+
+    def test_rule_based_analysis_skips_subject_and_keyword_phrases_when_absent(self):
+        from dataset.services.research_analysis import (
+            build_rule_based_recent_direction_analysis,
+        )
+
+        paper = Paper.objects.create(
+            title="一篇平淡的论文",
+            abstract="本论文无关键词",
+            publish_date=date(2026, 4, 10),
+            author_names="张三",
+            subjects="",
+            tldr="无 TLDR",
+        )
+
+        analysis = build_rule_based_recent_direction_analysis(
+            self.mentor, [paper], self.cutoff, self.today
+        )
+
+        self.assertIn("近一年共发表 1 篇", analysis)
+        self.assertNotIn("从论文分类看", analysis)
+        self.assertNotIn("从题目与摘要关键词看", analysis)
+
+    @patch("dataset.services.research_analysis.call_thucs_chat_completion")
+    def test_build_ai_recent_direction_analysis_passes_prompt_to_thucs(self, mock_call):
+        from dataset.services.research_analysis import (
+            build_ai_recent_direction_analysis,
+        )
+
+        mock_call.return_value = "AI生成的导师近期方向总结"
+        paper = Paper.objects.create(
+            title="A Paper About LLM",
+            abstract="abstract about LLM",
+            publish_date=date(2026, 4, 20),
+            author_names="张三",
+            subjects="cs.AI",
+            tldr="LLM tldr",
+        )
+
+        result = build_ai_recent_direction_analysis(
+            self.mentor, [paper], self.cutoff, self.today
+        )
+
+        self.assertEqual(result, "AI生成的导师近期方向总结")
+        mock_call.assert_called_once()
+        kwargs = mock_call.call_args.kwargs
+        self.assertIn("A Paper About LLM", kwargs["user_prompt"])
+        self.assertIn("2026-04-01", kwargs["user_prompt"])
+
+    @patch("dataset.services.research_analysis.requests.post")
+    def test_call_thucs_chat_completion_raises_when_api_key_missing(self, mock_post):
+        from dataset.services.research_analysis import call_thucs_chat_completion
+
+        with self.settings(THUCS_API_KEY=""):
+            with self.assertRaises(RuntimeError):
+                call_thucs_chat_completion(system_prompt="sys", user_prompt="user")
+        mock_post.assert_not_called()
+
+    @patch("dataset.services.research_analysis.requests.post")
+    def test_call_thucs_chat_completion_returns_stripped_content(self, mock_post):
+        from dataset.services.research_analysis import call_thucs_chat_completion
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            "choices": [{"message": {"content": "  AI 输出内容  "}}],
+        }
+        mock_post.return_value = mock_response
+
+        with self.settings(
+            THUCS_API_KEY="dummy",
+            THUCS_API_BASE_URL="https://api.example.com/",
+            THUCS_MODEL_NAME="custom-model",
+        ):
+            text = call_thucs_chat_completion(
+                system_prompt="sys", user_prompt="user", temperature=0.1, timeout=5,
+            )
+
+        self.assertEqual(text, "AI 输出内容")
+        call_kwargs = mock_post.call_args.kwargs
+        self.assertEqual(call_kwargs["timeout"], 5)
+        self.assertEqual(call_kwargs["json"]["model"], "custom-model")
+        self.assertEqual(call_kwargs["json"]["temperature"], 0.1)
+
+    @patch("dataset.services.research_analysis.requests.post")
+    def test_call_thucs_chat_completion_raises_when_content_empty(self, mock_post):
+        from dataset.services.research_analysis import call_thucs_chat_completion
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {"choices": [{"message": {"content": "   "}}]}
+        mock_post.return_value = mock_response
+
+        with self.settings(THUCS_API_KEY="dummy"):
+            with self.assertRaises(RuntimeError):
+                call_thucs_chat_completion(system_prompt="sys", user_prompt="user")
