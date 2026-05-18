@@ -1,15 +1,15 @@
 from django.core.management.base import BaseCommand
 
-from account.models import UserWeeklyReport
-from account.management.commands.send_weekly_push_mock import _get_target_users
+from account.models import User, UserWeeklyReport
 from account.services.user_weekly_report import generate_user_weekly_report
 
 
 class Command(BaseCommand):
     help = (
-        "Generate (or refresh) per-user weekly reports and persist them into "
-        "UserWeeklyReport. Intended to run on the weekly schedule right before "
-        "send_weekly_push, so every eligible user has an up-to-date stored report."
+        "Generate (or refresh) per-user weekly reports for registered users and "
+        "persist them into UserWeeklyReport. Intended to run on the weekly "
+        "schedule right before send_weekly_push, so each user has an up-to-date "
+        "stored report."
     )
 
     def add_arguments(self, parser):
@@ -26,7 +26,11 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        users = _get_target_users(options.get("username"))
+        username = str(options.get("username") or "").strip()
+        users = User.objects.all()
+        if username != "":
+            users = users.filter(username=username)
+        users = users.order_by("id")
         if not users.exists():
             self.stdout.write(self.style.WARNING("No target users found."))
             return

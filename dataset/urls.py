@@ -14,6 +14,7 @@ urlpatterns = [
     path("dataset/weekly-push/latest", views.weekly_push_latest),
     path("dataset/weekly-push/history", views.weekly_push_history),
     path("dataset/weekly-push/personalized", views.weekly_push_personalized),
+    path("dataset/weekly-push/personalized/history", views.weekly_push_personalized_history),
     path("timeline", views.paper_timeline_view, name="paper_timeline_no_slash"),
     path("timeline/", views.paper_timeline_view, name="paper_timeline"),
 ]
