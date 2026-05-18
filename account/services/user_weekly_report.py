@@ -112,6 +112,23 @@ def get_latest_user_weekly_report(user: User) -> UserWeeklyReport | None:
     )
 
 
+def get_user_weekly_report_by_week(user: User, week_start) -> UserWeeklyReport | None:
+    return (
+        UserWeeklyReport.objects
+        .filter(user=user, week_start=week_start)
+        .order_by("-id")
+        .first()
+    )
+
+
+def list_user_weekly_reports(user: User):
+    return (
+        UserWeeklyReport.objects
+        .filter(user=user)
+        .order_by("-week_start", "-id")
+    )
+
+
 def build_period_key_from_week_start(week_start) -> str:
     """Stable period_key string used by PushRecord dedup, derived from week_start.
 
