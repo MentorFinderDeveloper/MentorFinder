@@ -3159,3 +3159,220 @@ class TimelineCursorEdgeTest(TestCase):
         self.assertEqual(data["papers"], [])
         self.assertFalse(data["has_newer"])
         self.assertFalse(data["has_older"])
+
+
+class WeeklyPushPersonalizedFallbackTest(TestCase):
+    """覆盖 /dataset/weekly-push/personalized 视图 week_offset 解析与 bad method 分支"""
+
+    def setUp(self):
+        self.client = Client()
+        self.user = AccountUser.objects.create_user(
+            username="fallback_user",
+            email="fallback_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.token = generate_jwt_token("fallback_user")
+
+    def auth(self):
+        return {"HTTP_AUTHORIZATION": f"Bearer {self.token}"}
+
+    @patch("dataset.views._build_personalized_weekly_push")
+    def test_personalized_weekly_push_falls_back_when_week_offset_not_numeric(self, mock_build):
+        mock_build.return_value = {"paperCount": 0, "papers": []}
+
+        response = self.client.post(
+            "/dataset/weekly-push/personalized?week_offset=abc",
+            **self.auth(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        mock_build.assert_called_once()
+        # 非法 week_offset 应回退为 0
+        self.assertEqual(mock_build.call_args.kwargs.get("week_offset"), 0)
+
+    @patch("dataset.views._build_personalized_weekly_push")
+    def test_personalized_weekly_push_passes_through_valid_week_offset(self, mock_build):
+        mock_build.return_value = {"paperCount": 0, "papers": []}
+
+        response = self.client.post(
+            "/dataset/weekly-push/personalized?week_offset=2",
+            **self.auth(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(mock_build.call_args.kwargs.get("week_offset"), 2)
+
+    def test_personalized_weekly_push_rejects_bad_method(self):
+        response = self.client.get(
+            "/dataset/weekly-push/personalized",
+            **self.auth(),
+        )
+
+        self.assertEqual(response.status_code, 405)
+        self.assertEqual(response.json()["code"], -3)
+
+
+class ThuCrawlerHelperTest(TestCase):
+    """补充 dataset/services/thu_crawler.py 中尚未单测的纯函数"""
+
+    def test_strip_bracketed_name_content_removes_chinese_and_english_brackets(self):
+        from dataset.services.thu_crawler import strip_bracketed_name_content
+
+        self.assertEqual(strip_bracketed_name_content("张三（教授）"), "张三")
+        self.assertEqual(strip_bracketed_name_content("Zhang San (Prof.)"), "Zhang San")
+        self.assertEqual(strip_bracketed_name_content("张三（系主任）（博士）"), "张三")
+
+    def test_strip_bracketed_name_content_returns_empty_for_blank_input(self):
+        from dataset.services.thu_crawler import strip_bracketed_name_content
+
+        self.assertEqual(strip_bracketed_name_content(""), "")
+        self.assertEqual(strip_bracketed_name_content("   "), "")
+        self.assertEqual(strip_bracketed_name_content(None), "")
+
+    def test_strip_bracketed_name_content_normalizes_full_width_spaces(self):
+        from dataset.services.thu_crawler import strip_bracketed_name_content
+
+        self.assertEqual(strip_bracketed_name_content("张　三"), "张 三")
+
+    @patch("dataset.services.thu_crawler.requests.get")
+    def test_fetch_html_raises_when_http_error(self, mock_get):
+        from dataset.services.thu_crawler import fetch_html
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.side_effect = RuntimeError("HTTP 500")
+        mock_get.return_value = mock_response
+
+        with self.assertRaises(RuntimeError):
+            fetch_html("https://example.com/teacher.htm")
+        mock_get.assert_called_once()
+
+    @patch("dataset.services.thu_crawler.requests.get")
+    def test_fetch_html_returns_decoded_text(self, mock_get):
+        from dataset.services.thu_crawler import fetch_html
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.text = "<html>hello</html>"
+        mock_response.apparent_encoding = "utf-8"
+        mock_get.return_value = mock_response
+
+        body = fetch_html("https://example.com/teacher.htm")
+
+        self.assertEqual(body, "<html>hello</html>")
+        self.assertEqual(mock_response.encoding, "utf-8")
+
+
+class SyncCommandsTest(TestCase):
+    """覆盖 sync_dataset、fetch_mentors 命令与 run_daily_sync 的 wrapper job"""
+
+    @patch("dataset.management.commands.sync_dataset.call_command")
+    def test_sync_dataset_invokes_both_subcommands_in_order(self, mock_call_command):
+        from io import StringIO
+        from django.core.management import call_command
+
+        out = StringIO()
+        call_command("sync_dataset", stdout=out)
+
+        invoked = [args[0] for args, _kwargs in mock_call_command.call_args_list]
+        self.assertEqual(invoked, ["fetch_mentors", "fetch_papers"])
+        self.assertIn("[1/2] 执行 fetch_mentors", out.getvalue())
+        self.assertIn("[2/2] 执行 fetch_papers", out.getvalue())
+        self.assertIn("同步完成", out.getvalue())
+
+    @patch("dataset.management.commands.fetch_mentors.parse_mentor_list")
+    def test_fetch_mentors_creates_and_updates_records(self, mock_parse_list):
+        from io import StringIO
+        from django.core.management import call_command
+
+        mock_parse_list.return_value = [
+            {
+                "Chinese_name": "孙七",
+                "English_name": "Qi Sun",
+                "research_direction": "数据库",
+                "email": "sunqi@example.com",
+                "profile": "档案",
+            },
+            {
+                "Chinese_name": "周八",
+                "English_name": None,
+                "research_direction": "",
+                "email": None,
+                "profile": None,
+            },
+        ]
+
+        out = StringIO()
+        call_command("fetch_mentors", stdout=out)
+
+        sunqi = Mentor.objects.get(Chinese_name="孙七", owner__isnull=True)
+        self.assertEqual(sunqi.English_name, "Qi Sun")
+        self.assertEqual(sunqi.email, "sunqi@example.com")
+        zhouba = Mentor.objects.get(Chinese_name="周八", owner__isnull=True)
+        # 缺失字段应回退为占位默认值
+        self.assertEqual(zhouba.research_direction, "未提供")
+        self.assertIsNone(zhouba.email)
+        self.assertIn("成功导入/更新 2 位导师", out.getvalue())
+
+    @patch("dataset.management.commands.fetch_mentors.parse_mentor_list")
+    def test_fetch_mentors_updates_existing_record_without_duplicate(self, mock_parse_list):
+        from io import StringIO
+        from django.core.management import call_command
+
+        Mentor.objects.create(
+            Chinese_name="王九",
+            English_name="Old Name",
+            research_direction="旧方向",
+            email="old@example.com",
+        )
+        mock_parse_list.return_value = [
+            {
+                "Chinese_name": "王九",
+                "English_name": "New Name",
+                "research_direction": "新方向",
+                "email": "new@example.com",
+                "profile": "新档案",
+            },
+        ]
+
+        call_command("fetch_mentors", stdout=StringIO())
+
+        wangjiu = Mentor.objects.get(Chinese_name="王九", owner__isnull=True)
+        self.assertEqual(wangjiu.English_name, "New Name")
+        self.assertEqual(wangjiu.research_direction, "新方向")
+        self.assertEqual(Mentor.objects.filter(Chinese_name="王九").count(), 1)
+
+    @patch("dataset.management.commands.run_daily_sync.call_command")
+    def test_run_sync_dataset_job_calls_sync_dataset(self, mock_call_command):
+        from dataset.management.commands.run_daily_sync import run_sync_dataset_job
+
+        run_sync_dataset_job()
+
+        mock_call_command.assert_called_once_with("sync_dataset")
+
+    @patch("dataset.management.commands.run_daily_sync.call_command")
+    def test_run_sync_dataset_job_swallows_exceptions(self, mock_call_command):
+        from dataset.management.commands.run_daily_sync import run_sync_dataset_job
+
+        mock_call_command.side_effect = RuntimeError("boom")
+
+        # 不应抛出异常，logger 仅记录
+        run_sync_dataset_job()
+        mock_call_command.assert_called_once_with("sync_dataset")
+
+    @patch("dataset.management.commands.run_daily_sync.call_command")
+    def test_daily_run_weekly_push_job_calls_generate_weekly_push(self, mock_call_command):
+        from dataset.management.commands.run_daily_sync import run_weekly_push_job
+
+        run_weekly_push_job()
+
+        mock_call_command.assert_called_once_with("generate_weekly_push")
+
+    @patch("dataset.management.commands.run_daily_sync.call_command")
+    def test_daily_run_weekly_push_job_swallows_exceptions(self, mock_call_command):
+        from dataset.management.commands.run_daily_sync import run_weekly_push_job
+
+        mock_call_command.side_effect = RuntimeError("boom")
+
+        run_weekly_push_job()
+        mock_call_command.assert_called_once_with("generate_weekly_push")

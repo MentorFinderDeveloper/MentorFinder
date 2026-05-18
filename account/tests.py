@@ -4351,3 +4351,86 @@ class EmailVerificationServiceTest(TestCase):
         self.assertIn("345678", kwargs["message"])
         self.assertIn("修改密码邮箱验证码", kwargs["subject"])
         self.assertEqual(kwargs["recipient_list"], ["reset-recipient@example.com"])
+
+
+class MentorVerificationRequestEdgeTest(TestCase):
+    """覆盖 /profile/mentor-verification-request 剩余分支"""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="verify_edge_user",
+            email="verify_edge@example.com",
+            password="abc12345",
+        )
+        self.token = generate_jwt_token("verify_edge_user")
+
+    def auth(self):
+        return {"HTTP_AUTHORIZATION": f"Bearer {self.token}"}
+
+    def test_mentor_verification_request_requires_login(self):
+        res = self.client.post(
+            "/profile/mentor-verification-request",
+            data=json.dumps({"submittedName": "张三"}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_mentor_verification_request_rejects_non_object_body(self):
+        res = self.client.post(
+            "/profile/mentor-verification-request",
+            data=json.dumps(["not", "an", "object"]),
+            content_type="application/json",
+            **self.auth(),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_mentor_verification_request_rejects_submitted_name_too_long(self):
+        res = self.client.post(
+            "/profile/mentor-verification-request",
+            data=json.dumps({"submittedName": "x" * 101}),
+            content_type="application/json",
+            **self.auth(),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertIn("too long", res.json()["info"])
+
+    def test_mentor_verification_request_rejects_bad_method(self):
+        res = self.client.get(
+            "/profile/mentor-verification-request",
+            **self.auth(),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+
+class RunWeeklyPushSchedulerWrapperTest(TestCase):
+    """覆盖 account/management/commands/run_weekly_push_scheduler.run_weekly_push_job"""
+
+    @patch("account.management.commands.run_weekly_push_scheduler.call_command")
+    def test_run_weekly_push_job_invokes_send_weekly_push(self, mock_call_command):
+        from account.management.commands.run_weekly_push_scheduler import (
+            run_weekly_push_job,
+        )
+
+        run_weekly_push_job()
+
+        mock_call_command.assert_called_once_with("send_weekly_push")
+
+    @patch("account.management.commands.run_weekly_push_scheduler.call_command")
+    def test_run_weekly_push_job_swallows_exceptions(self, mock_call_command):
+        from account.management.commands.run_weekly_push_scheduler import (
+            run_weekly_push_job,
+        )
+
+        mock_call_command.side_effect = RuntimeError("scheduler boom")
+
+        # 调度器循环依赖此函数不抛异常
+        run_weekly_push_job()
+        mock_call_command.assert_called_once_with("send_weekly_push")
