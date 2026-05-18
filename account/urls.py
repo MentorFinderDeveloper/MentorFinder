@@ -7,6 +7,8 @@ urlpatterns = [
     path('login', views.login),
     path('register', views.register),
     path('register/verification-code', views.send_email_verification_code),
+    path("password-reset/verification-code", views.send_password_reset_verification_code),
+    path("password-reset", views.reset_password_with_email_code),
     path("follow/mentors", views.followed_mentors),
     path("follow/mentors/<int:mentor_id>", views.follow_mentor),
     path("follow/subjects", views.followed_subjects),
