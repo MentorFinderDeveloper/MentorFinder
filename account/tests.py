@@ -1015,6 +1015,456 @@ class UserProfileViewTests(TestCase):
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.json()["code"], -2)
 
+    def test_upload_avatar_bad_method(self):
+        res = self.client.get(
+            "/profile/avatar",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+    def test_upload_avatar_missing_file(self):
+        res = self.client.post(
+            "/profile/avatar",
+            data={},
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.json()["info"], "Missing or error type of [avatar]")
+
+    def test_upload_avatar_rejects_too_large_image(self):
+        image = SimpleUploadedFile(
+            "large.png",
+            b"x" * (2 * 1024 * 1024 + 1),
+            content_type="image/png",
+        )
+
+        res = self.client.post(
+            "/profile/avatar",
+            data={"avatar": image},
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.json()["info"], "Invalid parameters. [avatar] is too large")
+        self.assertFalse(UserProfile.objects.filter(user=self.user).exists())
+
+    def test_upload_avatar_uses_content_type_extension_when_filename_is_wrong(self):
+        with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
+            image = SimpleUploadedFile(
+                "avatar.txt",
+                b"jpeg bytes",
+                content_type="image/jpeg",
+            )
+
+            res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": image},
+                **self.auth_headers(self.token),
+            )
+
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.json()["code"], 0)
+            self.assertTrue(res.json()["avatarUrl"].endswith(".jpg"))
+            self.assertEqual(
+                UserProfile.objects.get(user=self.user).avatar_url,
+                res.json()["avatarUrl"],
+            )
+
+    def test_upload_avatar_falls_back_to_safe_filename_extension(self):
+        with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
+            image = SimpleUploadedFile(
+                "avatar.webp",
+                b"webp bytes",
+                content_type="application/octet-stream",
+            )
+
+            res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": image},
+                **self.auth_headers(self.token),
+            )
+
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.json()["code"], 0)
+            self.assertTrue(res.json()["avatarUrl"].endswith(".webp"))
+            self.assertEqual(self.client.get(res.json()["avatarUrl"]).status_code, 200)
+
+    def test_upload_avatar_rejects_unknown_extension_without_image_type(self):
+        file_without_image_type = SimpleUploadedFile(
+            "avatar",
+            b"raw bytes",
+            content_type="application/octet-stream",
+        )
+
+        res = self.client.post(
+            "/profile/avatar",
+            data={"avatar": file_without_image_type},
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.json()["info"], "Invalid parameters. [avatar] must be an image")
+
+    def test_upload_avatar_rejects_svg_even_when_declared_as_image(self):
+        svg = SimpleUploadedFile(
+            "avatar.svg",
+            b"<svg></svg>",
+            content_type="image/svg+xml",
+        )
+
+        res = self.client.post(
+            "/profile/avatar",
+            data={"avatar": svg},
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.json()["info"], "Invalid parameters. [avatar] must be an image")
+
+    def test_upload_avatar_replaces_profile_url_on_second_upload(self):
+        with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
+            first = SimpleUploadedFile(
+                "first.png",
+                b"first image",
+                content_type="image/png",
+            )
+            second = SimpleUploadedFile(
+                "second.png",
+                b"second image",
+                content_type="image/png",
+            )
+
+            first_res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": first},
+                **self.auth_headers(self.token),
+            )
+            second_res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": second},
+                **self.auth_headers(self.token),
+            )
+
+            self.assertEqual(first_res.status_code, 200)
+            self.assertEqual(second_res.status_code, 200)
+            self.assertNotEqual(first_res.json()["avatarUrl"], second_res.json()["avatarUrl"])
+            profile = UserProfile.objects.get(user=self.user)
+            self.assertEqual(profile.avatar_url, second_res.json()["avatarUrl"])
+            self.assertEqual(self.client.get(first_res.json()["avatarUrl"]).status_code, 200)
+            self.assertEqual(self.client.get(second_res.json()["avatarUrl"]).status_code, 200)
+
+    def test_upload_avatar_preserves_existing_profile_settings(self):
+        profile = UserProfile.objects.create(
+            user=self.user,
+            signature="原签名",
+            personal_intro="原个人简介",
+            research_experience="原科研经历",
+            honors="原荣誉",
+            project_experience="原项目经历",
+            show_personal_intro=False,
+            show_research_experience=True,
+            show_honors=False,
+            show_project_experience=True,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
+            image = SimpleUploadedFile(
+                "avatar.png",
+                b"png bytes",
+                content_type="image/png",
+            )
+
+            res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": image},
+                **self.auth_headers(self.token),
+            )
+
+        profile.refresh_from_db()
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(profile.signature, "原签名")
+        self.assertEqual(profile.personal_intro, "原个人简介")
+        self.assertEqual(profile.research_experience, "原科研经历")
+        self.assertEqual(profile.honors, "原荣誉")
+        self.assertEqual(profile.project_experience, "原项目经历")
+        self.assertFalse(profile.show_personal_intro)
+        self.assertTrue(profile.show_research_experience)
+        self.assertFalse(profile.show_honors)
+        self.assertTrue(profile.show_project_experience)
+
+    def test_upload_avatar_response_contains_serialized_profile(self):
+        with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
+            image = SimpleUploadedFile(
+                "avatar.gif",
+                b"gif bytes",
+                content_type="image/gif",
+            )
+
+            res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": image},
+                **self.auth_headers(self.token),
+            )
+
+            payload = res.json()
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(payload["code"], 0)
+            self.assertEqual(payload["profile"]["avatarUrl"], payload["avatarUrl"])
+            self.assertIn("signature", payload["profile"])
+            self.assertIn("showPersonalIntro", payload["profile"])
+            self.assertIn("updatedAt", payload["profile"])
+
+    def test_media_route_uses_current_media_root_setting(self):
+        first_tmpdir = tempfile.TemporaryDirectory()
+        second_tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(first_tmpdir.cleanup)
+        self.addCleanup(second_tmpdir.cleanup)
+
+        with self.settings(MEDIA_ROOT=first_tmpdir.name):
+            first = SimpleUploadedFile(
+                "first.png",
+                b"first image",
+                content_type="image/png",
+            )
+            first_res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": first},
+                **self.auth_headers(self.token),
+            )
+            self.assertEqual(first_res.status_code, 200)
+            self.assertEqual(self.client.get(first_res.json()["avatarUrl"]).status_code, 200)
+
+        with self.settings(MEDIA_ROOT=second_tmpdir.name):
+            second = SimpleUploadedFile(
+                "second.png",
+                b"second image",
+                content_type="image/png",
+            )
+            second_res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": second},
+                **self.auth_headers(self.token),
+            )
+            self.assertEqual(second_res.status_code, 200)
+            self.assertEqual(self.client.get(second_res.json()["avatarUrl"]).status_code, 200)
+            self.assertEqual(self.client.get(first_res.json()["avatarUrl"]).status_code, 404)
+
+    def test_get_profile_after_upload_returns_avatar_url(self):
+        with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
+            image = SimpleUploadedFile(
+                "avatar.png",
+                b"png bytes",
+                content_type="image/png",
+            )
+            upload_res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": image},
+                **self.auth_headers(self.token),
+            )
+
+            res = self.client.get(
+                "/profile/me",
+                **self.auth_headers(self.token),
+            )
+
+            self.assertEqual(upload_res.status_code, 200)
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.json()["profile"]["avatarUrl"], upload_res.json()["avatarUrl"])
+
+    def test_upload_avatar_returns_relative_media_url(self):
+        with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
+            image = SimpleUploadedFile(
+                "avatar.png",
+                b"png bytes",
+                content_type="image/png",
+            )
+
+            res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": image},
+                **self.auth_headers(self.token),
+            )
+
+            avatar_url = res.json()["avatarUrl"]
+            self.assertEqual(res.status_code, 200)
+            self.assertTrue(avatar_url.startswith("/media/avatars/"))
+            self.assertNotIn("http://", avatar_url)
+            self.assertNotIn("https://", avatar_url)
+            self.assertNotIn("127.0.0.1", avatar_url)
+
+    def test_media_route_returns_404_for_missing_avatar_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
+            res = self.client.get("/media/avatars/missing-avatar.png")
+
+            self.assertEqual(res.status_code, 404)
+
+    def test_upload_avatar_creates_profile_when_missing(self):
+        self.assertFalse(UserProfile.objects.filter(user=self.user).exists())
+
+        with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
+            image = SimpleUploadedFile(
+                "avatar.png",
+                b"png bytes",
+                content_type="image/png",
+            )
+
+            res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": image},
+                **self.auth_headers(self.token),
+            )
+
+            self.assertEqual(res.status_code, 200)
+            self.assertTrue(UserProfile.objects.filter(user=self.user).exists())
+            self.assertEqual(UserProfile.objects.get(user=self.user).avatar_url, res.json()["avatarUrl"])
+            self.assertEqual(res.json()["profile"]["avatarUrl"], res.json()["avatarUrl"])
+
+    def test_public_profile_includes_avatar_and_signature(self):
+        UserProfile.objects.create(
+            user=self.user,
+            avatar_url="/media/avatars/profile-user.png",
+            signature="公开签名",
+        )
+
+        res = self.client.get(
+            f"/users/{self.user.id}/profile",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["user"]["avatarUrl"], "/media/avatars/profile-user.png")
+        self.assertEqual(res.json()["user"]["signature"], "公开签名")
+        self.assertTrue(res.json()["user"]["isSelf"])
+
+    def test_public_profile_hides_sections_by_display_settings(self):
+        UserProfile.objects.create(
+            user=self.user,
+            personal_intro="不展示个人简介",
+            research_experience="不展示科研经历",
+            honors="不展示荣誉",
+            project_experience="不展示项目经历",
+            show_personal_intro=False,
+            show_research_experience=False,
+            show_honors=False,
+            show_project_experience=False,
+        )
+
+        res = self.client.get(
+            f"/users/{self.user.id}/profile",
+            **self.auth_headers(self.token),
+        )
+
+        profile = res.json()["user"]["profile"]
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(profile["personalIntro"], "")
+        self.assertEqual(profile["researchExperience"], "")
+        self.assertEqual(profile["honors"], "")
+        self.assertEqual(profile["projectExperience"], "")
+        self.assertFalse(profile["showPersonalIntro"])
+        self.assertFalse(profile["showResearchExperience"])
+        self.assertFalse(profile["showHonors"])
+        self.assertFalse(profile["showProjectExperience"])
+
+    def test_public_profile_shows_followed_state_for_current_user(self):
+        other_user = User.objects.create_user(
+            username="other_profile_user",
+            email="other_profile_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+        UserFollow.objects.create(follower=self.user, following=other_user)
+
+        res = self.client.get(
+            f"/users/{other_user.id}/profile",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["user"]["username"], "other_profile_user")
+        self.assertTrue(res.json()["user"]["followed"])
+        self.assertFalse(res.json()["user"]["isSelf"])
+
+    def test_put_profile_trims_string_fields(self):
+        res = self.client.put(
+            "/profile/me",
+            data=json.dumps(
+                {
+                    "avatarUrl": "  https://example.com/avatar.png  ",
+                    "signature": "  带空格的签名  ",
+                    "personalIntro": "  带空格的简介  ",
+                    "researchExperience": "  带空格的科研经历  ",
+                    "honors": "  带空格的荣誉  ",
+                    "projectExperience": "  带空格的项目经历  ",
+                }
+            ),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        profile = res.json()["profile"]
+        self.assertEqual(profile["avatarUrl"], "https://example.com/avatar.png")
+        self.assertEqual(profile["signature"], "带空格的签名")
+        self.assertEqual(profile["personalIntro"], "带空格的简介")
+        self.assertEqual(profile["researchExperience"], "带空格的科研经历")
+        self.assertEqual(profile["honors"], "带空格的荣誉")
+        self.assertEqual(profile["projectExperience"], "带空格的项目经历")
+
+    def test_put_profile_preserves_omitted_fields(self):
+        profile = UserProfile.objects.create(
+            user=self.user,
+            avatar_url="https://example.com/old.png",
+            signature="旧签名",
+            personal_intro="旧个人简介",
+            research_experience="旧科研经历",
+            honors="旧荣誉",
+            project_experience="旧项目经历",
+            show_personal_intro=False,
+            show_research_experience=False,
+            show_honors=True,
+            show_project_experience=False,
+        )
+
+        res = self.client.put(
+            "/profile/me",
+            data=json.dumps({"signature": "新签名"}),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        profile.refresh_from_db()
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(profile.avatar_url, "https://example.com/old.png")
+        self.assertEqual(profile.signature, "新签名")
+        self.assertEqual(profile.personal_intro, "旧个人简介")
+        self.assertEqual(profile.research_experience, "旧科研经历")
+        self.assertEqual(profile.honors, "旧荣誉")
+        self.assertEqual(profile.project_experience, "旧项目经历")
+        self.assertFalse(profile.show_personal_intro)
+        self.assertFalse(profile.show_research_experience)
+        self.assertTrue(profile.show_honors)
+        self.assertFalse(profile.show_project_experience)
+
+    def test_put_profile_rejects_non_object_body(self):
+        res = self.client.put(
+            "/profile/me",
+            data=json.dumps(["not", "object"]),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.json()["info"], "Invalid parameters. [body] must be an object")
+
     def test_student_can_submit_mentor_verification_request(self):
         res = self.client.post(
             "/profile/mentor-verification-request",
