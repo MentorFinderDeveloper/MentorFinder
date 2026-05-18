@@ -75,6 +75,25 @@ def send_verification_email(email: str, code: str) -> None:
     )
 
 
+def send_password_reset_email(email: str, code: str) -> None:
+    subject = "[MentorFinder] 修改密码邮箱验证码"
+    ttl_minutes = max(1, _ttl_seconds() // 60)
+    body = (
+        f"您好，\n\n"
+        f"您正在通过邮箱验证码修改 MentorFinder 账号密码，本次验证码为：{code}\n"
+        f"验证码 {ttl_minutes} 分钟内有效，请尽快在修改密码页面完成校验。\n"
+        f"如非本人操作，请忽略此邮件，并确认账号安全。\n\n"
+        f"— MentorFinder 团队"
+    )
+    send_mail(
+        subject=subject,
+        message=body,
+        from_email=getattr(settings, "DEFAULT_FROM_EMAIL", None),
+        recipient_list=[email],
+        fail_silently=False,
+    )
+
+
 def verify_code(email: str, code: str) -> bool:
     """校验通过返回 True，并消费掉该验证码（删除记录）。"""
     record = EmailVerificationCode.objects.filter(email=email).first()

@@ -19,6 +19,7 @@ from account.services.email_verification import (
     email_matches_bypass,
     get_remaining_cooldown,
     issue_verification_code,
+    send_password_reset_email,
     send_verification_email,
     verify_code,
 )
@@ -31,6 +32,18 @@ MANAGEABLE_ROLES = {
     User.ROLE_ADMIN,
     User.ROLE_BANNED,
 }
+
+
+def _validate_password(password: str):
+    if password.strip() == "":
+        return request_failed(-2, "Invalid parameters. [password] cannot be empty", 400)
+    if len(password) < 8 or not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
+        return request_failed(
+            -2,
+            "Invalid parameters. [password] must be at least 8 characters and contain both letters and digits",
+            400,
+        )
+    return None
 
 
 @CheckRequire
@@ -84,14 +97,9 @@ def register(req: HttpRequest):
             "Invalid parameters. [username] can only contain letters, digits, underscores, and hyphens",
             400,
         )
-    if password.strip() == "":
-        return request_failed(-2, "Invalid parameters. [password] cannot be empty", 400)
-    if len(password) < 8 or not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
-        return request_failed(
-            -2,
-            "Invalid parameters. [password] must be at least 8 characters and contain both letters and digits",
-            400,
-        )
+    password_error = _validate_password(password)
+    if password_error is not None:
+        return password_error
     email = email.strip()
     if email == "":
         return request_failed(-2, "Invalid parameters. [email] format is invalid", 400)
@@ -129,6 +137,93 @@ def register(req: HttpRequest):
         "role": user.role,
         "userId": user.id,
     })
+
+
+@CheckRequire
+def send_password_reset_verification_code(req: HttpRequest):
+    if req.method != "POST":
+        return BAD_METHOD
+
+    body = json.loads(req.body.decode("utf-8"))
+    email_raw = require(body, "email", "string", err_msg="Missing or error type of [email]")
+    email = email_raw.strip()
+    if email == "":
+        return request_failed(-2, "Invalid parameters. [email] format is invalid", 400)
+    try:
+        validate_email(email)
+    except ValidationError:
+        return request_failed(-2, "Invalid parameters. [email] format is invalid", 400)
+
+    user = User.objects.filter(email=email).first()
+    if user is None:
+        return request_failed(2, "User not found", 404)
+    if user.role == User.ROLE_BANNED:
+        return request_failed(3, "User is banned", 403)
+
+    if email_matches_bypass(email):
+        return request_success({"bypass": True, "info": "Bypass email: no verification code required"})
+
+    from django.conf import settings as _settings
+    cooldown_remaining = get_remaining_cooldown(email)
+    if cooldown_remaining > 0:
+        return request_failed(
+            6,
+            f"Verification code was just sent, please wait {cooldown_remaining}s before retrying",
+            429,
+        )
+
+    code, _record = issue_verification_code(email)
+    try:
+        send_password_reset_email(email, code)
+    except Exception as exc:
+        return request_failed(7, f"Failed to send verification email: {exc}", 502)
+
+    return request_success({
+        "bypass": False,
+        "cooldownSeconds": int(getattr(_settings, "EMAIL_VERIFICATION_CODE_RESEND_COOLDOWN", 60)),
+    })
+
+
+@CheckRequire
+def reset_password_with_email_code(req: HttpRequest):
+    if req.method != "POST":
+        return BAD_METHOD
+
+    body = json.loads(req.body.decode("utf-8"))
+    email_raw = require(body, "email", "string", err_msg="Missing or error type of [email]")
+    password = require(body, "password", "string", err_msg="Missing or error type of [password]")
+
+    email = email_raw.strip()
+    if email == "":
+        return request_failed(-2, "Invalid parameters. [email] format is invalid", 400)
+    try:
+        validate_email(email)
+    except ValidationError:
+        return request_failed(-2, "Invalid parameters. [email] format is invalid", 400)
+
+    password_error = _validate_password(password)
+    if password_error is not None:
+        return password_error
+
+    user = User.objects.filter(email=email).first()
+    if user is None:
+        return request_failed(2, "User not found", 404)
+    if user.role == User.ROLE_BANNED:
+        return request_failed(3, "User is banned", 403)
+
+    verification_code_raw = body.get("verificationCode", "")
+    if not isinstance(verification_code_raw, str):
+        return request_failed(-2, "Invalid parameters. [verificationCode] must be a string", 400)
+    verification_code = verification_code_raw.strip()
+    if not email_matches_bypass(email):
+        if verification_code == "":
+            return request_failed(5, "Verification code is required", 400)
+        if not verify_code(email, verification_code):
+            return request_failed(5, "Verification code is invalid or expired", 400)
+
+    user.set_password(password)
+    user.save(update_fields=["password"])
+    return request_success({"username": user.username})
 
 
 @CheckRequire
