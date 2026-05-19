@@ -386,6 +386,50 @@ class SearchTests(TestCase):
 
         self.assertEqual([paper["title"] for paper in papers], ["大语言模型在问答系统中的应用"])
 
+    def test_search_papers_fuzzy_by_abstract_substring(self):
+        papers = search_papers_fuzzy("智能问答")
+
+        self.assertEqual([paper["title"] for paper in papers], ["大语言模型在问答系统中的应用"])
+
+    def test_search_papers_fuzzy_by_subject_substring(self):
+        papers = search_papers_fuzzy("cs.AI")
+
+        self.assertEqual([paper["title"] for paper in papers], ["机器学习方法研究"])
+
+    def test_search_papers_fuzzy_tokenized_phrase_matches_unordered_fields(self):
+        paper = Paper.objects.create(
+            title="Retrieval augmented generation survey",
+            abstract="This work studies neural retrieval and generation pipelines.",
+            publish_date="2024-08-10",
+            author_names="Alice Chen",
+            subjects="cs.IR, cs.CL",
+        )
+
+        papers = search_papers_fuzzy("retrieval generation")
+
+        self.assertIn(paper.title, [item["title"] for item in papers])
+
+    def test_search_papers_fuzzy_orders_more_direct_matches_first(self):
+        abstract_only = Paper.objects.create(
+            title="辅助测试论文",
+            abstract="这里在摘要中提到图神经网络。",
+            publish_date="2024-08-11",
+            author_names="Alice",
+            subjects="cs.LG",
+        )
+        title_match = Paper.objects.create(
+            title="图神经网络综述",
+            abstract="摘要",
+            publish_date="2024-08-10",
+            author_names="Bob",
+            subjects="cs.LG",
+        )
+
+        papers = search_papers_fuzzy("图神经网络")
+
+        titles = [paper["title"] for paper in papers]
+        self.assertLess(titles.index(title_match.title), titles.index(abstract_only.title))
+
     def test_search_papers_fuzzy_deduplicates_results(self):
         papers = search_papers_fuzzy("张")
 
@@ -791,4 +835,3 @@ class SearchTests(TestCase):
         data = res.json()
         self.assertEqual(data["page"], 1)
         self.assertEqual(data["page_size"], 10)
-

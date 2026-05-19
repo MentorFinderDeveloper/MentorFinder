@@ -2,11 +2,12 @@ import re
 
 from search.serializers import MentorSerializer, PaperSerializer
 from dataset.models import Mentor, Paper
-from django.db.models import Q, Subquery
+from django.db.models import Case, IntegerField, Q, Value, When
 
 
 DEFAULT_SEARCH_PAGE = 1
 DEFAULT_SEARCH_PAGE_SIZE = 10
+FUZZY_MIN_TOKEN_LENGTH = 2
 
 
 def _name_variants(name: str) -> list[str]:
@@ -28,6 +29,35 @@ def _name_variants(name: str) -> list[str]:
         seen.add(variant)
         unique_variants.append(variant)
     return unique_variants
+
+
+def _split_search_text(value: str) -> list[str]:
+    return [
+        token.strip()
+        for token in re.split(r"[\s,，;；、]+", str(value).strip())
+        if token.strip()
+    ]
+
+
+def _keyword_subterms(keyword: str) -> list[str]:
+    terms = [keyword.strip()]
+    split_terms = _split_search_text(keyword)
+    if len(split_terms) > 1:
+        terms.extend(
+            term
+            for term in split_terms
+            if len(term) >= FUZZY_MIN_TOKEN_LENGTH or re.search(r"[\u4e00-\u9fff]", term)
+        )
+
+    unique_terms = []
+    seen = set()
+    for term in terms:
+        normalized = term.lower()
+        if term == "" or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique_terms.append(term)
+    return unique_terms
 
 
 def _split_keyword_logic(keyword: str) -> list[list[str]]:
@@ -198,8 +228,66 @@ def _build_logic_query(keyword: str, build_term_query) -> Q:
         return _build_flat_logic_query(keyword, build_term_query)
 
 
+def _extract_logic_terms(keyword: str) -> list[str]:
+    tokens = _tokenize_keyword_logic(keyword.strip())
+    terms = [token_value for token_type, token_value in tokens if token_type == "TERM"]
+    if not terms and keyword.strip() != "":
+        terms = [keyword.strip()]
+
+    unique_terms = []
+    seen = set()
+    for term in terms:
+        normalized = term.strip().lower()
+        if normalized == "" or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique_terms.append(term.strip())
+    return unique_terms
+
+
+def _or_icontains(fields: list[str], term: str) -> Q:
+    query = Q()
+    for field in fields:
+        query |= Q(**{f"{field}__icontains": term})
+    return query
+
+
+def _and_tokenized_icontains(fields: list[str], term: str) -> Q:
+    subterms = _keyword_subterms(term)
+    if len(subterms) <= 1:
+        return _or_icontains(fields, term)
+
+    query = Q()
+    first_token = True
+    for subterm in subterms[1:]:
+        token_query = _or_icontains(fields, subterm)
+        if first_token:
+            query = token_query
+            first_token = False
+        else:
+            query &= token_query
+
+    return query
+
+
+def _score_case(query: Q, score: int):
+    return Case(
+        When(query, then=Value(score)),
+        default=Value(0),
+        output_field=IntegerField(),
+    )
+
+
+def _sum_score_cases(cases):
+    score = Value(0, output_field=IntegerField())
+    for case in cases:
+        score = score + case
+    return score
+
+
 def _mentor_fuzzy_query(keyword: str) -> Q:
-    query = Q(Chinese_name__icontains=keyword) | Q(research_direction__icontains=keyword)
+    searchable_fields = ["Chinese_name", "English_name", "research_direction", "email", "profile"]
+    query = _or_icontains(searchable_fields, keyword) | _and_tokenized_icontains(searchable_fields, keyword)
     for variant in _name_variants(keyword):
         query |= Q(English_name__icontains=variant)
     return query
@@ -225,7 +313,8 @@ def _paper_exact_term_query(term: str, user=None) -> Q:
 
 
 def _paper_fuzzy_term_query(term: str, user=None) -> Q:
-    query = Q(title__icontains=term)
+    searchable_fields = ["title", "abstract", "tldr", "subjects", "author_names", "arxiv_id"]
+    query = _or_icontains(searchable_fields, term) | _and_tokenized_icontains(searchable_fields, term)
 
     mentor_ids = _collect_mentor_paper_ids(_visible_mentors(user).filter(_mentor_fuzzy_query(term)))
     if mentor_ids:
@@ -234,12 +323,92 @@ def _paper_fuzzy_term_query(term: str, user=None) -> Q:
     return query
 
 
+def _mentor_fuzzy_score(keyword: str):
+    cases = []
+    for term in _extract_logic_terms(keyword):
+        cases.extend(
+            [
+                _score_case(Q(Chinese_name__iexact=term), 120),
+                _score_case(Q(Chinese_name__istartswith=term), 80),
+                _score_case(Q(Chinese_name__icontains=term), 60),
+                _score_case(Q(research_direction__icontains=term), 36),
+                _score_case(Q(email__icontains=term), 20),
+                _score_case(Q(profile__icontains=term), 12),
+            ]
+        )
+        for variant in _name_variants(term):
+            cases.extend(
+                [
+                    _score_case(Q(English_name__iexact=variant), 110),
+                    _score_case(Q(English_name__istartswith=variant), 70),
+                    _score_case(Q(English_name__icontains=variant), 48),
+                ]
+            )
+
+        for subterm in _keyword_subterms(term)[1:]:
+            cases.extend(
+                [
+                    _score_case(Q(Chinese_name__icontains=subterm), 28),
+                    _score_case(Q(English_name__icontains=subterm), 24),
+                    _score_case(Q(research_direction__icontains=subterm), 18),
+                    _score_case(Q(profile__icontains=subterm), 6),
+                ]
+            )
+
+    return _sum_score_cases(cases)
+
+
+def _paper_fuzzy_score(keyword: str, user=None):
+    cases = []
+    for term in _extract_logic_terms(keyword):
+        cases.extend(
+            [
+                _score_case(Q(title__iexact=term), 150),
+                _score_case(Q(title__istartswith=term), 95),
+                _score_case(Q(title__icontains=term), 70),
+                _score_case(Q(author_names__icontains=term), 42),
+                _score_case(Q(subjects__icontains=term), 36),
+                _score_case(Q(arxiv_id__icontains=term), 32),
+                _score_case(Q(tldr__icontains=term), 24),
+                _score_case(Q(abstract__icontains=term), 16),
+            ]
+        )
+
+        mentor_paper_ids = _collect_mentor_paper_ids(_visible_mentors(user).filter(_mentor_fuzzy_query(term)))
+        if mentor_paper_ids:
+            cases.append(_score_case(Q(id__in=mentor_paper_ids), 50))
+
+        for subterm in _keyword_subterms(term)[1:]:
+            cases.extend(
+                [
+                    _score_case(Q(title__icontains=subterm), 32),
+                    _score_case(Q(author_names__icontains=subterm), 18),
+                    _score_case(Q(subjects__icontains=subterm), 14),
+                    _score_case(Q(tldr__icontains=subterm), 10),
+                    _score_case(Q(abstract__icontains=subterm), 6),
+                ]
+            )
+
+    return _sum_score_cases(cases)
+
+
 def _order_papers(papers, sort_mode: str):
     if sort_mode == "early":
         return papers.order_by("publish_date", "id")
     if sort_mode == "late":
         return papers.order_by("-publish_date", "-id")
     return papers
+
+
+def _order_fuzzy_papers(papers, keyword: str, user=None, sort_mode: str = "default"):
+    if sort_mode != "default":
+        return _order_papers(papers, sort_mode)
+
+    return (
+        papers
+        .annotate(search_score=_paper_fuzzy_score(keyword, user=user))
+        .order_by("-search_score", "-publish_date", "-id")
+    )
 
 
 def _visible_mentors(user, visibility="all"):
@@ -257,6 +426,24 @@ def _visible_mentors(user, visibility="all"):
     if visibility == "public":
         return base.filter(owner__isnull=True)
     return base
+
+
+def _hidden_private_paper_ids(user) -> list[int]:
+    if user is not None and getattr(user, "role", "") == "admin":
+        return []
+
+    hidden_private_mentors = Mentor.objects.exclude(owner__isnull=True)
+    if user is not None:
+        hidden_private_mentors = hidden_private_mentors.exclude(owner_id=user.id)
+
+    return _collect_mentor_paper_ids(hidden_private_mentors)
+
+
+def _visible_papers(user):
+    hidden_paper_ids = _hidden_private_paper_ids(user)
+    if not hidden_paper_ids:
+        return Paper.objects.all()
+    return Paper.objects.exclude(id__in=hidden_paper_ids)
 
 
 def _collect_mentor_paper_ids(mentors) -> list[int]:
@@ -318,7 +505,10 @@ def search_mentors_queryset(keyword: str, user=None, fuzzy: bool = False, visibi
 
     term_query_builder = _mentor_fuzzy_query if fuzzy else _mentor_exact_query
     logic_query = _build_logic_query(keyword, term_query_builder)
-    return _visible_mentors(user, visibility=visibility).filter(logic_query).distinct()
+    mentors = _visible_mentors(user, visibility=visibility).filter(logic_query).distinct()
+    if not fuzzy:
+        return mentors
+    return mentors.annotate(search_score=_mentor_fuzzy_score(keyword)).order_by("-search_score", "id")
 
 
 def _search_papers_exact_queryset(keyword: str, user=None):
@@ -331,12 +521,13 @@ def _search_papers_exact_queryset(keyword: str, user=None):
         return Q(title__iexact=term)
 
     title_logic_query = _build_logic_query(keyword, _paper_title_exact_query)
-    title_qs = Paper.objects.filter(title_logic_query).distinct()
+    base_papers = _visible_papers(user)
+    title_qs = base_papers.filter(title_logic_query).distinct()
     if title_qs.exists():
         return title_qs
 
     logic_query = _build_logic_query(keyword, lambda term: _paper_exact_term_query(term, user=user))
-    return Paper.objects.filter(logic_query).distinct()
+    return base_papers.filter(logic_query).distinct()
 
 
 def _search_papers_fuzzy_queryset(keyword: str, user=None):
@@ -344,7 +535,7 @@ def _search_papers_fuzzy_queryset(keyword: str, user=None):
         return Paper.objects.all().distinct()
 
     logic_query = _build_logic_query(keyword, lambda term: _paper_fuzzy_term_query(term, user=user))
-    return Paper.objects.filter(logic_query).distinct()
+    return _visible_papers(user).filter(logic_query).distinct()
 
 
 def search_mentors_page(keyword: str, user=None, fuzzy: bool = False, page: int = 1, page_size: int = DEFAULT_SEARCH_PAGE_SIZE, visibility: str = "all"):
@@ -362,7 +553,7 @@ def search_papers_page(
     page_size: int = DEFAULT_SEARCH_PAGE_SIZE,
 ):
     papers = _search_papers_fuzzy_queryset(keyword, user=user) if search_mode == "fuzzy" else _search_papers_exact_queryset(keyword, user=user)
-    ordered_papers = _order_papers(papers, sort_mode)
+    ordered_papers = _order_fuzzy_papers(papers, keyword, user=user, sort_mode=sort_mode) if search_mode == "fuzzy" else _order_papers(papers, sort_mode)
     paged_queryset, pagination = _paginate_queryset(ordered_papers, page, page_size)
     return [dict(item) for item in PaperSerializer(paged_queryset, many=True).data], pagination
 
@@ -387,6 +578,6 @@ def search_papers(keyword: str, user=None, sort_mode: str = "default") -> list[d
 
 def search_papers_fuzzy(keyword: str, user=None, sort_mode: str = "default") -> list[dict]:
     papers = _search_papers_fuzzy_queryset(keyword, user=user)
-    ordered_papers = _order_papers(papers, sort_mode)
+    ordered_papers = _order_fuzzy_papers(papers, keyword, user=user, sort_mode=sort_mode)
 
     return [dict(item) for item in PaperSerializer(ordered_papers, many=True).data]
