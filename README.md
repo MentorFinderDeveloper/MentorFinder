@@ -139,21 +139,15 @@ python manage.py send_weekly_push --user <username> --dry-run
 python manage.py send_weekly_push
 ```
 
-后端还提供了 `run_weekly_push_scheduler` 命令，会在指定时刻执行 `send_weekly_push`。默认配置是每周四 `12:00`（`Asia/Shanghai`）。
+后端会在 Django 应用启动时通过内置 APScheduler 注册周报邮件任务。默认配置是每周四 `12:00`（`Asia/Shanghai`）先执行 `generate_user_weekly_reports`，再执行 `send_weekly_push`。
 
-本地手动运行：
+也保留了 `run_weekly_push_scheduler` 命令，方便本地单独验证调度逻辑：
 
 ```bash
 python manage.py run_weekly_push_scheduler
 ```
 
-在 Docker 启动脚本中会直接后台拉起该任务：
-
-```bash
-python3 manage.py run_weekly_push_scheduler &
-```
-
-如果不希望服务启动时自动拉起它，可以把 [config.yaml](/mnt/d/My_Files/TsingHua/大二下/软件工程/Project/找导师/backend/config.yaml) 中的 `startup.run_weekly_push_scheduler` 改成 `false`。
+如果不希望 Django 应用启动时注册该任务，可以把 [config.yaml](/mnt/d/My_Files/TsingHua/大二下/软件工程/Project/找导师/backend/config.yaml) 中的 `startup.run_weekly_push_scheduler` 改成 `false`。
 
 ## 周报发送记录
 
@@ -197,25 +191,19 @@ python manage.py send_weekly_push --user alice --period-key 20260401_20260407 --
 
 ## 爬虫定时任务
 
-后端已提供 `run_daily_sync` 命令，会在指定时刻执行 `sync_dataset`（即先抓导师再抓论文）。默认配置是每天 `04:00`（`Asia/Shanghai`）。
+后端会在 Django 应用启动时通过内置 APScheduler 注册爬虫定时任务，默认每天 `04:00`（`Asia/Shanghai`）执行 `sync_dataset`（即先抓导师再抓论文）。
 
-本地手动运行：
+也保留了 `run_daily_sync` 命令，方便本地单独验证调度逻辑：
 
 ```bash
 python manage.py run_daily_sync
 ```
 
-在 Docker 启动脚本中会直接后台拉起该任务：
-
-```bash
-python3 manage.py run_daily_sync &
-```
-
-如果不希望服务启动时自动拉起它，可以把 [config.yaml](/mnt/d/My_Files/TsingHua/大二下/软件工程/Project/找导师/backend/config.yaml) 中的 `startup.run_daily_sync_scheduler` 改成 `false`。
+如果不希望 Django 应用启动时注册该任务，可以把 [config.yaml](/mnt/d/My_Files/TsingHua/大二下/软件工程/Project/找导师/backend/config.yaml) 中的 `startup.run_daily_sync_scheduler` 改成 `false`。
 
 ## 启动配置
 
-后端根目录下的 [config.yaml](/mnt/d/My_Files/TsingHua/大二下/软件工程/Project/找导师/backend/config.yaml) 可以控制启动脚本是否执行启动期任务：
+后端根目录下的 [config.yaml](/mnt/d/My_Files/TsingHua/大二下/软件工程/Project/找导师/backend/config.yaml) 可以控制启动脚本是否执行启动期任务，以及 Django 应用启动时是否注册内置定时任务：
 
 ```yaml
 startup:
@@ -225,8 +213,8 @@ startup:
 ```
 
 - `run_initial_sync`: 是否在服务启动时先执行一次 `python3 manage.py sync_dataset`
-- `run_daily_sync_scheduler`: 是否在服务启动时后台拉起 `run_daily_sync`
-- `run_weekly_push_scheduler`: 是否在服务启动时后台拉起 `run_weekly_push_scheduler`
+- `run_daily_sync_scheduler`: 是否在 Django 应用启动时注册每日爬虫与每周首页推送任务
+- `run_weekly_push_scheduler`: 是否在 Django 应用启动时注册每周用户周报邮件任务
 
 
 ## 代码阅读
