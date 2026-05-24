@@ -8,7 +8,7 @@ from django.db.models import Q
 from django.http import HttpRequest
 from django.utils import timezone
 
-from account.models import User
+from account.models import MentorFollow, User
 from account.services.user_weekly_report import (
     generate_user_weekly_report,
     get_user_weekly_report_by_week,
@@ -331,6 +331,7 @@ def create_custom_mentor(req: HttpRequest):
         owner=user,
     )
     _refresh_mentor_papers(mentor)
+    MentorFollow.objects.get_or_create(student=user, mentor=mentor)
 
     return request_success({"mentor": _serialize_mentor(mentor)})
 
