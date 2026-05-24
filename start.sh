@@ -13,19 +13,8 @@ python3 manage.py migrate --noinput
 python3 manage.py createsuperuser --noinput || true
 
 RUN_INITIAL_SYNC=$(python3 -c "from utils.startup_config import load_startup_config; print('1' if load_startup_config()['startup']['run_initial_sync'] else '0')")
-RUN_DAILY_SYNC_SCHEDULER=$(python3 -c "from utils.startup_config import load_startup_config; print('1' if load_startup_config()['startup']['run_daily_sync_scheduler'] else '0')")
-RUN_WEEKLY_PUSH_SCHEDULER=$(python3 -c "from utils.startup_config import load_startup_config; print('1' if load_startup_config()['startup']['run_weekly_push_scheduler'] else '0')")
-
 if [ "$RUN_INITIAL_SYNC" = "1" ]; then
     python3 manage.py sync_dataset || true
-fi
-
-if [ "$RUN_DAILY_SYNC_SCHEDULER" = "1" ]; then
-    python3 manage.py run_daily_sync &
-fi
-
-if [ "$RUN_WEEKLY_PUSH_SCHEDULER" = "1" ]; then
-    python3 manage.py run_weekly_push_scheduler &
 fi
 
 # Avoid startup 502 caused by long-running crawler tasks blocking uwsgi boot.
@@ -34,16 +23,12 @@ if [ "${SYNC_DATA_ON_STARTUP:-0}" = "1" ]; then
     (python3 manage.py sync_dataset || true) &
 fi
 
-# Daily scheduler can be disabled by setting RUN_DAILY_SYNC_SCHEDULER=0.
-if [ "${RUN_DAILY_SYNC_SCHEDULER:-1}" = "1" ]; then
-    python3 manage.py run_daily_sync &
-fi
-
 exec uwsgi --module=MFBackend.wsgi:application \
     --env DJANGO_SETTINGS_MODULE=MFBackend.settings \
     --master \
     --http=0.0.0.0:80 \
     --processes=1 \
+    --enable-threads \
     --harakiri=20 \
     --max-requests=5000 \
     --vacuum
