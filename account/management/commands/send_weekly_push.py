@@ -78,12 +78,17 @@ class Command(BaseCommand):
                 )
                 continue
 
-            result = _deliver_email_for_user(
-                user=user,
-                report=report,
-                stdout=self.stdout,
-                force=force,
-            )
+            try:
+                result = _deliver_email_for_user(
+                    user=user,
+                    report=report,
+                    stdout=self.stdout,
+                    force=force,
+                )
+            except CommandError:
+                failed_count += 1
+                continue
+
             if result == "sent":
                 sent_count += 1
             elif result == "skipped":

@@ -4424,27 +4424,26 @@ class MentorVerificationRequestEdgeTest(TestCase):
 class RunWeeklyPushSchedulerWrapperTest(TestCase):
     """覆盖 account/management/commands/run_weekly_push_scheduler.run_weekly_push_job"""
 
-    @patch("account.management.commands.run_weekly_push_scheduler.call_command")
-    def test_run_weekly_push_job_invokes_send_weekly_push(self, mock_call_command):
-        from account.management.commands.run_weekly_push_scheduler import (
-            run_weekly_push_job,
+    def test_run_weekly_push_job_generates_reports_before_send_weekly_push(self):
+        from account.management.commands import run_weekly_push_scheduler
+
+        with patch.object(run_weekly_push_scheduler, "call_command") as mock_call_command:
+            run_weekly_push_scheduler.run_weekly_push_job()
+
+        self.assertEqual(
+            [call.args for call in mock_call_command.call_args_list],
+            [("generate_user_weekly_reports",), ("send_weekly_push",)],
         )
 
-        run_weekly_push_job()
+    def test_run_weekly_push_job_swallows_exceptions(self):
+        from account.management.commands import run_weekly_push_scheduler
 
-        mock_call_command.assert_called_once_with("send_weekly_push")
+        with patch.object(run_weekly_push_scheduler, "call_command") as mock_call_command:
+            mock_call_command.side_effect = RuntimeError("scheduler boom")
 
-    @patch("account.management.commands.run_weekly_push_scheduler.call_command")
-    def test_run_weekly_push_job_swallows_exceptions(self, mock_call_command):
-        from account.management.commands.run_weekly_push_scheduler import (
-            run_weekly_push_job,
-        )
-
-        mock_call_command.side_effect = RuntimeError("scheduler boom")
-
-        # 调度器循环依赖此函数不抛异常
-        run_weekly_push_job()
-        mock_call_command.assert_called_once_with("send_weekly_push")
+            # 调度器循环依赖此函数不抛异常
+            run_weekly_push_scheduler.run_weekly_push_job()
+        mock_call_command.assert_called_once_with("generate_user_weekly_reports")
 
 
 class AuthorizationHeaderParsingTest(TestCase):
