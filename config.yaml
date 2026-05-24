@@ -1,4 +1,4 @@
 startup:
   run_initial_sync: false #是否在服务启动时先执行一次 sync_dataset
-  run_daily_sync_scheduler: false #是否启动“每天自动抓新数据”
-  run_weekly_push_scheduler: false # 是否启动“每周自动发周报”
+  run_daily_sync_scheduler: true #是否启动“每天自动抓新数据”
+  run_weekly_push_scheduler: true # 是否启动“每周自动发周报”
