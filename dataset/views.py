@@ -184,6 +184,26 @@ def _validate_mentor_payload(body: dict):
     }
 
 
+def _extract_private_mentor_optional_fields(body: dict) -> dict:
+    research_direction = str(body.get("research_direction", "")).strip()
+    email = str(body.get("email", "")).strip()
+    profile = str(body.get("profile", "")).strip()
+
+    if research_direction and len(research_direction) > MAX_CHAR_LENGTH:
+        raise KeyError("Invalid parameters. [research_direction] is too long", -2)
+    if email:
+        try:
+            validate_email(email)
+        except ValidationError:
+            raise KeyError("Invalid parameters. [email] format is invalid", -2)
+
+    return {
+        "research_direction": research_direction,
+        "email": email,
+        "profile": profile,
+    }
+
+
 def _refresh_mentor_papers(mentor: Mentor):
     for paper in Paper.objects.all():
         mentor_id_list = paper.get_mentor_id_list()
@@ -282,6 +302,12 @@ def create_custom_mentor(req: HttpRequest):
     if len(english_name) > 100:
         return request_failed(-2, "Invalid parameters. [English_name] is too long", 400)
 
+    try:
+        optional_fields = _extract_private_mentor_optional_fields(body)
+    except KeyError as exc:
+        message = exc.args[0] if exc.args else "Invalid parameters"
+        return request_failed(-2, str(message), 400)
+
     if Mentor.objects.filter(owner=user).count() >= PRIVATE_MENTOR_LIMIT:
         return request_failed(
             3,
@@ -298,9 +324,9 @@ def create_custom_mentor(req: HttpRequest):
     mentor = Mentor.objects.create(
         Chinese_name=final_chinese_name,
         English_name=final_english_name or None,
-        research_direction="待补充",
-        email=None,
-        profile=None,
+        research_direction=optional_fields["research_direction"] or "待补充",
+        email=optional_fields["email"] or None,
+        profile=optional_fields["profile"] or None,
         paper_ids="",
         owner=user,
     )
@@ -384,9 +410,49 @@ def mentor_detail(req: HttpRequest, mentor_id: int):
         return request_success()
 
     body = json.loads(req.body.decode("utf-8"))
-    mentor_payload = _validate_mentor_payload(body)
-    for key, value in mentor_payload.items():
-        setattr(mentor, key, value)
+
+    if mentor.owner_id is None:
+        mentor_payload = _validate_mentor_payload(body)
+        for key, value in mentor_payload.items():
+            setattr(mentor, key, value)
+    else:
+        chinese_name_raw = body.get("Chinese_name")
+        english_name_raw = body.get("English_name")
+        new_chinese_name = (
+            str(chinese_name_raw).strip()
+            if chinese_name_raw is not None
+            else mentor.Chinese_name
+        )
+        new_english_name = (
+            str(english_name_raw).strip()
+            if english_name_raw is not None
+            else (mentor.English_name or "")
+        )
+
+        if new_chinese_name == "" and new_english_name == "":
+            return request_failed(
+                -2,
+                "Invalid parameters. [Chinese_name] or [English_name] is required",
+                400,
+            )
+        if len(new_chinese_name) > 100:
+            return request_failed(-2, "Invalid parameters. [Chinese_name] is too long", 400)
+        if len(new_english_name) > 100:
+            return request_failed(-2, "Invalid parameters. [English_name] is too long", 400)
+
+        try:
+            optional_fields = _extract_private_mentor_optional_fields(body)
+        except KeyError as exc:
+            message = exc.args[0] if exc.args else "Invalid parameters"
+            return request_failed(-2, str(message), 400)
+
+        final_chinese_name = new_chinese_name if new_chinese_name != "" else new_english_name
+        mentor.Chinese_name = final_chinese_name
+        mentor.English_name = new_english_name or None
+        mentor.research_direction = optional_fields["research_direction"] or "待补充"
+        mentor.email = optional_fields["email"] or None
+        mentor.profile = optional_fields["profile"] or None
+
     mentor.save()
 
     _refresh_mentor_papers(mentor)
