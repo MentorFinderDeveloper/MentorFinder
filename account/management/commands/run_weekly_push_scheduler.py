@@ -1,8 +1,6 @@
 import logging
 from zoneinfo import ZoneInfo
 
-from apscheduler.schedulers.blocking import BlockingScheduler
-from apscheduler.triggers.cron import CronTrigger
 from django.conf import settings
 from django.core.management import call_command
 from django.core.management.base import BaseCommand
@@ -13,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 def run_weekly_push_job():
     try:
+        call_command("generate_user_weekly_reports")
         call_command("send_weekly_push")
     except Exception:
         logger.exception("每周定时周报推送任务执行失败")
@@ -31,6 +30,9 @@ class Command(BaseCommand):
         parser.add_argument("--minute", type=int, default=0, help="每周执行分钟，默认 0")
 
     def handle(self, *args, **options):
+        from apscheduler.schedulers.blocking import BlockingScheduler
+        from apscheduler.triggers.cron import CronTrigger
+
         hour = options["hour"]
         minute = options["minute"]
         day_of_week = options["day_of_week"]
