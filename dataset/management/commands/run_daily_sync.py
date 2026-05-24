@@ -1,8 +1,6 @@
 import logging
 from zoneinfo import ZoneInfo
 
-from apscheduler.schedulers.blocking import BlockingScheduler
-from apscheduler.triggers.cron import CronTrigger
 from django.conf import settings
 from django.core.management import call_command
 from django.core.management.base import BaseCommand
@@ -32,6 +30,9 @@ class Command(BaseCommand):
         parser.add_argument("--minute", type=int, default=0, help="每日执行分钟，默认 0")
 
     def handle(self, *args, **options):
+        from apscheduler.schedulers.blocking import BlockingScheduler
+        from apscheduler.triggers.cron import CronTrigger
+
         hour = options["hour"]
         minute = options["minute"]
         timezone = ZoneInfo(settings.TIME_ZONE)
