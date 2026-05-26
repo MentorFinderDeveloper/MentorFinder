@@ -283,41 +283,15 @@ class AccountAuthTests(TestCase):
         # 注册成功后验证码记录应被消费
         self.assertFalse(EmailVerificationCode.objects.filter(email="consume@example.com").exists())
 
-    def test_register_bypass_email_skips_verification(self):
-        res = self.post_json(
-            "/register",
-            {"username": "BypassUser", "password": "abc12345", "email": "bypass-tester@example.com"},
-        )
-        self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.json()["code"], 0)
-        self.assertTrue(User.objects.filter(username="BypassUser", email="bypass-tester@example.com").exists())
-
-    def test_register_bypass_prefix_is_case_insensitive(self):
-        res = self.post_json(
-            "/register",
-            {"username": "BypassMixed", "password": "abc12345", "email": "ByPaSStester2@example.com"},
-        )
-        self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.json()["code"], 0)
-
     def test_send_verification_code_success(self):
         res = self.post_json("/register/verification-code", {"email": "fresh@example.com"})
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
-        self.assertEqual(res.json()["bypass"], False)
         self.assertEqual(res.json()["cooldownSeconds"], 60)
         record = EmailVerificationCode.objects.filter(email="fresh@example.com").first()
         self.assertIsNotNone(record)
         self.assertEqual(len(record.code), 6)
         self.assertTrue(record.code.isdigit())
-
-    def test_send_verification_code_bypass_email_returns_bypass_flag(self):
-        res = self.post_json("/register/verification-code", {"email": "bypassuser@example.com"})
-        self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.json()["code"], 0)
-        self.assertTrue(res.json()["bypass"])
-        # bypass 路径不应落库
-        self.assertFalse(EmailVerificationCode.objects.filter(email="bypassuser@example.com").exists())
 
     def test_send_verification_code_duplicate_email_rejected(self):
         res = self.post_json("/register/verification-code", {"email": "ashitemaru@example.com"})
@@ -345,7 +319,6 @@ class AccountAuthTests(TestCase):
         res = self.post_json("/password-reset/verification-code", {"email": "ashitemaru@example.com"})
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
-        self.assertEqual(res.json()["bypass"], False)
         record = EmailVerificationCode.objects.filter(email="ashitemaru@example.com").first()
         self.assertIsNotNone(record)
         self.assertEqual(len(record.code), 6)
@@ -3905,25 +3878,6 @@ class EmailVerificationViewExtraTest(TestCase):
     def post_json(self, path: str, payload: dict):
         return self.client.post(path, data=json.dumps(payload), content_type="application/json")
 
-    def test_password_reset_verification_code_bypass_for_existing_user(self):
-        User.objects.create_user(
-            username="bypass_reset_user",
-            email="bypass-reset@example.com",
-            password="abc12345",
-        )
-
-        res = self.post_json(
-            "/password-reset/verification-code",
-            {"email": "bypass-reset@example.com"},
-        )
-
-        self.assertEqual(res.status_code, 200)
-        self.assertTrue(res.json()["bypass"])
-        # bypass 路径不会落库验证码
-        self.assertFalse(
-            EmailVerificationCode.objects.filter(email="bypass-reset@example.com").exists()
-        )
-
     def test_password_reset_verification_code_cooldown(self):
         first = self.post_json(
             "/password-reset/verification-code",
@@ -4247,20 +4201,6 @@ class PublicUserProfileViewTest(TestCase):
 
 class EmailVerificationServiceTest(TestCase):
     """单元测试 account/services/email_verification.py 中的纯函数"""
-
-    def test_email_matches_bypass_recognizes_prefix_case_insensitively(self):
-        from account.services.email_verification import email_matches_bypass
-
-        self.assertTrue(email_matches_bypass("bypass-tester@example.com"))
-        self.assertTrue(email_matches_bypass("ByPaSS-tester@example.com"))
-        self.assertTrue(email_matches_bypass("  bypass-tester@example.com  "))
-        self.assertFalse(email_matches_bypass("user@example.com"))
-
-    def test_email_matches_bypass_returns_false_when_prefix_empty(self):
-        from account.services.email_verification import email_matches_bypass
-
-        with self.settings(EMAIL_VERIFICATION_BYPASS_PREFIX=""):
-            self.assertFalse(email_matches_bypass("bypass-tester@example.com"))
 
     def test_generate_verification_code_returns_six_digit_numeric(self):
         from account.services.email_verification import (
