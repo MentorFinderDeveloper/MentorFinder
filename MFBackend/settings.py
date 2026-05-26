@@ -166,7 +166,6 @@ DEFAULT_FROM_EMAIL = os.environ.get(
 
 EMAIL_VERIFICATION_CODE_TTL_SECONDS = int(os.environ.get('EMAIL_VERIFICATION_CODE_TTL', '600'))
 EMAIL_VERIFICATION_CODE_RESEND_COOLDOWN = int(os.environ.get('EMAIL_VERIFICATION_CODE_COOLDOWN', '60'))
-EMAIL_VERIFICATION_BYPASS_PREFIX = os.environ.get('EMAIL_VERIFICATION_BYPASS_PREFIX', 'bypass')
 
 # AI weekly push (OpenAI-compatible API provided by THU CS lab)
 # Keep API key empty in repo, fill through environment variable in deployment.

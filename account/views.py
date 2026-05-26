@@ -21,7 +21,6 @@ from dataset.models import Mentor, Paper
 from dataset.views import ARXIV_SUBJECT_MAPPING
 from account.models import MentorFollow
 from account.services.email_verification import (
-    email_matches_bypass,
     get_remaining_cooldown,
     issue_verification_code,
     send_password_reset_email,
@@ -131,16 +130,14 @@ def register(req: HttpRequest):
     if User.objects.filter(email=email).exists():
         return request_failed(4, "Email already exists", 409)
 
-    # 邮箱验证码校验（"bypass" 前缀邮箱可跳过，方便测试，后续可删除该后门）
     verification_code_raw = body.get("verificationCode", "")
     if not isinstance(verification_code_raw, str):
         return request_failed(-2, "Invalid parameters. [verificationCode] must be a string", 400)
     verification_code = verification_code_raw.strip()
-    if not email_matches_bypass(email):
-        if verification_code == "":
-            return request_failed(5, "Verification code is required", 400)
-        if not verify_code(email, verification_code):
-            return request_failed(5, "Verification code is invalid or expired", 400)
+    if verification_code == "":
+        return request_failed(5, "Verification code is required", 400)
+    if not verify_code(email, verification_code):
+        return request_failed(5, "Verification code is invalid or expired", 400)
 
     user = User.objects.create_user(
         username=username,
@@ -176,9 +173,6 @@ def send_password_reset_verification_code(req: HttpRequest):
     if user.role == User.ROLE_BANNED:
         return request_failed(3, "User is banned", 403)
 
-    if email_matches_bypass(email):
-        return request_success({"bypass": True, "info": "Bypass email: no verification code required"})
-
     from django.conf import settings as _settings
     cooldown_remaining = get_remaining_cooldown(email)
     if cooldown_remaining > 0:
@@ -195,7 +189,6 @@ def send_password_reset_verification_code(req: HttpRequest):
         return request_failed(7, f"Failed to send verification email: {exc}", 502)
 
     return request_success({
-        "bypass": False,
         "cooldownSeconds": int(getattr(_settings, "EMAIL_VERIFICATION_CODE_RESEND_COOLDOWN", 60)),
     })
 
@@ -231,11 +224,10 @@ def reset_password_with_email_code(req: HttpRequest):
     if not isinstance(verification_code_raw, str):
         return request_failed(-2, "Invalid parameters. [verificationCode] must be a string", 400)
     verification_code = verification_code_raw.strip()
-    if not email_matches_bypass(email):
-        if verification_code == "":
-            return request_failed(5, "Verification code is required", 400)
-        if not verify_code(email, verification_code):
-            return request_failed(5, "Verification code is invalid or expired", 400)
+    if verification_code == "":
+        return request_failed(5, "Verification code is required", 400)
+    if not verify_code(email, verification_code):
+        return request_failed(5, "Verification code is invalid or expired", 400)
 
     user.set_password(password)
     user.save(update_fields=["password"])
@@ -260,9 +252,6 @@ def send_email_verification_code(req: HttpRequest):
     if User.objects.filter(email=email).exists():
         return request_failed(4, "Email already exists", 409)
 
-    if email_matches_bypass(email):
-        return request_success({"bypass": True, "info": "Bypass email: no verification code required"})
-
     from django.conf import settings as _settings
     cooldown_remaining = get_remaining_cooldown(email)
     if cooldown_remaining > 0:
@@ -279,7 +268,6 @@ def send_email_verification_code(req: HttpRequest):
         return request_failed(7, f"Failed to send verification email: {exc}", 502)
 
     return request_success({
-        "bypass": False,
         "cooldownSeconds": int(getattr(_settings, "EMAIL_VERIFICATION_CODE_RESEND_COOLDOWN", 60)),
     })
 

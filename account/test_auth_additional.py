@@ -8,7 +8,6 @@ from django.utils import timezone
 from account.models import EmailVerificationCode, User
 from account.services.email_verification import (
     CODE_LENGTH,
-    email_matches_bypass,
     generate_verification_code,
     get_remaining_cooldown,
     issue_verification_code,
@@ -257,37 +256,6 @@ class AccountAuthAdditionalTests(TestCase):
         self.assertEqual(res.json()["code"], 4)
         self.assertTrue(EmailVerificationCode.objects.filter(email="auth_user@example.com").exists())
 
-    def test_register_bypass_email_does_not_consume_existing_code(self):
-        self.issue_code("bypass-existing@example.com", code="999999")
-
-        res = self.post_json(
-            "/register",
-            {
-                "username": "bypass_existing",
-                "password": "abc12345",
-                "email": "bypass-existing@example.com",
-                "verificationCode": "wrong",
-            },
-        )
-
-        self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.json()["code"], 0)
-        self.assertTrue(EmailVerificationCode.objects.filter(email="bypass-existing@example.com").exists())
-
-    def test_register_bypass_email_allows_missing_verification_code(self):
-        res = self.post_json(
-            "/register",
-            {
-                "username": "bypass_missing_code",
-                "password": "abc12345",
-                "email": "bypass-missing-code@example.com",
-            },
-        )
-
-        self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.json()["code"], 0)
-        self.assertTrue(User.objects.filter(username="bypass_missing_code").exists())
-
     def test_send_verification_code_rejects_missing_email(self):
         res = self.post_json(
             "/register/verification-code",
@@ -351,49 +319,6 @@ class AccountAuthAdditionalTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual(res.json()["cooldownSeconds"], 120)
-
-    @override_settings(EMAIL_VERIFICATION_BYPASS_PREFIX="")
-    def test_empty_bypass_prefix_disables_bypass(self):
-        self.assertFalse(email_matches_bypass("bypass-disabled@example.com"))
-
-        res = self.post_json(
-            "/register",
-            {
-                "username": "disabled_bypass",
-                "password": "abc12345",
-                "email": "bypass-disabled@example.com",
-            },
-        )
-
-        self.assertEqual(res.status_code, 400)
-        self.assertEqual(res.json()["code"], 5)
-        self.assertFalse(User.objects.filter(username="disabled_bypass").exists())
-
-    @override_settings(EMAIL_VERIFICATION_BYPASS_PREFIX="skip")
-    def test_custom_bypass_prefix_is_respected(self):
-        self.assertTrue(email_matches_bypass("skip-user@example.com"))
-        self.assertFalse(email_matches_bypass("bypass-user@example.com"))
-
-        res = self.post_json(
-            "/register",
-            {
-                "username": "custom_bypass",
-                "password": "abc12345",
-                "email": "skip-user@example.com",
-            },
-        )
-
-        self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.json()["code"], 0)
-        self.assertTrue(User.objects.filter(username="custom_bypass").exists())
-
-    def test_email_matches_bypass_is_case_insensitive(self):
-        self.assertTrue(
-            email_matches_bypass("ByPass-case@example.com")
-        )
-        self.assertTrue(email_matches_bypass("bypass-case@example.com"))
-        self.assertFalse(email_matches_bypass("regular@example.com"))
-        self.assertFalse(email_matches_bypass(""))
 
     def test_generate_verification_code_returns_six_digits(self):
         code = generate_verification_code()

@@ -12,13 +12,6 @@ from account.models import EmailVerificationCode
 CODE_LENGTH = 6
 
 
-def email_matches_bypass(email: str) -> bool:
-    prefix = getattr(settings, "EMAIL_VERIFICATION_BYPASS_PREFIX", "bypass")
-    if not prefix:
-        return False
-    return email.strip().lower().startswith(prefix.lower())
-
-
 def generate_verification_code() -> str:
     return "".join(str(random.randint(0, 9)) for _ in range(CODE_LENGTH))
 
