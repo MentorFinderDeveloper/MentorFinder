@@ -95,6 +95,25 @@ mock 数据说明：
 - 当前逻辑会给有邮箱的用户生成周报；周报内容只包含用户关注导师和用户私有导师关联的新论文。
 - `fetch_papers` 在默认情况下会自动维护数据库中的周报增量桶；如需只抓论文不记录周报增量，可传 `--disable-weekly-record`。
 
+## JWT 配置
+
+后端当前使用自定义 JWT 作为登录态凭证。在 GitLab CI/CD Variables 中维护 `JWT_SIGNING_KEY`，并由 CI 在构建时写入 `backend/.env`，与邮件账号等部署变量一致。
+
+如果希望手动指定，也可以在启动前设置：
+
+```bash
+export JWT_SIGNING_KEY='replace-with-a-long-random-secret'
+```
+
+要求如下：
+
+- `JWT_SIGNING_KEY` 必须设置，且长度至少为 32 个字符。
+- 不能使用仓库中的已知开发值 `KawaiiNana`。
+- CI 会在 build 阶段检查该变量是否存在；缺失时会直接失败并提示。
+- 如果手动修改了 `backend/.env` 里的该值，之前签发的 token 会失效，需要重新登录。
+
+测试环境已经预置了一个专用测试密钥；在 CI 中也会在单测前检查 `JWT_SIGNING_KEY`，避免出现“本地可跑、云端缺变量”的情况。
+
 JSON 文件格式示例：
 
 ```json
