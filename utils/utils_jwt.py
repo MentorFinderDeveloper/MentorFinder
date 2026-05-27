@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import time
+from pathlib import Path
 from typing import Optional
 
 from django.core import signing
@@ -10,6 +11,7 @@ EXPIRE_IN_SECONDS = 60 * 60 * 24 * 1  # 1 day
 ALT_CHARS = "-_".encode("utf-8")
 JWT_SIGNING_KEY_ENV = "JWT_SIGNING_KEY"
 JWT_SIGNING_KEY_MIN_LENGTH = 32
+DOTENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 
 
 def _validate_signing_key(signing_key: str) -> str:
@@ -23,13 +25,28 @@ def _validate_signing_key(signing_key: str) -> str:
     return signing_key
 
 
+def _load_dotenv_if_needed() -> None:
+    if os.environ.get(JWT_SIGNING_KEY_ENV, "").strip():
+        return
+    if not DOTENV_PATH.exists():
+        return
+    try:
+        from dotenv import load_dotenv as _load_dotenv
+
+        _load_dotenv(DOTENV_PATH)
+    except ModuleNotFoundError:
+        pass
+
+
 def _get_signing_key() -> bytes:
+    _load_dotenv_if_needed()
     signing_key = os.environ.get(JWT_SIGNING_KEY_ENV, "").strip()
     signing_key = _validate_signing_key(signing_key)
     return signing_key.encode("utf-8")
 
 
 def validate_jwt_signing_key() -> None:
+    _load_dotenv_if_needed()
     signing_key = os.environ.get(JWT_SIGNING_KEY_ENV, "").strip()
     _validate_signing_key(signing_key)
 
