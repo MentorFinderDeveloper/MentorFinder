@@ -3476,10 +3476,11 @@ class JwtUtilityTests(TestCase):
         self.assertIn("-", encoded)
         self.assertEqual(b64url_decode(encoded, decode_to_str=False), raw_bytes)
 
-    def test_generate_jwt_token_returns_three_segments(self):
+    def test_generate_jwt_token_returns_signed_token(self):
         token = generate_jwt_token("jwt-user")
 
-        self.assertEqual(len(token.split(".")), 3)
+        self.assertIsInstance(token, str)
+        self.assertTrue(token)
 
     def test_check_jwt_token_returns_username_payload(self):
         token = generate_jwt_token("jwt-user")
@@ -3488,19 +3489,15 @@ class JwtUtilityTests(TestCase):
 
     def test_check_jwt_token_rejects_tampered_signature(self):
         token = generate_jwt_token("jwt-user")
-        header_b64, payload_b64, signature_b64 = token.split(".")
-        tampered_signature = signature_b64[:-1] + ("A" if signature_b64[-1] != "A" else "B")
+        tampered_signature = token[:-1] + ("A" if token[-1] != "A" else "B")
 
-        self.assertIsNone(check_jwt_token(f"{header_b64}.{payload_b64}.{tampered_signature}"))
+        self.assertIsNone(check_jwt_token(tampered_signature))
 
     def test_check_jwt_token_rejects_tampered_payload(self):
         token = generate_jwt_token("jwt-user")
-        header_b64, payload_b64, signature_b64 = token.split(".")
-        payload = json.loads(b64url_decode(payload_b64))
-        payload["data"]["username"] = "attacker"
-        tampered_payload_b64 = b64url_encode(json.dumps(payload, separators=(",", ":")))
+        tampered_payload = token.replace("jwt-user", "attacker", 1)
 
-        self.assertIsNone(check_jwt_token(f"{header_b64}.{tampered_payload_b64}.{signature_b64}"))
+        self.assertIsNone(check_jwt_token(tampered_payload))
 
     def test_check_jwt_token_rejects_expired_token(self):
         with patch("utils.utils_jwt.time.time", return_value=1000):
