@@ -64,7 +64,7 @@ class AccountAuthTests(TestCase):
         res = self.post_json("/login", {"username": "Ashitemaru", "password": "abc12345"})
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
-        self.assertTrue(res.json()["token"].count(".") == 2)
+        self.assertEqual(check_jwt_token(res.json()["token"]), {"username": "Ashitemaru"})
         self.assertEqual(res.json()["username"], "Ashitemaru")
         self.assertEqual(res.json()["role"], "student")
 
@@ -72,7 +72,7 @@ class AccountAuthTests(TestCase):
         res = self.post_json("/login", {"username": "ashitemaru@example.com", "password": "abc12345"})
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
-        self.assertTrue(res.json()["token"].count(".") == 2)
+        self.assertEqual(check_jwt_token(res.json()["token"]), {"username": "Ashitemaru"})
         self.assertEqual(res.json()["username"], "Ashitemaru")
         self.assertEqual(res.json()["role"], "student")
 
@@ -108,7 +108,7 @@ class AccountAuthTests(TestCase):
         )
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
-        self.assertTrue(res.json()["token"].count(".") == 2)
+        self.assertEqual(check_jwt_token(res.json()["token"]), {"username": "NewUser"})
         self.assertEqual(res.json()["role"], "student")
         user = User.objects.filter(username="NewUser", email="newuser@example.com").first()
         self.assertIsNotNone(user)

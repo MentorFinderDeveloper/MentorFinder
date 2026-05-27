@@ -16,11 +16,16 @@ Including another URLconf
 from django.contrib import admin
 from django.conf import settings
 from django.urls import path, include, re_path
+from django.http import HttpResponseNotFound
+from django.http import Http404
 from django.views.static import serve
 
 
 def serve_media(req, path):
-    return serve(req, path, document_root=settings.MEDIA_ROOT)
+    try:
+        return serve(req, path, document_root=settings.MEDIA_ROOT)
+    except Http404:
+        return HttpResponseNotFound()
 
 
 urlpatterns = [
