@@ -3,10 +3,13 @@
 import os
 import sys
 
+from utils.utils_jwt import validate_jwt_signing_key
+
 
 def main():
     """Run administrative tasks."""
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'MFBackend.settings')
+    validate_jwt_signing_key()
     try:
         from django.core.management import execute_from_command_line
     except ImportError as exc:

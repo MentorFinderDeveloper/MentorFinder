@@ -3,6 +3,8 @@ set -e
 
 mkdir -p data
 
+python3 -c "from utils.utils_jwt import validate_jwt_signing_key; validate_jwt_signing_key()"
+
 # 生产环境不在启动时生成迁移文件，只应用仓库中已提交的迁移。
 # 历史分叉修复：若 account.0002_mentorfollow 未应用但后续已应用，启动时自动 fake 对齐。
 if python3 manage.py showmigrations account | grep -q "\[ \] 0002_mentorfollow"; then

@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from io import StringIO
@@ -10,7 +11,7 @@ from django.contrib.auth.hashers import check_password
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from account.models import EmailVerificationCode, MentorVerificationRequest, PushRecord, User, MentorFollow, SubjectFollow, UserFollow, UserProfile, WeeklyPushPaperBucket
@@ -3507,6 +3508,12 @@ class JwtUtilityTests(TestCase):
 
         with patch("utils.utils_jwt.time.time", return_value=1000 + EXPIRE_IN_SECONDS + 1):
             self.assertIsNone(check_jwt_token(token))
+
+    def test_check_jwt_token_rejects_token_signed_with_rotated_secret(self):
+        with patch.dict(os.environ, {"JWT_SIGNING_KEY": "rotated-jwt-signing-key-abcdefghijklmnopqrstuvwxyz"}):
+            token = generate_jwt_token("rotated-user")
+
+        self.assertIsNone(check_jwt_token(token))
 
     def test_check_jwt_token_accepts_token_before_expiry(self):
         with patch("utils.utils_jwt.time.time", return_value=1000):
