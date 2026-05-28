@@ -92,3 +92,22 @@ def check_jwt_token(token: str) -> Optional[dict]:
         return None
     
     return payload["data"]
+
+
+def resolve_user_from_token(token: str, reject_banned: bool = True):
+    token_data = check_jwt_token(token)
+    if token_data is None:
+        return None
+
+    username = str(token_data.get("username", "")).strip()
+    if username == "":
+        return None
+
+    from account.models import User
+
+    user = User.objects.filter(username=username).first()
+    if user is None:
+        return None
+    if reject_banned and user.role == User.ROLE_BANNED:
+        return None
+    return user

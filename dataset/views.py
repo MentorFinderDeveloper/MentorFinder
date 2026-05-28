@@ -22,7 +22,7 @@ from dataset.services.research_analysis import (
     build_rule_based_recent_direction_analysis,
 )
 from dataset.services.thu_crawler import get_english_name
-from utils.utils_jwt import check_jwt_token
+from utils.utils_jwt import check_jwt_token, resolve_user_from_token
 from utils.utils_request import BAD_METHOD, request_failed, request_success
 from utils.utils_require import CheckRequire, MAX_CHAR_LENGTH, require
 PRIVATE_MENTOR_LIMIT = 10
@@ -59,32 +59,29 @@ def _require_admin(req: HttpRequest):
     if user is None:
         return request_failed(2, "User not found", 401)
 
+    if user.role == User.ROLE_BANNED:
+        return request_failed(3, "User is banned", 403)
+
     if user.role != "admin":
         return request_failed(3, "Permission denied", 403)
 
     return None
 
 
-def _resolve_user(req: HttpRequest):
+def _resolve_user(req: HttpRequest, reject_banned: bool = True):
     token = _extract_token(req)
     if token == "":
         return None
 
-    token_data = check_jwt_token(token)
-    if token_data is None:
-        return None
-
-    username = str(token_data.get("username", "")).strip()
-    if username == "":
-        return None
-
-    return User.objects.filter(username=username).first()
+    return resolve_user_from_token(token, reject_banned=reject_banned)
 
 
 def _require_user(req: HttpRequest):
-    user = _resolve_user(req)
+    user = _resolve_user(req, reject_banned=False)
     if user is None:
         return None, request_failed(2, "Unauthorized", 401)
+    if user.role == User.ROLE_BANNED:
+        return None, request_failed(3, "User is banned", 403)
     return user, None
 
 

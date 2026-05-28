@@ -1,11 +1,10 @@
 from django.http import HttpRequest
 
-from account.models import User
 from search.services.engine import (
     search_mentors_page,
     search_papers_page,
 )
-from utils.utils_jwt import check_jwt_token
+from utils.utils_jwt import resolve_user_from_token
 from utils.utils_require import CheckRequire, MAX_CHAR_LENGTH, require
 from utils.utils_request import BAD_METHOD, request_success
 
@@ -87,15 +86,7 @@ def _resolve_user(req: HttpRequest):
     if token == "":
         return None
 
-    token_data = check_jwt_token(token)
-    if token_data is None:
-        return None
-
-    username = str(token_data.get("username", "")).strip()
-    if username == "":
-        return None
-
-    return User.objects.filter(username=username).first()
+    return resolve_user_from_token(token)
 
 
 @CheckRequire
