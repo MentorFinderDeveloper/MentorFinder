@@ -210,7 +210,7 @@ python manage.py send_weekly_push --user alice --period-key 20260401_20260407 --
 
 ## 爬虫定时任务
 
-后端会在 Django 应用启动时通过内置 APScheduler 注册爬虫定时任务，默认每天 `04:00`（`Asia/Shanghai`）执行 `sync_dataset`（即先抓导师再抓论文）。
+后端会在 Django 应用启动时通过内置 APScheduler 注册爬虫定时任务，默认每天 `02:50`（`Asia/Shanghai`）执行 `sync_dataset`（即先抓导师再抓论文）。
 
 也保留了 `run_daily_sync` 命令，方便本地单独验证调度逻辑：
 
