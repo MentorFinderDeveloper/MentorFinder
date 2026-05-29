@@ -3412,6 +3412,28 @@ class SyncCommandsTest(TestCase):
         self.assertIsNotNone(record.finished_at)
         self.assertEqual(record.error_message, "RuntimeError: boom")
 
+    def test_scheduled_task_runs_latest_endpoint_returns_recent_records(self):
+        ScheduledTaskRun.objects.create(
+            task_name="daily_sync_dataset",
+            status=ScheduledTaskRun.STATUS_SUCCESS,
+            finished_at=timezone.now(),
+        )
+        ScheduledTaskRun.objects.create(
+            task_name="weekly_home_push",
+            status=ScheduledTaskRun.STATUS_FAILED,
+            finished_at=timezone.now(),
+            error_message="RuntimeError: boom",
+        )
+
+        response = self.client.get("/dataset/scheduled-task-runs/latest")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["code"], 0)
+        self.assertEqual(len(payload["runs"]), 2)
+        self.assertEqual(payload["latestByTask"]["daily_sync_dataset"]["status"], ScheduledTaskRun.STATUS_SUCCESS)
+        self.assertEqual(payload["latestByTask"]["weekly_home_push"]["errorMessage"], "RuntimeError: boom")
+
 
 class AIRecentDirectionTruncationTest(TestCase):
     """覆盖 build_ai_recent_direction_analysis 在论文数超过 20 时的截断分支"""
