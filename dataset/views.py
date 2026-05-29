@@ -15,7 +15,7 @@ from account.services.user_weekly_report import (
     get_latest_user_weekly_report,
     list_user_weekly_reports,
 )
-from dataset.models import Mentor, Paper, WeeklyPaperPush
+from dataset.models import Mentor, Paper, ScheduledTaskRun, WeeklyPaperPush
 from dataset.services.author_matching import is_exact_english_author_match
 from dataset.services.research_analysis import (
     build_ai_recent_direction_analysis,
@@ -29,6 +29,8 @@ PRIVATE_MENTOR_LIMIT = 10
 TIMELINE_DEFAULT_PAGE_SIZE = 20
 TIMELINE_MAX_PAGE_SIZE = 100
 TIMELINE_OTHER_DIRECTION = "其他/未分类"
+SCHEDULED_TASK_RUN_DEFAULT_LIMIT = 20
+SCHEDULED_TASK_RUN_MAX_LIMIT = 50
 
 
 def _extract_token(req: HttpRequest) -> str:
@@ -112,6 +114,17 @@ def _serialize_mentor(mentor: Mentor):
         "profile": mentor.profile,
         "is_private": mentor.is_private,
         "paper_ids": [_serialize_paper(paper) for paper in mentor.get_papers()],
+    }
+
+
+def _serialize_scheduled_task_run(run: ScheduledTaskRun):
+    return {
+        "id": run.id,
+        "taskName": run.task_name,
+        "status": run.status,
+        "startedAt": run.started_at.isoformat(sep=" ", timespec="seconds") if run.started_at else "",
+        "finishedAt": run.finished_at.isoformat(sep=" ", timespec="seconds") if run.finished_at else "",
+        "errorMessage": run.error_message,
     }
 
 
@@ -1093,4 +1106,32 @@ def weekly_push_personalized_history(request):
             }
             for report in reports
         ]
+    })
+
+
+@CheckRequire
+def scheduled_task_runs_latest(request):
+    if request.method != "GET":
+        return BAD_METHOD
+
+    limit_raw = str(request.GET.get("limit", SCHEDULED_TASK_RUN_DEFAULT_LIMIT)).strip()
+    try:
+        limit = int(limit_raw)
+    except ValueError:
+        limit = SCHEDULED_TASK_RUN_DEFAULT_LIMIT
+    limit = max(1, min(limit, SCHEDULED_TASK_RUN_MAX_LIMIT))
+
+    runs = list(ScheduledTaskRun.objects.order_by("-started_at", "-id")[:limit])
+    latest_by_task = {}
+    for run in ScheduledTaskRun.objects.order_by("task_name", "-started_at", "-id"):
+        if run.task_name in latest_by_task:
+            continue
+        latest_by_task[run.task_name] = run
+
+    return request_success({
+        "runs": [_serialize_scheduled_task_run(run) for run in runs],
+        "latestByTask": {
+            task_name: _serialize_scheduled_task_run(run)
+            for task_name, run in latest_by_task.items()
+        },
     })
