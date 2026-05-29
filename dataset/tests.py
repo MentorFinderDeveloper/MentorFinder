@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import json
 import tempfile
 
-from dataset.models import Paper, Mentor
+from dataset.models import Paper, Mentor, ScheduledTaskRun
 from dataset.management.commands.fetch_papers import Command as FetchPapersCommand
 from dataset.services.thu_crawler import (
     _english_name_variants,
@@ -3380,6 +3380,37 @@ class SyncCommandsTest(TestCase):
 
         run_weekly_push_job()
         mock_call_command.assert_called_once_with("generate_weekly_push")
+
+    def test_recorded_scheduler_task_marks_success(self):
+        from utils.django_scheduler import _run_recorded_task
+
+        calls = []
+
+        _run_recorded_task(
+            task_name="daily_sync_dataset",
+            runner=lambda: calls.append("ran"),
+            error_log_message="should not fail",
+        )
+
+        record = ScheduledTaskRun.objects.get(task_name="daily_sync_dataset")
+        self.assertEqual(calls, ["ran"])
+        self.assertEqual(record.status, ScheduledTaskRun.STATUS_SUCCESS)
+        self.assertIsNotNone(record.finished_at)
+        self.assertEqual(record.error_message, "")
+
+    def test_recorded_scheduler_task_marks_failure(self):
+        from utils.django_scheduler import _run_recorded_task
+
+        _run_recorded_task(
+            task_name="daily_sync_dataset",
+            runner=lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+            error_log_message="expected failure",
+        )
+
+        record = ScheduledTaskRun.objects.get(task_name="daily_sync_dataset")
+        self.assertEqual(record.status, ScheduledTaskRun.STATUS_FAILED)
+        self.assertIsNotNone(record.finished_at)
+        self.assertEqual(record.error_message, "RuntimeError: boom")
 
 
 class AIRecentDirectionTruncationTest(TestCase):
