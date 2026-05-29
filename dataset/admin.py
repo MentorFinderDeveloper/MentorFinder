@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Mentor, Paper
+from .models import Mentor, Paper, ScheduledTaskRun
 
 @admin.register(Mentor)
 class MentorAdmin(admin.ModelAdmin):
@@ -10,3 +10,11 @@ class MentorAdmin(admin.ModelAdmin):
 @admin.register(Paper)
 class PaperAdmin(admin.ModelAdmin):
     list_display = ("id", "title", "publish_date", "author_names")
+
+
+@admin.register(ScheduledTaskRun)
+class ScheduledTaskRunAdmin(admin.ModelAdmin):
+    list_display = ("id", "task_name", "status", "started_at", "finished_at")
+    list_filter = ("task_name", "status")
+    search_fields = ("task_name", "error_message")
+    readonly_fields = ("task_name", "status", "started_at", "finished_at", "error_message")

@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 from django.conf import settings
 from django.core.management import call_command
+from django.utils import timezone as django_timezone
 
 from utils.startup_config import load_startup_config
 
@@ -42,7 +43,7 @@ def start_django_scheduler() -> bool:
         if config["run_daily_sync_scheduler"]:
             scheduler.add_job(
                 _run_sync_dataset_job,
-                trigger=CronTrigger(hour=3, minute=5, timezone=timezone),
+                trigger=CronTrigger(hour=3, minute=15, timezone=timezone),
                 id="daily_sync_dataset",
                 replace_existing=True,
                 coalesce=True,
@@ -104,22 +105,58 @@ def _is_runserver_main_process() -> bool:
 
 
 def _run_sync_dataset_job():
-    try:
-        call_command("sync_dataset")
-    except Exception:
-        logger.exception("Django 定时同步任务执行失败")
+    _run_recorded_task(
+        task_name="daily_sync_dataset",
+        runner=lambda: call_command("sync_dataset"),
+        error_log_message="Django 定时同步任务执行失败",
+    )
 
 
 def _run_weekly_home_push_job():
-    try:
-        call_command("generate_weekly_push")
-    except Exception:
-        logger.exception("Django 定时首页周推送生成任务执行失败")
+    _run_recorded_task(
+        task_name="weekly_home_push",
+        runner=lambda: call_command("generate_weekly_push"),
+        error_log_message="Django 定时首页周推送生成任务执行失败",
+    )
 
 
 def _run_weekly_email_push_job():
-    try:
+    def runner():
         call_command("generate_user_weekly_reports")
         call_command("send_weekly_push")
-    except Exception:
-        logger.exception("Django 定时周报邮件推送任务执行失败")
+
+    _run_recorded_task(
+        task_name="weekly_email_push",
+        runner=runner,
+        error_log_message="Django 定时周报邮件推送任务执行失败",
+    )
+
+
+def _run_recorded_task(*, task_name: str, runner, error_log_message: str):
+    from dataset.models import ScheduledTaskRun
+
+    record = ScheduledTaskRun.objects.create(
+        task_name=task_name,
+        status=ScheduledTaskRun.STATUS_RUNNING,
+    )
+    try:
+        runner()
+    except Exception as exc:
+        record.status = ScheduledTaskRun.STATUS_FAILED
+        record.finished_at = django_timezone.now()
+        record.error_message = _format_exception(exc)
+        record.save(update_fields=["status", "finished_at", "error_message"])
+        logger.exception(error_log_message)
+        return
+
+    record.status = ScheduledTaskRun.STATUS_SUCCESS
+    record.finished_at = django_timezone.now()
+    record.error_message = ""
+    record.save(update_fields=["status", "finished_at", "error_message"])
+
+
+def _format_exception(exc: Exception) -> str:
+    message = str(exc).strip()
+    if message:
+        return f"{exc.__class__.__name__}: {message}"
+    return exc.__class__.__name__

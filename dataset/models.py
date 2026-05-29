@@ -255,3 +255,29 @@ class WeeklyPaperPush(models.Model):
             "generatedBy": self.generated_by,
             "updatedAt": self.updated_at.isoformat(sep=" ", timespec="seconds"),
         }
+
+
+class ScheduledTaskRun(models.Model):
+    STATUS_RUNNING = "running"
+    STATUS_SUCCESS = "success"
+    STATUS_FAILED = "failed"
+
+    STATUS_CHOICES = (
+        (STATUS_RUNNING, "执行中"),
+        (STATUS_SUCCESS, "执行成功"),
+        (STATUS_FAILED, "执行失败"),
+    )
+
+    task_name = models.CharField(max_length=100, db_index=True, verbose_name="任务名称")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_RUNNING, verbose_name="状态")
+    started_at = models.DateTimeField(auto_now_add=True, db_index=True, verbose_name="开始时间")
+    finished_at = models.DateTimeField(blank=True, null=True, verbose_name="结束时间")
+    error_message = models.TextField(blank=True, default="", verbose_name="失败信息")
+
+    class Meta:
+        verbose_name = "定时任务执行记录"
+        verbose_name_plural = verbose_name
+        ordering = ["-started_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"{self.task_name}:{self.status}:{self.started_at.isoformat()}"
