@@ -904,6 +904,48 @@ def my_profile(req: HttpRequest):
 
 
 @CheckRequire
+def update_username(req: HttpRequest):
+    if req.method != "PUT":
+        return BAD_METHOD
+
+    user, auth_error = _require_user(req)
+    if auth_error is not None:
+        return auth_error
+
+    body = json.loads(req.body.decode("utf-8"))
+    if not isinstance(body, dict):
+        return request_failed(-2, "Invalid parameters. [body] must be an object", 400)
+
+    username = require(body, "username", "string", err_msg="Missing or error type of [username]")
+    username = username.strip()
+    if username == "":
+        return request_failed(-2, "Invalid parameters. [username] cannot be empty", 400)
+    if not USERNAME_REGEX.fullmatch(username):
+        return request_failed(
+            -2,
+            "Invalid parameters. [username] can only contain letters, digits, underscores, and hyphens",
+            400,
+        )
+
+    if username == user.username:
+        return request_success({
+            "username": user.username,
+            "token": generate_jwt_token(user.username),
+        })
+
+    if User.objects.filter(username=username).exclude(pk=user.pk).exists():
+        return request_failed(3, "Username already exists", 409)
+
+    user.username = username
+    user.save(update_fields=["username"])
+
+    return request_success({
+        "username": user.username,
+        "token": generate_jwt_token(user.username),
+    })
+
+
+@CheckRequire
 def upload_avatar(req: HttpRequest):
     user, auth_error = _require_user(req)
     if auth_error is not None:

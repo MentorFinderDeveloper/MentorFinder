@@ -211,3 +211,61 @@ class AccountProfileAdditionalTests(TestCase):
 
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.json()["info"], "Invalid parameters. [submittedName] cannot be empty")
+
+    def put_username(self, payload, token=None):
+        return self.client.put(
+            "/profile/username",
+            data=json.dumps(payload),
+            content_type="application/json",
+            **self.headers(token),
+        )
+
+    def test_update_username_succeeds_when_available(self):
+        res = self.put_username({"username": "  brand_new  "})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["username"], "brand_new")
+        self.assertTrue(res.json()["token"])
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.username, "brand_new")
+
+    def test_update_username_rejects_duplicate(self):
+        res = self.put_username({"username": self.other.username})
+
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.json()["code"], 3)
+        self.assertEqual(res.json()["info"], "Username already exists")
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.username, "profile_extra")
+
+    def test_update_username_allows_keeping_same_name(self):
+        res = self.put_username({"username": "profile_extra"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["username"], "profile_extra")
+
+    def test_update_username_rejects_blank(self):
+        res = self.put_username({"username": "   "})
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["info"], "Invalid parameters. [username] cannot be empty")
+
+    def test_update_username_rejects_invalid_characters(self):
+        res = self.put_username({"username": "bad name!"})
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(
+            res.json()["info"],
+            "Invalid parameters. [username] can only contain letters, digits, underscores, and hyphens",
+        )
+
+    def test_update_username_requires_auth(self):
+        res = self.client.put(
+            "/profile/username",
+            data=json.dumps({"username": "whatever"}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(res.status_code, 401)
