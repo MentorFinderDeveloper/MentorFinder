@@ -117,7 +117,7 @@ def build_ai_recent_direction_analysis(
 
 
     user_prompt = (
-        f"请根据以下导师近一年论文信息，总结该导师最近的研究方向。\n"
+        f"请根据以下导师近一年论文信息，总结该导师最近的研究方向。只总结计算机领域相关方向\n"
         f"导师姓名: {mentor.Chinese_name}\n"
         f"导师英文名: {mentor.English_name or '未提供'}\n"
         f"系统记录研究方向: {mentor.research_direction or '未提供'}\n"
