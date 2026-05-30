@@ -24,6 +24,14 @@ class SearchTests(TestCase):
         )
         self.other_token = generate_jwt_token("other1")
 
+        self.banned_user = User.objects.create_user(
+            username="banned1",
+            email="banned1@example.com",
+            password="abc12345",
+            role=User.ROLE_BANNED,
+        )
+        self.banned_token = generate_jwt_token("banned1")
+
         self.admin = User.objects.create_user(
             username="admin1",
             email="admin1@example.com",
@@ -820,6 +828,17 @@ class SearchTests(TestCase):
         self.assertEqual(res.status_code, 200)
         names = {mentor["Chinese_name"] for mentor in res.json()["mentors"]}
         self.assertEqual(names, {"张三", "李四"})
+
+    def test_search_mentors_treats_banned_token_as_anonymous(self):
+        res = self.client.get(
+            "/search/mentors",
+            {"keyword": "王五"},
+            **self.auth_headers(self.banned_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["mentors"], [])
 
     def test_search_mentors_invalid_page_inputs_fall_back_to_defaults(self):
         res = self.client.get(
