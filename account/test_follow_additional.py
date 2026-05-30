@@ -194,6 +194,24 @@ class AccountFollowAdditionalTests(TestCase):
         self.assertEqual(res.status_code, 405)
         self.assertEqual(res.json()["code"], -3)
 
+    def test_follow_counts_excludes_banned_targets_and_merges_mentor_followers(self):
+        UserFollow.objects.create(follower=self.student, following=self.other)
+        UserFollow.objects.create(follower=self.student, following=self.banned)
+        UserFollow.objects.create(follower=self.other, following=self.student)
+        UserFollow.objects.create(follower=self.third, following=self.student)
+        MentorFollow.objects.create(student=self.other, mentor=self.mentor)
+        MentorFollow.objects.create(student=self.third, mentor=self.mentor)
+        self.mentor_user.mentor_profile = self.mentor
+        self.mentor_user.save(update_fields=["mentor_profile"])
+
+        res = self.client.get("/follow/counts", **self.auth(self.mentor_token))
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["mentorCount"], 0)
+        self.assertEqual(res.json()["userCount"], 0)
+        self.assertEqual(res.json()["subjectCount"], 0)
+        self.assertEqual(res.json()["followerCount"], 2)
+
     def test_search_users_returns_non_banned_users_except_self(self):
         res = self.client.get("/search/users", **self.auth())
 

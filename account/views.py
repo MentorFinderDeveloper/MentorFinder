@@ -655,6 +655,49 @@ def followed_users(req: HttpRequest):
 
 
 @CheckRequire
+def follow_counts(req: HttpRequest):
+    if req.method != "GET":
+        return BAD_METHOD
+
+    user, auth_error = _require_user(req)
+    if auth_error is not None:
+        return auth_error
+
+    mentor_count = sum(
+        1
+        for follow in MentorFollow.objects.filter(student=user).select_related("mentor")
+        if follow.mentor.is_visible_to(user)
+    )
+    user_count = UserFollow.objects.filter(follower=user).exclude(
+        following__role=User.ROLE_BANNED,
+    ).count()
+    subject_count = SubjectFollow.objects.filter(user=user).count()
+
+    follower_user_ids = set(
+        UserFollow.objects.filter(following=user).exclude(
+            follower__role=User.ROLE_BANNED,
+        ).exclude(
+            follower=user,
+        ).values_list("follower_id", flat=True)
+    )
+    if user.role == User.ROLE_MENTOR and user.mentor_profile_id is not None:
+        follower_user_ids.update(
+            MentorFollow.objects.filter(mentor_id=user.mentor_profile_id).exclude(
+                student__role=User.ROLE_BANNED,
+            ).exclude(
+                student=user,
+            ).values_list("student_id", flat=True)
+        )
+
+    return request_success({
+        "mentorCount": mentor_count,
+        "userCount": user_count,
+        "subjectCount": subject_count,
+        "followerCount": len(follower_user_ids),
+    })
+
+
+@CheckRequire
 def followed_subjects(req: HttpRequest):
     if req.method != "GET":
         return BAD_METHOD

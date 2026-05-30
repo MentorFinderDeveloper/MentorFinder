@@ -674,6 +674,24 @@ class MentorFollowViewTests(TestCase):
         self.assertEqual(res.json()["subject"], "cs.AI")
         self.assertEqual(res.json()["recentPapers"][0]["title"], "New AI paper")
 
+    def test_follow_counts_returns_lightweight_sidebar_totals(self):
+        MentorFollow.objects.create(student=self.student, mentor=self.mentor)
+        UserFollow.objects.create(follower=self.student, following=self.other_student)
+        UserFollow.objects.create(follower=self.other_student, following=self.student)
+        SubjectFollow.objects.create(user=self.student, subject="cs.AI")
+
+        res = self.client.get(
+            "/follow/counts",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["mentorCount"], 1)
+        self.assertEqual(res.json()["userCount"], 1)
+        self.assertEqual(res.json()["subjectCount"], 1)
+        self.assertEqual(res.json()["followerCount"], 1)
+
     def test_student_can_unfollow_subject(self):
         Paper.objects.create(title="AI paper", subjects="cs.AI")
         SubjectFollow.objects.create(user=self.student, subject="cs.AI")

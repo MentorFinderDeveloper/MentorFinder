@@ -11,6 +11,7 @@ urlpatterns = [
     path("password-reset", views.reset_password_with_email_code),
     path("follow/mentors", views.followed_mentors),
     path("follow/mentors/<int:mentor_id>", views.follow_mentor),
+    path("follow/counts", views.follow_counts),
     path("follow/subjects", views.followed_subjects),
     path("follow/subjects/available", views.available_subjects),
     path("follow/subjects/followed", views.followed_subject_summaries),
