@@ -340,21 +340,41 @@ def _split_subjects(subjects: str | None) -> list[str]:
     return [subject.strip() for subject in subjects.split(",") if subject.strip()]
 
 
-def _collect_subject_counts() -> dict[str, int]:
+def _collect_subject_counts(subject_filter: set[str] | None = None) -> dict[str, int]:
+    normalized_subject_filter = (
+        {subject for subject in subject_filter if subject}
+        if subject_filter is not None
+        else None
+    )
+    if normalized_subject_filter is not None and len(normalized_subject_filter) == 0:
+        return {}
+
     subject_counts: dict[str, int] = {}
-    subjects_query = Paper.objects.values_list("subjects", flat=True).iterator(chunk_size=500)
-    for subjects in subjects_query:
+    subjects_query = Paper.objects.values_list("subjects", flat=True)
+    if normalized_subject_filter is not None:
+        candidate_subject_query = Q()
+        for subject in sorted(normalized_subject_filter):
+            candidate_subject_query |= Q(subjects__icontains=subject)
+        subjects_query = subjects_query.filter(candidate_subject_query)
+
+    for subjects in subjects_query.iterator(chunk_size=500):
         for subject in _split_subjects(subjects):
+            if normalized_subject_filter is not None and subject not in normalized_subject_filter:
+                continue
             subject_counts[subject] = subject_counts.get(subject, 0) + 1
     return subject_counts
 
 
-def _papers_for_subject(subject: str):
-    return [
-        paper
-        for paper in Paper.objects.filter(subjects__icontains=subject).order_by("-publish_date", "-id")
-        if subject in _split_subjects(paper.subjects)
-    ]
+def _papers_for_subject(subject: str, limit: int | None = None):
+    papers = []
+    paper_query = Paper.objects.filter(subjects__icontains=subject).order_by("-publish_date", "-id")
+    for paper in paper_query.iterator(chunk_size=200):
+        if subject not in _split_subjects(paper.subjects):
+            continue
+        papers.append(paper)
+        if limit is not None and len(papers) >= limit:
+            break
+    return papers
 
 
 def _serialize_subject_paper(paper: Paper):
@@ -372,15 +392,22 @@ def _serialize_subject_paper(paper: Paper):
     }
 
 
-def _serialize_subject_follow(subject: str, subject_counts: dict[str, int] | None = None):
-    counts = subject_counts if subject_counts is not None else _collect_subject_counts()
-    papers = _papers_for_subject(subject)
+def _serialize_subject_summary(subject: str, subject_counts: dict[str, int] | None = None):
+    counts = subject_counts if subject_counts is not None else _collect_subject_counts({subject})
     return {
         "subject": subject,
         "subjectName": _subject_display_name(subject),
-        "paperCount": counts.get(subject, len(papers)),
-        "recentPapers": [_serialize_subject_paper(paper) for paper in papers[:8]],
+        "paperCount": counts.get(subject, 0),
     }
+
+
+def _serialize_subject_follow(subject: str, subject_counts: dict[str, int] | None = None):
+    serialized_subject = _serialize_subject_summary(subject, subject_counts)
+    serialized_subject["recentPapers"] = [
+        _serialize_subject_paper(paper)
+        for paper in _papers_for_subject(subject, limit=8)
+    ]
+    return serialized_subject
 
 
 def _serialize_public_user_profile(user: User, current_user: User):
@@ -657,6 +684,83 @@ def followed_subjects(req: HttpRequest):
     return request_success({
         "subjects": followed_subjects_data,
         "availableSubjects": available_subjects,
+    })
+
+
+@CheckRequire
+def available_subjects(req: HttpRequest):
+    if req.method != "GET":
+        return BAD_METHOD
+
+    user, auth_error = _require_user(req)
+    if auth_error is not None:
+        return auth_error
+
+    subject_counts = _collect_subject_counts()
+    followed_subjects_set = set(
+        SubjectFollow.objects.filter(user=user).values_list("subject", flat=True)
+    )
+    available_subjects_data = [
+        {
+            "subject": subject,
+            "subjectName": _subject_display_name(subject),
+            "paperCount": count,
+            "followed": subject in followed_subjects_set,
+        }
+        for subject, count in sorted(subject_counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+    return request_success({
+        "availableSubjects": available_subjects_data,
+    })
+
+
+@CheckRequire
+def followed_subject_summaries(req: HttpRequest):
+    if req.method != "GET":
+        return BAD_METHOD
+
+    user, auth_error = _require_user(req)
+    if auth_error is not None:
+        return auth_error
+
+    followed_subject_codes = list(
+        SubjectFollow.objects.filter(user=user).values_list("subject", flat=True)
+    )
+    subject_counts = _collect_subject_counts(set(followed_subject_codes))
+    followed_subjects_data = [
+        _serialize_subject_summary(subject, subject_counts)
+        for subject in followed_subject_codes
+    ]
+
+    return request_success({
+        "subjects": followed_subjects_data,
+    })
+
+
+@CheckRequire
+def followed_subject_papers(req: HttpRequest, subject: str):
+    if req.method != "GET":
+        return BAD_METHOD
+
+    user, auth_error = _require_user(req)
+    if auth_error is not None:
+        return auth_error
+
+    normalized_subject = subject.strip()
+    if normalized_subject == "":
+        return request_failed(-2, "Invalid parameters. [subject] cannot be empty", 400)
+    if len(normalized_subject) > 100:
+        return request_failed(-2, "Invalid parameters. [subject] is too long", 400)
+    if not SubjectFollow.objects.filter(user=user, subject=normalized_subject).exists():
+        return request_failed(2, "Subject follow not found", 404)
+
+    return request_success({
+        "subject": normalized_subject,
+        "recentPapers": [
+            _serialize_subject_paper(paper)
+            for paper in _papers_for_subject(normalized_subject, limit=8)
+        ],
     })
 
 

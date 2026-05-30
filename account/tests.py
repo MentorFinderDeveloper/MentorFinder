@@ -602,7 +602,7 @@ class MentorFollowViewTests(TestCase):
         )
         self.assertEqual(res.json()["subject"]["paperCount"], 1)
 
-    def test_get_followed_subjects_includes_recent_papers(self):
+    def test_get_followed_subject_summaries_and_available_subjects(self):
         Paper.objects.create(
             title="Old AI paper",
             subjects="cs.AI",
@@ -622,25 +622,57 @@ class MentorFollowViewTests(TestCase):
         )
         SubjectFollow.objects.create(user=self.student, subject="cs.AI")
 
+        followed_res = self.client.get(
+            "/follow/subjects/followed",
+            **self.auth_headers(self.student_token),
+        )
+        available_res = self.client.get(
+            "/follow/subjects/available",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(followed_res.status_code, 200)
+        self.assertEqual(followed_res.json()["code"], 0)
+        self.assertEqual(followed_res.json()["subjects"][0]["subject"], "cs.AI")
+        self.assertEqual(followed_res.json()["subjects"][0]["subjectName"], "人工智能 (Artificial Intelligence)")
+        self.assertEqual(followed_res.json()["subjects"][0]["paperCount"], 2)
+        self.assertNotIn("recentPapers", followed_res.json()["subjects"][0])
+
+        self.assertEqual(available_res.status_code, 200)
+        self.assertEqual(available_res.json()["code"], 0)
+        self.assertIn(
+            {"subject": "cs.CL", "subjectName": "自然语言处理 (NLP)", "paperCount": 1, "followed": False},
+            available_res.json()["availableSubjects"],
+        )
+        self.assertIn(
+            {"subject": "cs.AI", "subjectName": "人工智能 (Artificial Intelligence)", "paperCount": 2, "followed": True},
+            available_res.json()["availableSubjects"],
+        )
+
+    def test_get_followed_subject_papers_on_demand(self):
+        Paper.objects.create(
+            title="Old AI paper",
+            subjects="cs.AI",
+            publish_date=date(2026, 4, 1),
+            author_names="A",
+        )
+        Paper.objects.create(
+            title="New AI paper",
+            subjects="cs.AI, cs.LG",
+            publish_date=date(2026, 5, 1),
+            author_names="B",
+        )
+        SubjectFollow.objects.create(user=self.student, subject="cs.AI")
+
         res = self.client.get(
-            "/follow/subjects",
+            "/follow/subjects/cs.AI/papers",
             **self.auth_headers(self.student_token),
         )
 
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
-        self.assertEqual(res.json()["subjects"][0]["subject"], "cs.AI")
-        self.assertEqual(res.json()["subjects"][0]["subjectName"], "人工智能 (Artificial Intelligence)")
-        self.assertEqual(res.json()["subjects"][0]["paperCount"], 2)
-        self.assertEqual(res.json()["subjects"][0]["recentPapers"][0]["title"], "New AI paper")
-        self.assertIn(
-            {"subject": "cs.CL", "subjectName": "自然语言处理 (NLP)", "paperCount": 1, "followed": False},
-            res.json()["availableSubjects"],
-        )
-        self.assertIn(
-            {"subject": "cs.AI", "subjectName": "人工智能 (Artificial Intelligence)", "paperCount": 2, "followed": True},
-            res.json()["availableSubjects"],
-        )
+        self.assertEqual(res.json()["subject"], "cs.AI")
+        self.assertEqual(res.json()["recentPapers"][0]["title"], "New AI paper")
 
     def test_student_can_unfollow_subject(self):
         Paper.objects.create(title="AI paper", subjects="cs.AI")
