@@ -23,11 +23,11 @@ def run_weekly_push_job():
 
 
 class Command(BaseCommand):
-    help = "每天定时执行 sync_dataset，默认在 Asia/Shanghai 时区 04:00 运行"
+    help = "每天定时执行 sync_dataset，默认在 Asia/Shanghai 时区 11:35 运行"
 
     def add_arguments(self, parser):
-        parser.add_argument("--hour", type=int, default=4, help="每日执行小时，默认 4")
-        parser.add_argument("--minute", type=int, default=0, help="每日执行分钟，默认 0")
+        parser.add_argument("--hour", type=int, default=11, help="每日执行小时，默认 11")
+        parser.add_argument("--minute", type=int, default=35, help="每日执行分钟，默认 35")
 
     def handle(self, *args, **options):
         from apscheduler.schedulers.blocking import BlockingScheduler
