@@ -254,6 +254,14 @@ class PaperViewTest(TestCase):
             role="student"
         )
         self.normal_token = generate_jwt_token("user")
+
+        self.banned_user = AccountUser.objects.create_user(
+            username="banned",
+            email="banned@test.com",
+            password="banned123",
+            role=AccountUser.ROLE_BANNED,
+        )
+        self.banned_token = generate_jwt_token("banned")
         
         # 创建测试论文
         self.paper = Paper.objects.create(
@@ -288,6 +296,20 @@ class PaperViewTest(TestCase):
             }),
             content_type="application/json",
             HTTP_AUTHORIZATION=f"Bearer {self.normal_token}"
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_create_paper_as_banned_user(self):
+        """测试封禁用户创建论文（应失败）"""
+        response = self.client.post(
+            "/dataset/papers",
+            data=json.dumps({
+                "title": "新论文",
+                "abstract": "新摘要",
+                "author_names": "张三, 李四"
+            }),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {self.banned_token}"
         )
         self.assertEqual(response.status_code, 403)
     

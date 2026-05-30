@@ -194,6 +194,24 @@ class AccountFollowAdditionalTests(TestCase):
         self.assertEqual(res.status_code, 405)
         self.assertEqual(res.json()["code"], -3)
 
+    def test_follow_counts_excludes_banned_targets_and_merges_mentor_followers(self):
+        UserFollow.objects.create(follower=self.student, following=self.other)
+        UserFollow.objects.create(follower=self.student, following=self.banned)
+        UserFollow.objects.create(follower=self.other, following=self.student)
+        UserFollow.objects.create(follower=self.third, following=self.student)
+        MentorFollow.objects.create(student=self.other, mentor=self.mentor)
+        MentorFollow.objects.create(student=self.third, mentor=self.mentor)
+        self.mentor_user.mentor_profile = self.mentor
+        self.mentor_user.save(update_fields=["mentor_profile"])
+
+        res = self.client.get("/follow/counts", **self.auth(self.mentor_token))
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["mentorCount"], 0)
+        self.assertEqual(res.json()["userCount"], 0)
+        self.assertEqual(res.json()["subjectCount"], 0)
+        self.assertEqual(res.json()["followerCount"], 2)
+
     def test_search_users_returns_non_banned_users_except_self(self):
         res = self.client.get("/search/users", **self.auth())
 
@@ -365,13 +383,13 @@ class AccountFollowAdditionalTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertFalse(res.json()["followed"])
 
-    def test_followed_subjects_orders_available_by_count_then_name(self):
+    def test_available_subjects_orders_by_count_then_name(self):
         self.create_subject_paper("AI 1", "cs.AI, cs.LG")
         self.create_subject_paper("AI 2", "cs.AI, cs.CL")
         self.create_subject_paper("DB 1", "cs.DB")
         SubjectFollow.objects.create(user=self.student, subject="cs.CL")
 
-        res = self.client.get("/follow/subjects", **self.auth())
+        res = self.client.get("/follow/subjects/available", **self.auth())
 
         self.assertEqual(res.status_code, 200)
         available = res.json()["availableSubjects"]
@@ -379,26 +397,54 @@ class AccountFollowAdditionalTests(TestCase):
         self.assertFalse(available[0]["followed"])
         self.assertTrue(available[1]["followed"])
 
-    def test_followed_subjects_returns_empty_available_when_no_papers(self):
+    def test_followed_subject_summaries_and_available_subjects_handle_no_papers(self):
         SubjectFollow.objects.create(user=self.student, subject="cs.AI")
 
-        res = self.client.get("/follow/subjects", **self.auth())
+        available_res = self.client.get("/follow/subjects/available", **self.auth())
+        followed_res = self.client.get("/follow/subjects/followed", **self.auth())
 
-        self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.json()["availableSubjects"], [])
-        self.assertEqual(res.json()["subjects"][0]["paperCount"], 0)
+        self.assertEqual(available_res.status_code, 200)
+        self.assertEqual(available_res.json()["availableSubjects"], [])
+        self.assertEqual(followed_res.status_code, 200)
+        self.assertEqual(followed_res.json()["subjects"][0]["paperCount"], 0)
 
-    def test_followed_subjects_requires_login(self):
-        res = self.client.get("/follow/subjects")
+    def test_split_subject_endpoints_require_login(self):
+        available_res = self.client.get("/follow/subjects/available")
+        followed_res = self.client.get("/follow/subjects/followed")
+        papers_res = self.client.get("/follow/subjects/cs.AI/papers")
 
-        self.assertEqual(res.status_code, 401)
-        self.assertEqual(res.json()["code"], 2)
+        self.assertEqual(available_res.status_code, 401)
+        self.assertEqual(available_res.json()["code"], 2)
+        self.assertEqual(followed_res.status_code, 401)
+        self.assertEqual(followed_res.json()["code"], 2)
+        self.assertEqual(papers_res.status_code, 401)
+        self.assertEqual(papers_res.json()["code"], 2)
 
     def test_followed_subjects_bad_method(self):
         res = self.client.post("/follow/subjects", **self.auth())
 
         self.assertEqual(res.status_code, 405)
         self.assertEqual(res.json()["code"], -3)
+
+    def test_split_subject_endpoints_bad_method(self):
+        available_res = self.client.post("/follow/subjects/available", **self.auth())
+        followed_res = self.client.post("/follow/subjects/followed", **self.auth())
+        papers_res = self.client.post("/follow/subjects/cs.AI/papers", **self.auth())
+
+        self.assertEqual(available_res.status_code, 405)
+        self.assertEqual(available_res.json()["code"], -3)
+        self.assertEqual(followed_res.status_code, 405)
+        self.assertEqual(followed_res.json()["code"], -3)
+        self.assertEqual(papers_res.status_code, 405)
+        self.assertEqual(papers_res.json()["code"], -3)
+
+    def test_followed_subject_papers_require_existing_follow(self):
+        self.create_subject_paper(subjects="cs.AI")
+
+        res = self.client.get("/follow/subjects/cs.AI/papers", **self.auth())
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
 
     def test_follow_subject_bad_method(self):
         res = self.client.get("/follow/subjects/cs.AI", **self.auth())
