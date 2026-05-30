@@ -24,7 +24,18 @@ from dataset.services.research_analysis import (
 from dataset.services.thu_crawler import get_english_name
 from utils.utils_jwt import check_jwt_token, resolve_user_from_token
 from utils.utils_request import BAD_METHOD, request_failed, request_success
-from utils.utils_require import CheckRequire, MAX_CHAR_LENGTH, require
+from utils.utils_require import (
+    CheckRequire,
+    MAX_AUTHOR_NAMES_LENGTH,
+    MAX_EMAIL_LENGTH,
+    MAX_MENTOR_PROFILE_LENGTH,
+    MAX_NAME_LENGTH,
+    MAX_PAPER_ABSTRACT_LENGTH,
+    MAX_PAPER_TITLE_LENGTH,
+    MAX_RESEARCH_DIRECTION_LENGTH,
+    check_length,
+    require,
+)
 PRIVATE_MENTOR_LIMIT = 10
 TIMELINE_DEFAULT_PAGE_SIZE = 20
 TIMELINE_MAX_PAGE_SIZE = 100
@@ -129,16 +140,16 @@ def _validate_paper_payload(body: dict):
     title = require(body, "title", "string", err_msg="Missing or error type of [title]").strip()
     if title == "":
         raise KeyError("Invalid parameters. [title] cannot be empty", -2)
-    if len(title) > MAX_CHAR_LENGTH:
+    if len(title) > MAX_PAPER_TITLE_LENGTH:
         raise KeyError("Invalid parameters. [title] is too long", -2)
 
     abstract = str(body.get("abstract", "")).strip()
     author_names = str(body.get("author_names", "")).strip()
     publish_date = body.get("publish_date")
 
-    if abstract and len(abstract) > 5000:
+    if abstract and len(abstract) > MAX_PAPER_ABSTRACT_LENGTH:
         raise KeyError("Invalid parameters. [abstract] is too long", -2)
-    if author_names and len(author_names) > 5000:
+    if author_names and len(author_names) > MAX_AUTHOR_NAMES_LENGTH:
         raise KeyError("Invalid parameters. [author_names] is too long", -2)
 
     return {
@@ -168,17 +179,19 @@ def _validate_mentor_payload(body: dict):
     if research_direction == "":
         raise KeyError("Invalid parameters. [research_direction] cannot be empty", -2)
 
-    if len(chinese_name) > 100:
+    if len(chinese_name) > MAX_NAME_LENGTH:
         raise KeyError("Invalid parameters. [Chinese_name] is too long", -2)
-    if len(research_direction) > MAX_CHAR_LENGTH:
+    if len(research_direction) > MAX_RESEARCH_DIRECTION_LENGTH:
         raise KeyError("Invalid parameters. [research_direction] is too long", -2)
 
     english_name = str(body.get("English_name", "")).strip()
     email = str(body.get("email", "")).strip()
     profile = str(body.get("profile", "")).strip()
 
-    if english_name and len(english_name) > 100:
+    if english_name and len(english_name) > MAX_NAME_LENGTH:
         raise KeyError("Invalid parameters. [English_name] is too long", -2)
+    check_length(email, "email", MAX_EMAIL_LENGTH)
+    check_length(profile, "profile", MAX_MENTOR_PROFILE_LENGTH)
     if email:
         try:
             validate_email(email)
@@ -199,8 +212,10 @@ def _extract_private_mentor_optional_fields(body: dict) -> dict:
     email = str(body.get("email", "")).strip()
     profile = str(body.get("profile", "")).strip()
 
-    if research_direction and len(research_direction) > MAX_CHAR_LENGTH:
+    if research_direction and len(research_direction) > MAX_RESEARCH_DIRECTION_LENGTH:
         raise KeyError("Invalid parameters. [research_direction] is too long", -2)
+    check_length(email, "email", MAX_EMAIL_LENGTH)
+    check_length(profile, "profile", MAX_MENTOR_PROFILE_LENGTH)
     if email:
         try:
             validate_email(email)
@@ -307,9 +322,9 @@ def create_custom_mentor(req: HttpRequest):
             400,
         )
 
-    if len(chinese_name) > 100:
+    if len(chinese_name) > MAX_NAME_LENGTH:
         return request_failed(-2, "Invalid parameters. [Chinese_name] is too long", 400)
-    if len(english_name) > 100:
+    if len(english_name) > MAX_NAME_LENGTH:
         return request_failed(-2, "Invalid parameters. [English_name] is too long", 400)
 
     try:
@@ -446,9 +461,9 @@ def mentor_detail(req: HttpRequest, mentor_id: int):
                 "Invalid parameters. [Chinese_name] or [English_name] is required",
                 400,
             )
-        if len(new_chinese_name) > 100:
+        if len(new_chinese_name) > MAX_NAME_LENGTH:
             return request_failed(-2, "Invalid parameters. [Chinese_name] is too long", 400)
-        if len(new_english_name) > 100:
+        if len(new_english_name) > MAX_NAME_LENGTH:
             return request_failed(-2, "Invalid parameters. [English_name] is too long", 400)
 
         try:
@@ -896,6 +911,8 @@ def paper_timeline_view(request):
         return BAD_METHOD
 
     direction = str(request.GET.get("direction", "")).strip()
+    if len(direction) > MAX_RESEARCH_DIRECTION_LENGTH:
+        return request_failed(-2, "Invalid parameters. [direction] is too long", 400)
     calendar_flag = str(request.GET.get("calendar", "")).strip()
     date_param = str(request.GET.get("date", "")).strip()
     before_date_param = str(request.GET.get("before_date", "")).strip()

@@ -5,7 +5,7 @@ from search.services.engine import (
     search_papers_page,
 )
 from utils.utils_jwt import resolve_user_from_token
-from utils.utils_require import CheckRequire, MAX_CHAR_LENGTH, require
+from utils.utils_require import CheckRequire, MAX_KEYWORD_LENGTH, require
 from utils.utils_request import BAD_METHOD, request_success
 
 
@@ -31,7 +31,7 @@ def _get_keyword(req: HttpRequest) -> str:
         "string",
         err_msg="Missing or error type of [keyword]",
     ).strip()
-    assert len(keyword) <= MAX_CHAR_LENGTH, "Invalid parameters. [keyword] is too long"
+    assert len(keyword) <= MAX_KEYWORD_LENGTH, "Invalid parameters. [keyword] is too long"
     return keyword
 
 
