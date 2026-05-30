@@ -25,6 +25,7 @@ class Command(BaseCommand):
     ARXIV_CLIENT_DELAY_SECONDS = 5.0
     ARXIV_CLIENT_NUM_RETRIES = 5
     ARXIV_RATE_LIMIT_BACKOFF_SECONDS = [20, 60, 180]
+    PAPERS_PER_MENTOR_LIMIT = 10
 
     SEMANTIC_SCHOLAR_API_TEMPLATE = "https://api.semanticscholar.org/graph/v1/paper/ARXIV:{arxiv_id}"
     SEMANTIC_SCHOLAR_FIELDS = "s2FieldsOfStudy,tldr"
@@ -192,7 +193,8 @@ class Command(BaseCommand):
         client = self._build_arxiv_client()
         search = arxiv.Search(
             query=f'au:"{mentor.English_name}"',
-            sort_by=arxiv.SortCriterion.SubmittedDate
+            sort_by=arxiv.SortCriterion.SubmittedDate,
+            max_results=self.PAPERS_PER_MENTOR_LIMIT,
         )
 
         for result in client.results(search):
@@ -289,7 +291,7 @@ class Command(BaseCommand):
             author = next(search_query) # 获取第一个匹配的作者
             author = scholarly.fill(author) # 填充该作者的详细信息（包括论文列表）
 
-            for pub in author['publications']:
+            for pub in author['publications'][:self.PAPERS_PER_MENTOR_LIMIT]:
                 pub_filled = scholarly.fill(pub) # 填充单篇论文详细信息获取摘要和作者
                 
                 title = pub_filled['bib'].get('title', '')
