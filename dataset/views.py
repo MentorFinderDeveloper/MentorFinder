@@ -17,6 +17,7 @@ from account.services.user_weekly_report import (
 )
 from dataset.models import Mentor, Paper, ScheduledTaskRun, WeeklyPaperPush
 from dataset.services.author_matching import is_exact_english_author_match
+from dataset.services.paper_visibility import visible_papers
 from dataset.services.research_analysis import (
     build_ai_recent_direction_analysis,
     build_rule_based_recent_direction_analysis,
@@ -688,10 +689,10 @@ def _build_direction_code_mapping() -> dict[str, set[str]]:
 TIMELINE_DIRECTION_TO_CODES = _build_direction_code_mapping()
 
 
-def _build_timeline_direction_summaries() -> list[tuple[str, int]]:
+def _build_timeline_direction_summaries(base_query) -> list[tuple[str, int]]:
     direction_counts: dict[str, int] = defaultdict(int)
     subjects_query = (
-        Paper.objects.exclude(publish_date__isnull=True)
+        base_query
         .values_list("subjects", flat=True)
         .iterator(chunk_size=500)
     )
@@ -709,9 +710,7 @@ def _build_timeline_direction_summaries() -> list[tuple[str, int]]:
     return sorted(direction_counts.items(), key=lambda item: (-item[1], item[0]))
 
 
-def _filter_timeline_papers_by_direction(direction: str):
-    base_query = Paper.objects.exclude(publish_date__isnull=True)
-
+def _filter_timeline_papers_by_direction(direction: str, base_query):
     if direction == TIMELINE_OTHER_DIRECTION:
         return base_query.filter(Q(subjects__isnull=True) | Q(subjects=""))
 
@@ -933,8 +932,12 @@ def paper_timeline_view(request):
     )
     use_offset_limit = "offset" in request.GET or "limit" in request.GET
 
+    # 私有导师的论文只对其拥有者/管理员可见，公共时间线需按用户过滤
+    current_user = _resolve_user(request)
+    base_query = visible_papers(current_user).exclude(publish_date__isnull=True)
+
     if direction == "":
-        direction_summaries = _build_timeline_direction_summaries()
+        direction_summaries = _build_timeline_direction_summaries(base_query)
         return request_success({
             "directions": [
                 {
@@ -948,7 +951,7 @@ def paper_timeline_view(request):
             "page_size_max": TIMELINE_MAX_PAGE_SIZE,
         })
 
-    papers_query = _filter_timeline_papers_by_direction(direction).order_by("-publish_date", "-id")
+    papers_query = _filter_timeline_papers_by_direction(direction, base_query).order_by("-publish_date", "-id")
     if calendar_flag == "1":
         return request_success(_build_timeline_calendar_payload(direction, papers_query))
 

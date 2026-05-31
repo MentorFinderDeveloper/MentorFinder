@@ -710,8 +710,74 @@ class SearchTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual(res.json()["keyword"], "")
+        # 匿名用户：空关键词只返回公共论文，私有导师论文不得泄漏
+        self.assertEqual(res.json()["total"], 2)
+        titles = {paper["title"] for paper in res.json()["papers"]}
+        self.assertEqual(titles, {"机器学习方法研究", "大语言模型在问答系统中的应用"})
+        self.assertNotIn("隐私导师论文", titles)
+
+    def test_search_papers_empty_keyword_includes_private_for_owner(self):
+        res = self.client.get(
+            "/search/papers",
+            {"keyword": ""},
+            **self.auth_headers(self.owner_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
         self.assertEqual(res.json()["total"], 3)
-        self.assertEqual(len(res.json()["papers"]), 3)
+        self.assertIn("隐私导师论文", {paper["title"] for paper in res.json()["papers"]})
+
+    def test_search_papers_empty_keyword_excludes_private_for_other_user(self):
+        res = self.client.get(
+            "/search/papers",
+            {"keyword": ""},
+            **self.auth_headers(self.other_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["total"], 2)
+        self.assertNotIn("隐私导师论文", {paper["title"] for paper in res.json()["papers"]})
+
+    def test_search_papers_empty_keyword_includes_private_for_admin(self):
+        res = self.client.get(
+            "/search/papers",
+            {"keyword": ""},
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["total"], 3)
+        self.assertIn("隐私导师论文", {paper["title"] for paper in res.json()["papers"]})
+
+    def test_search_papers_empty_keyword_fuzzy_excludes_private_for_anonymous(self):
+        res = self.client.get(
+            "/search/papers",
+            {"keyword": "  ", "search_mode": "fuzzy"},
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["total"], 2)
+        self.assertNotIn("隐私导师论文", {paper["title"] for paper in res.json()["papers"]})
+
+    def test_search_papers_public_paper_added_by_private_mentor_stays_visible(self):
+        # 已在公共库的论文（被公共导师张三关联），同时被他人私有导师收藏，
+        # 应对所有用户保持可见——公共优先。
+        self.private_mentor.add_paper(self.paper1.id)
+
+        res = self.client.get(
+            "/search/papers",
+            {"keyword": ""},
+            **self.auth_headers(self.other_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        titles = {paper["title"] for paper in res.json()["papers"]}
+        self.assertIn("机器学习方法研究", titles)
+        self.assertNotIn("隐私导师论文", titles)
 
     def test_search_empty_keyword_returns_all_visible_mentors(self):
         anonymous_res = self.client.get("/search/mentors", {"keyword": ""})
