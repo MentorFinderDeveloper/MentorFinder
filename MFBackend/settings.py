@@ -44,8 +44,11 @@ DEBUG = False
 # TODO End: [Student] Disable debug mode in production
 
 
+_default_allowed_hosts = 'localhost,127.0.0.1,[::1],testserver'
 ALLOWED_HOSTS = [
-    '*'  # Insecure
+    host.strip()
+    for host in os.environ.get('DJANGO_ALLOWED_HOSTS', _default_allowed_hosts).split(',')
+    if host.strip()
 ]
 
 

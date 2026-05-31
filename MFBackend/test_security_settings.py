@@ -8,6 +8,14 @@ class SecuritySettingsTests(SimpleTestCase):
     def test_csrf_middleware_is_enabled(self):
         self.assertIn("django.middleware.csrf.CsrfViewMiddleware", settings.MIDDLEWARE)
 
+    def test_allowed_hosts_does_not_allow_every_host(self):
+        self.assertNotIn("*", settings.ALLOWED_HOSTS)
+
+    def test_unknown_host_is_rejected(self):
+        response = Client(HTTP_HOST="attacker.example").get("/admin/")
+
+        self.assertEqual(response.status_code, 400)
+
     def test_django_admin_is_not_exposed_by_default(self):
         response = Client().get("/admin/")
 
