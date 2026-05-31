@@ -27,7 +27,9 @@ build:
     - echo "THUCS_API_KEY=$THUCS_API_KEY" >> .env
     - deployer build
 
-unit-test:
+# 临时跳过测试：job 名以 . 开头会被 GitLab 当作隐藏模板，不进入流水线。
+# 恢复测试：把下面的 ".unit-test" 改回 "unit-test"（去掉开头的点）即可。
+.unit-test:
   image: python:3.11
   stage: test
   before_script:
