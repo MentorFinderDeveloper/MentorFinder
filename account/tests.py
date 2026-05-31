@@ -2,7 +2,7 @@ import json
 import os
 import tempfile
 import unittest
-from io import StringIO
+from io import BytesIO, StringIO
 from datetime import date, datetime, timedelta
 from unittest.mock import patch
 from pathlib import Path
@@ -13,6 +13,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 from django.utils import timezone
+from PIL import Image
 
 from account.models import EmailVerificationCode, MentorVerificationRequest, PushRecord, User, MentorFollow, SubjectFollow, UserFollow, UserProfile, WeeklyPushPaperBucket
 from account.services import weekly_push_files
@@ -34,6 +35,13 @@ from utils.utils_jwt import (
     generate_jwt_token,
 )
 from utils.utils_require import CheckRequire, require
+
+
+def make_test_image_bytes(image_format: str = "PNG") -> bytes:
+    image = Image.new("RGB", (1, 1), color=(255, 255, 255))
+    buffer = BytesIO()
+    image.save(buffer, format=image_format)
+    return buffer.getvalue()
 
 
 class AccountAuthTests(TestCase):
@@ -1002,7 +1010,7 @@ class UserProfileViewTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
             image = SimpleUploadedFile(
                 "avatar.png",
-                b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR",
+                make_test_image_bytes("PNG"),
                 content_type="image/png",
             )
 
@@ -1039,6 +1047,19 @@ class UserProfileViewTests(TestCase):
 
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.json()["code"], -2)
+
+    def test_upload_avatar_rejects_fake_image_content_type(self):
+        fake_image = SimpleUploadedFile("avatar.png", b"not really an image", content_type="image/png")
+
+        res = self.client.post(
+            "/profile/avatar",
+            data={"avatar": fake_image},
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.json()["info"], "Invalid parameters. [avatar] must be an image")
 
     def test_upload_avatar_bad_method(self):
         res = self.client.get(
@@ -1082,7 +1103,7 @@ class UserProfileViewTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
             image = SimpleUploadedFile(
                 "avatar.txt",
-                b"jpeg bytes",
+                make_test_image_bytes("JPEG"),
                 content_type="image/jpeg",
             )
 
@@ -1104,7 +1125,7 @@ class UserProfileViewTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
             image = SimpleUploadedFile(
                 "avatar.webp",
-                b"webp bytes",
+                make_test_image_bytes("WEBP"),
                 content_type="application/octet-stream",
             )
 
@@ -1157,12 +1178,12 @@ class UserProfileViewTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
             first = SimpleUploadedFile(
                 "first.png",
-                b"first image",
+                make_test_image_bytes("PNG"),
                 content_type="image/png",
             )
             second = SimpleUploadedFile(
                 "second.png",
-                b"second image",
+                make_test_image_bytes("PNG"),
                 content_type="image/png",
             )
 
@@ -1202,7 +1223,7 @@ class UserProfileViewTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
             image = SimpleUploadedFile(
                 "avatar.png",
-                b"png bytes",
+                make_test_image_bytes("PNG"),
                 content_type="image/png",
             )
 
@@ -1228,7 +1249,7 @@ class UserProfileViewTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
             image = SimpleUploadedFile(
                 "avatar.gif",
-                b"gif bytes",
+                make_test_image_bytes("GIF"),
                 content_type="image/gif",
             )
 
@@ -1255,7 +1276,7 @@ class UserProfileViewTests(TestCase):
         with self.settings(MEDIA_ROOT=first_tmpdir.name):
             first = SimpleUploadedFile(
                 "first.png",
-                b"first image",
+                make_test_image_bytes("PNG"),
                 content_type="image/png",
             )
             first_res = self.client.post(
@@ -1269,7 +1290,7 @@ class UserProfileViewTests(TestCase):
         with self.settings(MEDIA_ROOT=second_tmpdir.name):
             second = SimpleUploadedFile(
                 "second.png",
-                b"second image",
+                make_test_image_bytes("PNG"),
                 content_type="image/png",
             )
             second_res = self.client.post(
@@ -1285,7 +1306,7 @@ class UserProfileViewTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
             image = SimpleUploadedFile(
                 "avatar.png",
-                b"png bytes",
+                make_test_image_bytes("PNG"),
                 content_type="image/png",
             )
             upload_res = self.client.post(
@@ -1307,7 +1328,7 @@ class UserProfileViewTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
             image = SimpleUploadedFile(
                 "avatar.png",
-                b"png bytes",
+                make_test_image_bytes("PNG"),
                 content_type="image/png",
             )
 
@@ -1336,7 +1357,7 @@ class UserProfileViewTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
             image = SimpleUploadedFile(
                 "avatar.png",
-                b"png bytes",
+                make_test_image_bytes("PNG"),
                 content_type="image/png",
             )
 

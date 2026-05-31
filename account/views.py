@@ -1,7 +1,6 @@
 import json
 import re
 import uuid
-from pathlib import Path
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -10,6 +9,7 @@ from django.core.validators import validate_email
 from django.http import HttpRequest
 from django.db.models import Q
 from django.utils.timezone import localtime
+from PIL import Image, UnidentifiedImageError
 
 from account.models import MentorVerificationRequest, SubjectFollow, User, UserFollow, UserProfile
 from utils.utils_jwt import generate_jwt_token
@@ -45,11 +45,11 @@ from search.serializers import MentorSerializer
 
 USERNAME_REGEX = re.compile(r"^[A-Za-z0-9_-]+$")
 AVATAR_MAX_SIZE = 2 * 1024 * 1024
-AVATAR_ALLOWED_CONTENT_TYPES = {
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/gif": ".gif",
-    "image/webp": ".webp",
+AVATAR_ALLOWED_IMAGE_FORMATS = {
+    "JPEG": ".jpg",
+    "PNG": ".png",
+    "GIF": ".gif",
+    "WEBP": ".webp",
 }
 MANAGEABLE_ROLES = {
     User.ROLE_STUDENT,
@@ -119,6 +119,19 @@ def _validate_password(password: str):
             400,
         )
     return None
+
+
+def _validated_avatar_extension(avatar_file):
+    try:
+        avatar_file.seek(0)
+        with Image.open(avatar_file) as image:
+            image.verify()
+            extension = AVATAR_ALLOWED_IMAGE_FORMATS.get(image.format)
+        avatar_file.seek(0)
+    except (OSError, UnidentifiedImageError, ValueError):
+        return None
+
+    return extension
 
 
 @CheckRequire
@@ -1229,11 +1242,7 @@ def upload_avatar(req: HttpRequest):
     if avatar_file.size > AVATAR_MAX_SIZE:
         return request_failed(-2, "Invalid parameters. [avatar] is too large", 400)
 
-    content_type = getattr(avatar_file, "content_type", "")
-    extension = AVATAR_ALLOWED_CONTENT_TYPES.get(content_type)
-    if extension is None:
-        suffix = Path(getattr(avatar_file, "name", "")).suffix.lower()
-        extension = suffix if suffix in AVATAR_ALLOWED_CONTENT_TYPES.values() else None
+    extension = _validated_avatar_extension(avatar_file)
     if extension is None:
         return request_failed(-2, "Invalid parameters. [avatar] must be an image", 400)
 
