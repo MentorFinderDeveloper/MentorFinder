@@ -68,8 +68,7 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
-    # Remove CSRF middleware for teaching purpose, although insecure :(
-    # 'django.middleware.csrf.CsrfViewMiddleware',
+    'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
@@ -170,6 +169,9 @@ DEFAULT_FROM_EMAIL = os.environ.get(
     'DEFAULT_FROM_EMAIL',
     (f'MentorFinder <{EMAIL_HOST_USER}>' if EMAIL_HOST_USER else 'MentorFinder <no-reply@mentorfinder.local>'),
 )
+
+ENABLE_DJANGO_ADMIN = os.environ.get('ENABLE_DJANGO_ADMIN', 'false').lower() in ('1', 'true', 'yes')
+DJANGO_ADMIN_URL = os.environ.get('DJANGO_ADMIN_URL', '').strip().strip('/')
 
 EMAIL_VERIFICATION_CODE_TTL_SECONDS = int(os.environ.get('EMAIL_VERIFICATION_CODE_TTL', '600'))
 EMAIL_VERIFICATION_CODE_RESEND_COOLDOWN = int(os.environ.get('EMAIL_VERIFICATION_CODE_COOLDOWN', '60'))
