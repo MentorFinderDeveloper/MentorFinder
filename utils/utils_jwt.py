@@ -7,6 +7,7 @@ from typing import Optional
 
 from django.core import signing
 
+
 EXPIRE_IN_SECONDS = int(os.environ.get("JWT_EXPIRE_SECONDS", str(60 * 60 * 2)))
 ALT_CHARS = "-_".encode("utf-8")
 JWT_SIGNING_KEY_ENV = "JWT_SIGNING_KEY"
@@ -36,47 +37,6 @@ def _load_dotenv_if_needed() -> None:
         from dotenv import load_dotenv as _load_dotenv
 
         _load_dotenv(DOTENV_PATH)
-<<<<<<< utils/utils_jwt.py
-    except ModuleNotFoundError:
-        pass
-
-
-def _get_signing_key() -> bytes:
-    _load_dotenv_if_needed()
-    signing_key = os.environ.get(JWT_SIGNING_KEY_ENV, "").strip()
-    signing_key = _validate_signing_key(signing_key)
-    return signing_key.encode("utf-8")
-
-
-def validate_jwt_signing_key() -> None:
-    _load_dotenv_if_needed()
-    signing_key = os.environ.get(JWT_SIGNING_KEY_ENV, "").strip()
-    _validate_signing_key(signing_key)
-
-
-def b64url_encode(s):
-    if isinstance(s, str):
-        return base64.b64encode(s.encode("utf-8"), altchars=ALT_CHARS).decode("utf-8")
-    else:
-        return base64.b64encode(s, altchars=ALT_CHARS).decode("utf-8")
-
-def b64url_decode(s: str, decode_to_str=True):
-    if decode_to_str:
-        return base64.b64decode(s, altchars=ALT_CHARS).decode("utf-8")
-    else:
-        return base64.b64decode(s, altchars=ALT_CHARS)
-
-
-def _token_version_for_username(username: str) -> int:
-    from account.models import User
-
-    user = User.objects.filter(username=username).only("jwt_token_version").first()
-    if user is None:
-        return 0
-    return user.jwt_token_version
-
-
-=======
     except ModuleNotFoundError:
         pass
 
@@ -100,27 +60,34 @@ def validate_jwt_signing_key() -> None:
 def b64url_encode(s):
     if isinstance(s, str):
         return base64.b64encode(s.encode("utf-8"), altchars=ALT_CHARS).decode("utf-8")
-    else:
-        return base64.b64encode(s, altchars=ALT_CHARS).decode("utf-8")
+    return base64.b64encode(s, altchars=ALT_CHARS).decode("utf-8")
+
 
 # 将 URL 安全的 Base64 字符串解码为文本或字节内容。
 def b64url_decode(s: str, decode_to_str=True):
     if decode_to_str:
         return base64.b64decode(s, altchars=ALT_CHARS).decode("utf-8")
-    else:
-        return base64.b64decode(s, altchars=ALT_CHARS)
+    return base64.b64decode(s, altchars=ALT_CHARS)
 
 
-# 为指定用户名生成带过期时间的签名 JWT 令牌。
->>>>>>> utils/utils_jwt.py
+def _token_version_for_username(username: str) -> int:
+    from account.models import User
+
+    user = User.objects.filter(username=username).only("jwt_token_version").first()
+    if user is None:
+        return 0
+    return user.jwt_token_version
+
+
+# 为指定用户名生成带过期时间和吊销版本的签名 JWT 令牌。
 def generate_jwt_token(username: str):
     payload = {
         "iat": int(time.time()),
         "exp": int(time.time()) + EXPIRE_IN_SECONDS,
         "tokenVersion": _token_version_for_username(username),
         "data": {
-            "username": username
-        }
+            "username": username,
+        },
     }
     payload_str = json.dumps(payload, separators=(",", ":"))
     signer = signing.Signer(key=_get_signing_key().decode("utf-8"), salt="utils.utils_jwt")
@@ -139,7 +106,6 @@ def check_jwt_token(token: str) -> Optional[dict]:
     exp = payload.get("exp")
     if not isinstance(exp, (int, float)):
         return None
-<<<<<<< utils/utils_jwt.py
     if exp < time.time():
         return None
 
@@ -156,23 +122,11 @@ def check_jwt_token(token: str) -> Optional[dict]:
     return payload["data"]
 
 
-def resolve_user_from_token(token: str, reject_banned: bool = True):
-    token_data = check_jwt_token(token)
-    if token_data is None:
-        return None
-=======
-    if exp < time.time():
-        return None
-    
-    return payload["data"]
-
-
 # 根据令牌解析用户对象，并按需过滤被封禁用户。
 def resolve_user_from_token(token: str, reject_banned: bool = True):
     token_data = check_jwt_token(token)
     if token_data is None:
         return None
->>>>>>> utils/utils_jwt.py
 
     username = str(token_data.get("username", "")).strip()
     if username == "":
