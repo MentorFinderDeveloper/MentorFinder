@@ -30,6 +30,7 @@ from utils.utils_require import (
 )
 
 from utils.utils_jwt import check_jwt_token
+from utils.rate_limit import check_any_rate_limit, client_ip
 from dataset.models import Mentor, Paper
 from dataset.views import ARXIV_SUBJECT_MAPPING
 from account.models import MentorFollow
@@ -56,6 +57,46 @@ MANAGEABLE_ROLES = {
     User.ROLE_ADMIN,
     User.ROLE_BANNED,
 }
+
+
+def _rate_limited_response(retry_after: int):
+    return request_failed(8, f"Too many requests, please retry after {retry_after}s", 429)
+
+
+def _check_login_rate_limit(req: HttpRequest, username: str):
+    window_seconds = int(getattr(settings, "LOGIN_RATE_LIMIT_WINDOW_SECONDS", 300))
+    return check_any_rate_limit([
+        (
+            "login-ip",
+            client_ip(req),
+            int(getattr(settings, "LOGIN_RATE_LIMIT_IP_ATTEMPTS", 30)),
+            window_seconds,
+        ),
+        (
+            "login-identifier",
+            username.strip().lower(),
+            int(getattr(settings, "LOGIN_RATE_LIMIT_IDENTIFIER_ATTEMPTS", 10)),
+            window_seconds,
+        ),
+    ])
+
+
+def _check_verification_code_rate_limit(req: HttpRequest, email: str):
+    window_seconds = int(getattr(settings, "EMAIL_VERIFICATION_RATE_LIMIT_WINDOW_SECONDS", 3600))
+    return check_any_rate_limit([
+        (
+            "email-code-ip",
+            client_ip(req),
+            int(getattr(settings, "EMAIL_VERIFICATION_RATE_LIMIT_IP_ATTEMPTS", 20)),
+            window_seconds,
+        ),
+        (
+            "email-code-address",
+            email.strip().lower(),
+            int(getattr(settings, "EMAIL_VERIFICATION_RATE_LIMIT_EMAIL_ATTEMPTS", 5)),
+            window_seconds,
+        ),
+    ])
 
 
 def _subject_display_name(subject: str) -> str:
@@ -95,6 +136,10 @@ def login(req: HttpRequest):
         body, "password", "string",
         err_msg="Missing or error type of [password]", max_length=MAX_PASSWORD_LENGTH,
     )
+
+    rate_limit = _check_login_rate_limit(req, username)
+    if not rate_limit.allowed:
+        return _rate_limited_response(rate_limit.retry_after)
 
     user = User.objects.filter(username=username).first()
     if user is None:
@@ -206,6 +251,10 @@ def send_password_reset_verification_code(req: HttpRequest):
     except ValidationError:
         return request_failed(-2, "Invalid parameters. [email] format is invalid", 400)
 
+    rate_limit = _check_verification_code_rate_limit(req, email)
+    if not rate_limit.allowed:
+        return _rate_limited_response(rate_limit.retry_after)
+
     user = User.objects.filter(email=email).first()
     if user is None:
         return request_failed(2, "User not found", 404)
@@ -298,6 +347,10 @@ def send_email_verification_code(req: HttpRequest):
         validate_email(email)
     except ValidationError:
         return request_failed(-2, "Invalid parameters. [email] format is invalid", 400)
+
+    rate_limit = _check_verification_code_rate_limit(req, email)
+    if not rate_limit.allowed:
+        return _rate_limited_response(rate_limit.retry_after)
 
     if User.objects.filter(email=email).exists():
         return request_failed(4, "Email already exists", 409)
