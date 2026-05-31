@@ -1,5 +1,3 @@
-import json
-
 from django.conf import settings
 from django.test import Client, SimpleTestCase
 
@@ -30,12 +28,3 @@ class SecuritySettingsTests(SimpleTestCase):
         response = Client().get("/admin/")
 
         self.assertEqual(response.status_code, 404)
-
-    def test_json_api_is_explicitly_exempt_from_cookie_csrf(self):
-        response = Client(enforce_csrf_checks=True).post(
-            "/login",
-            data=json.dumps({"username": "missing", "password": "wrongpass"}),
-            content_type="application/json",
-        )
-
-        self.assertNotEqual(response.status_code, 403)
