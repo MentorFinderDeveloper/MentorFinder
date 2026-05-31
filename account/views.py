@@ -14,7 +14,20 @@ from django.utils.timezone import localtime
 from account.models import MentorVerificationRequest, SubjectFollow, User, UserFollow, UserProfile
 from utils.utils_jwt import generate_jwt_token
 from utils.utils_request import BAD_METHOD, request_failed, request_success
-from utils.utils_require import CheckRequire, MAX_CHAR_LENGTH, require
+from utils.utils_require import (
+    CheckRequire,
+    MAX_AVATAR_URL_LENGTH,
+    MAX_EMAIL_LENGTH,
+    MAX_KEYWORD_LENGTH,
+    MAX_LONG_TEXT_LENGTH,
+    MAX_NAME_LENGTH,
+    MAX_PASSWORD_LENGTH,
+    MAX_SIGNATURE_LENGTH,
+    MAX_USERNAME_LENGTH,
+    MAX_VERIFICATION_CODE_LENGTH,
+    check_length,
+    require,
+)
 
 from utils.utils_jwt import check_jwt_token
 from dataset.models import Mentor, Paper
@@ -58,6 +71,12 @@ def _validate_password(password: str):
             "Invalid parameters. [password] must be at least 8 characters and contain both letters and digits",
             400,
         )
+    if len(password) > MAX_PASSWORD_LENGTH:
+        return request_failed(
+            -2,
+            f"Invalid parameters. [password] is too long (max {MAX_PASSWORD_LENGTH} characters)",
+            400,
+        )
     return None
 
 
@@ -68,8 +87,14 @@ def login(req: HttpRequest):
 
     body = json.loads(req.body.decode("utf-8"))
 
-    username = require(body, "username", "string", err_msg="Missing or error type of [username]")
-    password = require(body, "password", "string", err_msg="Missing or error type of [password]")
+    username = require(
+        body, "username", "string",
+        err_msg="Missing or error type of [username]", max_length=MAX_EMAIL_LENGTH,
+    )
+    password = require(
+        body, "password", "string",
+        err_msg="Missing or error type of [password]", max_length=MAX_PASSWORD_LENGTH,
+    )
 
     user = User.objects.filter(username=username).first()
     if user is None:
@@ -99,9 +124,18 @@ def register(req: HttpRequest):
 
     body = json.loads(req.body.decode("utf-8"))
 
-    username = require(body, "username", "string", err_msg="Missing or error type of [username]")
-    password = require(body, "password", "string", err_msg="Missing or error type of [password]")
-    email = require(body, "email", "string", err_msg="Missing or error type of [email]")
+    username = require(
+        body, "username", "string",
+        err_msg="Missing or error type of [username]", max_length=MAX_USERNAME_LENGTH,
+    )
+    password = require(
+        body, "password", "string",
+        err_msg="Missing or error type of [password]", max_length=MAX_PASSWORD_LENGTH,
+    )
+    email = require(
+        body, "email", "string",
+        err_msg="Missing or error type of [email]", max_length=MAX_EMAIL_LENGTH,
+    )
 
     username = username.strip()
     if username.strip() == "":
@@ -134,6 +168,8 @@ def register(req: HttpRequest):
     if not isinstance(verification_code_raw, str):
         return request_failed(-2, "Invalid parameters. [verificationCode] must be a string", 400)
     verification_code = verification_code_raw.strip()
+    if len(verification_code) > MAX_VERIFICATION_CODE_LENGTH:
+        return request_failed(-2, "Invalid parameters. [verificationCode] is too long", 400)
     if verification_code == "":
         return request_failed(5, "Verification code is required", 400)
     if not verify_code(email, verification_code):
@@ -158,7 +194,10 @@ def send_password_reset_verification_code(req: HttpRequest):
         return BAD_METHOD
 
     body = json.loads(req.body.decode("utf-8"))
-    email_raw = require(body, "email", "string", err_msg="Missing or error type of [email]")
+    email_raw = require(
+        body, "email", "string",
+        err_msg="Missing or error type of [email]", max_length=MAX_EMAIL_LENGTH,
+    )
     email = email_raw.strip()
     if email == "":
         return request_failed(-2, "Invalid parameters. [email] format is invalid", 400)
@@ -199,8 +238,14 @@ def reset_password_with_email_code(req: HttpRequest):
         return BAD_METHOD
 
     body = json.loads(req.body.decode("utf-8"))
-    email_raw = require(body, "email", "string", err_msg="Missing or error type of [email]")
-    password = require(body, "password", "string", err_msg="Missing or error type of [password]")
+    email_raw = require(
+        body, "email", "string",
+        err_msg="Missing or error type of [email]", max_length=MAX_EMAIL_LENGTH,
+    )
+    password = require(
+        body, "password", "string",
+        err_msg="Missing or error type of [password]", max_length=MAX_PASSWORD_LENGTH,
+    )
 
     email = email_raw.strip()
     if email == "":
@@ -224,6 +269,8 @@ def reset_password_with_email_code(req: HttpRequest):
     if not isinstance(verification_code_raw, str):
         return request_failed(-2, "Invalid parameters. [verificationCode] must be a string", 400)
     verification_code = verification_code_raw.strip()
+    if len(verification_code) > MAX_VERIFICATION_CODE_LENGTH:
+        return request_failed(-2, "Invalid parameters. [verificationCode] is too long", 400)
     if verification_code == "":
         return request_failed(5, "Verification code is required", 400)
     if not verify_code(email, verification_code):
@@ -240,7 +287,10 @@ def send_email_verification_code(req: HttpRequest):
         return BAD_METHOD
 
     body = json.loads(req.body.decode("utf-8"))
-    email_raw = require(body, "email", "string", err_msg="Missing or error type of [email]")
+    email_raw = require(
+        body, "email", "string",
+        err_msg="Missing or error type of [email]", max_length=MAX_EMAIL_LENGTH,
+    )
     email = email_raw.strip()
     if email == "":
         return request_failed(-2, "Invalid parameters. [email] format is invalid", 400)
@@ -515,7 +565,7 @@ def admin_users(req: HttpRequest):
         users = users.filter(role=role_filter)
 
     if keyword != "":
-        if len(keyword) > MAX_CHAR_LENGTH:
+        if len(keyword) > MAX_KEYWORD_LENGTH:
             return request_failed(-2, "Invalid parameters. [keyword] is too long", 400)
         users = users.filter(
             Q(username__icontains=keyword) |
@@ -890,7 +940,7 @@ def search_users(req: HttpRequest):
         return auth_error
 
     keyword = str(req.GET.get("keyword", "")).strip()
-    if len(keyword) > MAX_CHAR_LENGTH:
+    if len(keyword) > MAX_KEYWORD_LENGTH:
         return request_failed(-2, "Invalid parameters. [keyword] is too long", 400)
 
     users = (
@@ -1020,6 +1070,14 @@ def my_profile(req: HttpRequest):
             "honors": "honors",
             "projectExperience": "project_experience",
         }
+        string_field_limits = {
+            "avatarUrl": MAX_AVATAR_URL_LENGTH,
+            "signature": MAX_SIGNATURE_LENGTH,
+            "personalIntro": MAX_LONG_TEXT_LENGTH,
+            "researchExperience": MAX_LONG_TEXT_LENGTH,
+            "honors": MAX_LONG_TEXT_LENGTH,
+            "projectExperience": MAX_LONG_TEXT_LENGTH,
+        }
         bool_fields = {
             "showPersonalIntro": "show_personal_intro",
             "showResearchExperience": "show_research_experience",
@@ -1033,7 +1091,15 @@ def my_profile(req: HttpRequest):
             value = body[request_key]
             if not isinstance(value, str):
                 return request_failed(-2, f"Invalid parameters. [{request_key}] must be a string", 400)
-            setattr(profile, model_field, value.strip())
+            stripped_value = value.strip()
+            max_length = string_field_limits[request_key]
+            if len(stripped_value) > max_length:
+                return request_failed(
+                    -2,
+                    f"Invalid parameters. [{request_key}] is too long (max {max_length} characters)",
+                    400,
+                )
+            setattr(profile, model_field, stripped_value)
 
         for request_key, model_field in bool_fields.items():
             if request_key not in body:
@@ -1063,7 +1129,10 @@ def update_username(req: HttpRequest):
     if not isinstance(body, dict):
         return request_failed(-2, "Invalid parameters. [body] must be an object", 400)
 
-    username = require(body, "username", "string", err_msg="Missing or error type of [username]")
+    username = require(
+        body, "username", "string",
+        err_msg="Missing or error type of [username]", max_length=MAX_USERNAME_LENGTH,
+    )
     username = username.strip()
     if username == "":
         return request_failed(-2, "Invalid parameters. [username] cannot be empty", 400)
@@ -1150,7 +1219,7 @@ def mentor_verification_request(req: HttpRequest):
     ).strip()
     if submitted_name == "":
         return request_failed(-2, "Invalid parameters. [submittedName] cannot be empty", 400)
-    if len(submitted_name) > 100:
+    if len(submitted_name) > MAX_NAME_LENGTH:
         return request_failed(-2, "Invalid parameters. [submittedName] is too long", 400)
 
     latest_request = (
