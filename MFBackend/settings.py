@@ -29,7 +29,14 @@ except ModuleNotFoundError:
 # See https://docs.djangoproject.com/en/4.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-xvv16d@^4vu6-_^8w73_wt+xqf-wfppqevn)_zgye!#7l^6=p$'
+# Loaded from the DJANGO_SECRET_KEY environment variable (written into .env by CI,
+# same mechanism as the 163 SMTP / superuser credentials). The insecure fallback
+# only exists so local development without a .env keeps working; deployment MUST
+# provide DJANGO_SECRET_KEY (enforced in .gitlab-ci.yml).
+SECRET_KEY = os.environ.get(
+    'DJANGO_SECRET_KEY',
+    'django-insecure-xvv16d@^4vu6-_^8w73_wt+xqf-wfppqevn)_zgye!#7l^6=p$',
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
 # TODO Start: [Student] Disable debug mode in production

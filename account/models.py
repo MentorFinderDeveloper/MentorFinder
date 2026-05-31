@@ -69,6 +69,7 @@ class EmailVerificationCode(models.Model):
     code = models.CharField(max_length=10, verbose_name="验证码")
     expires_at = models.DateTimeField(verbose_name="过期时间")
     created_at = models.DateTimeField(auto_now=True, verbose_name="最近一次发送时间")
+    attempt_count = models.PositiveIntegerField(default=0, verbose_name="校验失败次数")
 
     class Meta:
         verbose_name = "邮箱验证码"

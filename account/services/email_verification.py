@@ -11,6 +11,9 @@ from account.models import EmailVerificationCode
 
 CODE_LENGTH = 6
 
+# 单个验证码允许的最大校验失败次数，超过即作废，防止 6 位数字验证码被暴力穷举。
+MAX_VERIFY_ATTEMPTS = 3
+
 
 def generate_verification_code() -> str:
     return "".join(str(random.randint(0, 9)) for _ in range(CODE_LENGTH))
@@ -44,6 +47,8 @@ def issue_verification_code(email: str) -> tuple[str, EmailVerificationCode]:
         defaults={
             "code": code,
             "expires_at": expires_at,
+            # 重新发码时重置失败计数，避免上一轮的失败次数误伤新验证码。
+            "attempt_count": 0,
         },
     )
     return code, record
@@ -88,14 +93,25 @@ def send_password_reset_email(email: str, code: str) -> None:
 
 
 def verify_code(email: str, code: str) -> bool:
-    """校验通过返回 True，并消费掉该验证码（删除记录）。"""
+    """校验通过返回 True，并消费掉该验证码（删除记录）。
+
+    校验失败会累加失败次数，达到 ``MAX_VERIFY_ATTEMPTS`` 次后立即作废该验证码，
+    使攻击者无法在有效期内对 6 位数字验证码进行暴力穷举。
+    """
     record = EmailVerificationCode.objects.filter(email=email).first()
     if record is None:
         return False
     if record.expires_at < timezone.now():
         record.delete()
         return False
+    if record.attempt_count >= MAX_VERIFY_ATTEMPTS:
+        # 已达失败上限：验证码作废，但故意保留记录（不删除），
+        # 让发送冷却（基于 created_at）继续生效。否则删除记录会一并抹掉
+        # 冷却计时，攻击者就能靠不断刷新/重发立即领取新验证码绕过限制。
+        return False
     if record.code != code.strip():
+        record.attempt_count += 1
+        record.save(update_fields=["attempt_count"])
         return False
     record.delete()
     return True
