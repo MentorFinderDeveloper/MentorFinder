@@ -14,16 +14,10 @@ fi
 python3 manage.py migrate --noinput
 python3 manage.py createsuperuser --noinput || true
 
-RUN_INITIAL_SYNC=$(python3 -c "from utils.startup_config import load_startup_config; print('1' if load_startup_config()['startup']['run_initial_sync'] else '0')")
-if [ "$RUN_INITIAL_SYNC" = "1" ]; then
-    python3 manage.py sync_dataset || true
-fi
-
-# Avoid startup 502 caused by long-running crawler tasks blocking uwsgi boot.
-# Set SYNC_DATA_ON_STARTUP=1 if you need a one-time sync after container starts.
-if [ "${SYNC_DATA_ON_STARTUP:-0}" = "1" ]; then
-    (python3 manage.py sync_dataset || true) &
-fi
+# 部署/启动时一律不抓取数据，只由进程内调度器在每天 18:00 (Asia/Shanghai) 触发。
+# 历史上的两条“启动即爬”路径（config 的 run_initial_sync、环境变量 SYNC_DATA_ON_STARTUP）
+# 已移除，避免每次重新部署都重新全量爬一遍、并与定时任务重复。
+# 如需手动补一次同步，进容器执行： python3 manage.py sync_dataset
 
 exec uwsgi --module=MFBackend.wsgi:application \
     --env DJANGO_SETTINGS_MODULE=MFBackend.settings \
