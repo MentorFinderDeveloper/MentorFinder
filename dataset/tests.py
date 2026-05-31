@@ -1263,6 +1263,121 @@ class TimelineViewTest(TestCase):
         self.assertEqual(direction_counts["其他/未分类"], 1)
         self.assertEqual(data["default_direction"], "人工智能 (Artificial Intelligence)")
 
+    def test_timeline_excludes_other_users_private_papers(self):
+        owner = AccountUser.objects.create_user(
+            username="tl_owner",
+            email="tl_owner@example.com",
+            password="abc12345",
+        )
+        owner_token = generate_jwt_token("tl_owner")
+        AccountUser.objects.create_user(
+            username="tl_other",
+            email="tl_other@example.com",
+            password="abc12345",
+        )
+        other_token = generate_jwt_token("tl_other")
+
+        private_mentor = Mentor.objects.create(
+            Chinese_name="私有导师",
+            English_name="Private Mentor",
+            research_direction="人工智能",
+            owner=owner,
+        )
+        private_paper = Paper.objects.create(
+            title="私有 AI 论文",
+            abstract="仅拥有者可见",
+            publish_date=date(2024, 4, 1),
+            author_names="私有导师",
+            subjects="cs.AI",
+        )
+        private_mentor.add_paper(private_paper.id)
+
+        ai_direction = "人工智能 (Artificial Intelligence)"
+
+        # 概览：匿名用户人工智能方向仍为 2，拥有者为 3
+        anon_counts = {
+            item["direction"]: item["paper_count"]
+            for item in self.client.get("/timeline/").json()["directions"]
+        }
+        self.assertEqual(anon_counts[ai_direction], 2)
+
+        owner_counts = {
+            item["direction"]: item["paper_count"]
+            for item in self.client.get(
+                "/timeline/", HTTP_AUTHORIZATION=f"Bearer {owner_token}"
+            ).json()["directions"]
+        }
+        self.assertEqual(owner_counts[ai_direction], 3)
+
+        # 方向分页：匿名/其他用户看不到私有论文，拥有者可以
+        anon_titles = {
+            paper["title"]
+            for paper in self.client.get(
+                "/timeline/", {"direction": ai_direction}
+            ).json()["papers"]
+        }
+        self.assertNotIn("私有 AI 论文", anon_titles)
+
+        other_titles = {
+            paper["title"]
+            for paper in self.client.get(
+                "/timeline/",
+                {"direction": ai_direction},
+                HTTP_AUTHORIZATION=f"Bearer {other_token}",
+            ).json()["papers"]
+        }
+        self.assertNotIn("私有 AI 论文", other_titles)
+
+        owner_titles = {
+            paper["title"]
+            for paper in self.client.get(
+                "/timeline/",
+                {"direction": ai_direction},
+                HTTP_AUTHORIZATION=f"Bearer {owner_token}",
+            ).json()["papers"]
+        }
+        self.assertIn("私有 AI 论文", owner_titles)
+
+    def test_timeline_public_paper_added_by_private_mentor_stays_visible(self):
+        # paper_ai_new 已在公共库（被公共导师李四关联）。即使其他用户的私有
+        # 导师也收藏了它，公共时间线仍应展示——公共优先。
+        owner = AccountUser.objects.create_user(
+            username="tl_owner2",
+            email="tl_owner2@example.com",
+            password="abc12345",
+        )
+        other_token = generate_jwt_token("tl_owner2")
+        # 该论文属于公共导师李四（已进入公共库）
+        self.mentor_li.add_paper(self.paper_ai_new.id)
+        private_mentor = Mentor.objects.create(
+            Chinese_name="收藏导师",
+            English_name="Collector Mentor",
+            research_direction="人工智能",
+            owner=owner,
+        )
+        # 同时被他人私有导师收藏
+        private_mentor.add_paper(self.paper_ai_new.id)
+
+        ai_direction = "人工智能 (Artificial Intelligence)"
+
+        # 概览：人工智能方向计数不受影响（仍为 2）
+        anon_counts = {
+            item["direction"]: item["paper_count"]
+            for item in self.client.get("/timeline/").json()["directions"]
+        }
+        self.assertEqual(anon_counts[ai_direction], 2)
+
+        # 其他用户仍能在时间线看到这篇公共论文
+        other_titles = {
+            paper["title"]
+            for paper in self.client.get(
+                "/timeline/",
+                {"direction": ai_direction},
+                HTTP_AUTHORIZATION=f"Bearer {other_token}",
+            ).json()["papers"]
+        }
+        self.assertIn("AI 最新论文", other_titles)
+
     def test_timeline_direction_response_is_paginated(self):
         response = self.client.get(
             "/timeline/",

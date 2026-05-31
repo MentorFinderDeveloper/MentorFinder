@@ -1,7 +1,12 @@
 import re
 
 from search.serializers import MentorSerializer, PaperSerializer
-from dataset.models import Mentor, Paper
+from dataset.models import Mentor
+from dataset.services.paper_visibility import (
+    collect_mentor_paper_ids as _collect_mentor_paper_ids,
+    hidden_private_paper_ids as _hidden_private_paper_ids,
+    visible_papers as _visible_papers,
+)
 from django.db.models import Case, IntegerField, Q, Value, When
 
 
@@ -428,31 +433,6 @@ def _visible_mentors(user, visibility="all"):
     return base
 
 
-def _hidden_private_paper_ids(user) -> list[int]:
-    if user is not None and getattr(user, "role", "") == "admin":
-        return []
-
-    hidden_private_mentors = Mentor.objects.exclude(owner__isnull=True)
-    if user is not None:
-        hidden_private_mentors = hidden_private_mentors.exclude(owner_id=user.id)
-
-    return _collect_mentor_paper_ids(hidden_private_mentors)
-
-
-def _visible_papers(user):
-    hidden_paper_ids = _hidden_private_paper_ids(user)
-    if not hidden_paper_ids:
-        return Paper.objects.all()
-    return Paper.objects.exclude(id__in=hidden_paper_ids)
-
-
-def _collect_mentor_paper_ids(mentors) -> list[int]:
-    paper_ids: set[int] = set()
-    for mentor in mentors.iterator(chunk_size=200):
-        paper_ids.update(mentor.get_paper_id_list())
-    return list(paper_ids)
-
-
 def _normalize_page(page) -> int:
     try:
         normalized = int(page)
@@ -513,7 +493,7 @@ def search_mentors_queryset(keyword: str, user=None, fuzzy: bool = False, visibi
 
 def _search_papers_exact_queryset(keyword: str, user=None):
     if keyword.strip() == "":
-        return Paper.objects.all().distinct()
+        return _visible_papers(user).distinct()
 
     # Priority: if any paper title exactly matches the keyword logic, return only those.
     # Build a title-only logic query (each term matches title__iexact) and check.
@@ -532,7 +512,7 @@ def _search_papers_exact_queryset(keyword: str, user=None):
 
 def _search_papers_fuzzy_queryset(keyword: str, user=None):
     if keyword.strip() == "":
-        return Paper.objects.all().distinct()
+        return _visible_papers(user).distinct()
 
     logic_query = _build_logic_query(keyword, lambda term: _paper_fuzzy_term_query(term, user=user))
     return _visible_papers(user).filter(logic_query).distinct()
