@@ -210,7 +210,7 @@ python manage.py send_weekly_push --user alice --period-key 20260401_20260407 --
 
 ## 爬虫定时任务
 
-后端会在 Django 应用启动时通过内置 APScheduler 注册爬虫定时任务，默认每天 `14:15`（`Asia/Shanghai`）执行 `sync_dataset`（即先抓导师再抓论文）。
+后端会在 Django 应用启动时通过内置 APScheduler 注册爬虫定时任务，默认每天 `14:20`（`Asia/Shanghai`）执行 `sync_dataset`（即先抓导师再抓论文）。
 
 定时任务每次触发都会写入 `ScheduledTaskRun` 表，可在 Django Admin 查看任务名称、状态、开始时间、结束时间、失败信息和爬取进度日志。
 如果暂时没有 Django Admin 账号，也可以访问只读接口查看最近记录：
