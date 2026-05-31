@@ -35,11 +35,9 @@ def serve_media(req, path):
 
 
 urlpatterns = [
+    path('admin/', admin.site.urls), 
     path('', include("account.urls")),
     path('', include("search.urls")),
     path('', include("dataset.urls")),
     re_path(r"^media/(?P<path>.*)$", serve_media),
 ]
-
-if settings.ENABLE_DJANGO_ADMIN and settings.DJANGO_ADMIN_URL:
-    urlpatterns.append(path(f"{settings.DJANGO_ADMIN_URL}/", admin.site.urls))

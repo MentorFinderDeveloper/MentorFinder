@@ -1,5 +1,4 @@
 import logging
-import os
 import sys
 import threading
 from datetime import timedelta
@@ -129,10 +128,6 @@ def start_django_scheduler() -> bool:
 # 判断当前进程是否适合启动调度器。
 def _should_start_scheduler() -> bool:
     argv = set(sys.argv[1:])
-    argv_text = " ".join(sys.argv)
-    if "pytest" in argv_text or os.environ.get("DISABLE_DJANGO_SCHEDULER", "").lower() in {"1", "true", "yes"}:
-        return False
-
     management_commands_without_scheduler = {
         "check",
         "collectstatic",

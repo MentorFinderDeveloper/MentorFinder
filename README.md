@@ -114,17 +114,6 @@ export JWT_SIGNING_KEY='replace-with-a-long-random-secret'
 
 测试环境已经预置了一个专用测试密钥；在 CI 中也会在单测前检查 `JWT_SIGNING_KEY`，避免出现“本地可跑、云端缺变量”的情况。
 
-## 生产密钥与 .env 权限
-
-`backend/.env` 不进入 git，但里面的 `DJANGO_SECRET_KEY`、`JWT_SIGNING_KEY`、邮箱授权码和超级管理员密码都按真实生产凭据处理。仓库提供 `.env.example` 作为占位模板，实际部署值应通过 CI/CD Variables 或受控的服务器环境文件注入。
-
-要求如下：
-
-- `DJANGO_SECRET_KEY` 必须设置，长度至少 50 个字符，不能使用 `django-insecure-` 开头的开发值。
-- `backend/.env` 在类 Unix 环境下必须限制为仅当前用户可读写：`chmod 600 backend/.env`。
-- 一旦真实凭据曾经出现在工作副本、日志、截图或共享渠道中，应在对应平台立即轮换；代码无法替第三方邮箱授权码或管理员密码完成轮换。
-- 不要在 `.env.example`、README、测试或提交信息中填写真实密码、邮箱授权码或签名密钥。
-
 JSON 文件格式示例：
 
 ```json
