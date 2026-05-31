@@ -14,7 +14,18 @@ class PaperAdmin(admin.ModelAdmin):
 
 @admin.register(ScheduledTaskRun)
 class ScheduledTaskRunAdmin(admin.ModelAdmin):
-    list_display = ("id", "task_name", "status", "started_at", "finished_at")
+    list_display = ("id", "task_name", "status", "progress_message", "progress_current", "progress_total", "started_at", "finished_at", "last_heartbeat_at")
     list_filter = ("task_name", "status")
-    search_fields = ("task_name", "error_message")
-    readonly_fields = ("task_name", "status", "started_at", "finished_at", "error_message")
+    search_fields = ("task_name", "error_message", "progress_message", "progress_log")
+    readonly_fields = (
+        "task_name",
+        "status",
+        "started_at",
+        "finished_at",
+        "error_message",
+        "progress_message",
+        "progress_current",
+        "progress_total",
+        "progress_log",
+        "last_heartbeat_at",
+    )

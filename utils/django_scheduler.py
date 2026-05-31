@@ -43,7 +43,7 @@ def start_django_scheduler() -> bool:
         if config["run_daily_sync_scheduler"]:
             scheduler.add_job(
                 _run_sync_dataset_job,
-                trigger=CronTrigger(hour=13, minute=45, timezone=timezone),
+                trigger=CronTrigger(hour=13, minute=55, timezone=timezone),
                 id="daily_sync_dataset",
                 replace_existing=True,
                 coalesce=True,
@@ -107,8 +107,9 @@ def _is_runserver_main_process() -> bool:
 def _run_sync_dataset_job():
     _run_recorded_task(
         task_name="daily_sync_dataset",
-        runner=lambda: call_command("sync_dataset"),
+        runner=lambda record: call_command("sync_dataset", scheduled_run_id=record.id),
         error_log_message="Django 定时同步任务执行失败",
+        pass_record=True,
     )
 
 
@@ -132,7 +133,7 @@ def _run_weekly_email_push_job():
     )
 
 
-def _run_recorded_task(*, task_name: str, runner, error_log_message: str):
+def _run_recorded_task(*, task_name: str, runner, error_log_message: str, pass_record: bool = False):
     from dataset.models import ScheduledTaskRun
 
     record = ScheduledTaskRun.objects.create(
@@ -140,7 +141,10 @@ def _run_recorded_task(*, task_name: str, runner, error_log_message: str):
         status=ScheduledTaskRun.STATUS_RUNNING,
     )
     try:
-        runner()
+        if pass_record:
+            runner(record)
+        else:
+            runner()
     except Exception as exc:
         record.status = ScheduledTaskRun.STATUS_FAILED
         record.finished_at = django_timezone.now()

@@ -15,6 +15,7 @@ from account.services.weekly_push_files import (
 )
 from dataset.models import Mentor, Paper
 from dataset.services.author_matching import has_exact_english_author_match
+from dataset.services.scheduled_task_progress import update_scheduled_task_progress
 
 
 class Command(BaseCommand):
@@ -47,31 +48,70 @@ class Command(BaseCommand):
             choices=["auto", WeeklyPushPaperBucket.CYCLE_CURRENT, WeeklyPushPaperBucket.CYCLE_NEXT],
             help="Which weekly push cycle to record into, defaults to auto",
         )
+        parser.add_argument("--scheduled-run-id", type=int, default=None)
 
     def handle(self, *args, **options):
         self.created_paper_ids = set()
         mentors = Mentor.objects.all()
+        total_mentors = mentors.count()
+        scheduled_run_id = options["scheduled_run_id"]
+        update_scheduled_task_progress(
+            scheduled_run_id,
+            f"开始抓取论文，共 {total_mentors} 位导师",
+            current=0,
+            total=total_mentors,
+        )
 
-        for mentor in mentors:
+        for index, mentor in enumerate(mentors, start=1):
+            update_scheduled_task_progress(
+                scheduled_run_id,
+                f"正在处理导师 {index}/{total_mentors}: {mentor.Chinese_name} ({mentor.English_name or '无英文名'})",
+                current=index - 1,
+                total=total_mentors,
+            )
             self.stdout.write(f"正在处理导师: {mentor.Chinese_name} ({mentor.English_name})")
             
             # 由于外文期刊主要用英文名，如果没有英文名则跳过（或者你可以引入拼音转换库）
             if not mentor.English_name:
                 self.stdout.write(self.style.WARNING(f"缺少英文名，跳过 {mentor.Chinese_name}"))
+                update_scheduled_task_progress(
+                    scheduled_run_id,
+                    f"已跳过导师 {index}/{total_mentors}: {mentor.Chinese_name} 缺少英文名",
+                    current=index,
+                    total=total_mentors,
+                )
                 continue
 
             # 1. 从 arXiv 获取论文
             self.fetch_from_arxiv(mentor)
+            update_scheduled_task_progress(
+                scheduled_run_id,
+                f"已完成导师 {index}/{total_mentors}: {mentor.Chinese_name}，本次新增论文 {len(self.created_paper_ids)} 篇",
+                current=index,
+                total=total_mentors,
+            )
 
             # 2. 从 Google Scholar 获取论文 (取消注释以启用，但注意可能被Google暂时封IP)
             # self.fetch_from_scholar(mentor)
             time.sleep(3)
 
         if not options["disable_weekly_record"]:
+            update_scheduled_task_progress(
+                scheduled_run_id,
+                f"正在写入周报增量记录，本次新增论文 {len(self.created_paper_ids)} 篇",
+                current=total_mentors,
+                total=total_mentors,
+            )
             self._record_new_papers_for_weekly_push(
                 paper_ids=sorted(self.created_paper_ids),
                 record_cycle=options["record_cycle"],
             )
+        update_scheduled_task_progress(
+            scheduled_run_id,
+            f"论文抓取完成，共处理 {total_mentors} 位导师，本次新增论文 {len(self.created_paper_ids)} 篇",
+            current=total_mentors,
+            total=total_mentors,
+        )
 
     def _extract_arxiv_id(self, entry_id: str) -> str:
         # arXiv entry_id examples:
