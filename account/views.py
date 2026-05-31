@@ -167,9 +167,9 @@ def register(req: HttpRequest):
     verification_code_raw = body.get("verificationCode", "")
     if not isinstance(verification_code_raw, str):
         return request_failed(-2, "Invalid parameters. [verificationCode] must be a string", 400)
-    if len(verification_code_raw) > MAX_VERIFICATION_CODE_LENGTH:
-        return request_failed(-2, "Invalid parameters. [verificationCode] is too long", 400)
     verification_code = verification_code_raw.strip()
+    if len(verification_code) > MAX_VERIFICATION_CODE_LENGTH:
+        return request_failed(-2, "Invalid parameters. [verificationCode] is too long", 400)
     if verification_code == "":
         return request_failed(5, "Verification code is required", 400)
     if not verify_code(email, verification_code):
@@ -268,9 +268,9 @@ def reset_password_with_email_code(req: HttpRequest):
     verification_code_raw = body.get("verificationCode", "")
     if not isinstance(verification_code_raw, str):
         return request_failed(-2, "Invalid parameters. [verificationCode] must be a string", 400)
-    if len(verification_code_raw) > MAX_VERIFICATION_CODE_LENGTH:
-        return request_failed(-2, "Invalid parameters. [verificationCode] is too long", 400)
     verification_code = verification_code_raw.strip()
+    if len(verification_code) > MAX_VERIFICATION_CODE_LENGTH:
+        return request_failed(-2, "Invalid parameters. [verificationCode] is too long", 400)
     if verification_code == "":
         return request_failed(5, "Verification code is required", 400)
     if not verify_code(email, verification_code):
