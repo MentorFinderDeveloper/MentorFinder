@@ -12,7 +12,6 @@
 import json
 import re
 import uuid
-from pathlib import Path
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -21,6 +20,7 @@ from django.core.validators import validate_email
 from django.http import HttpRequest
 from django.db.models import Q
 from django.utils.timezone import localtime
+from PIL import Image, UnidentifiedImageError
 
 from account.models import MentorVerificationRequest, SubjectFollow, User, UserFollow, UserProfile
 from utils.utils_jwt import generate_jwt_token
@@ -41,6 +41,7 @@ from utils.utils_require import (
 )
 
 from utils.utils_jwt import check_jwt_token
+from utils.rate_limit import check_any_rate_limit, client_ip
 from dataset.models import Mentor, Paper
 from dataset.views import ARXIV_SUBJECT_MAPPING
 from account.models import MentorFollow
@@ -55,11 +56,11 @@ from search.serializers import MentorSerializer
 
 USERNAME_REGEX = re.compile(r"^[A-Za-z0-9_-]+$")
 AVATAR_MAX_SIZE = 2 * 1024 * 1024
-AVATAR_ALLOWED_CONTENT_TYPES = {
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/gif": ".gif",
-    "image/webp": ".webp",
+AVATAR_ALLOWED_IMAGE_FORMATS = {
+    "JPEG": ".jpg",
+    "PNG": ".png",
+    "GIF": ".gif",
+    "WEBP": ".webp",
 }
 MANAGEABLE_ROLES = {
     User.ROLE_STUDENT,
@@ -67,6 +68,46 @@ MANAGEABLE_ROLES = {
     User.ROLE_ADMIN,
     User.ROLE_BANNED,
 }
+
+
+def _rate_limited_response(retry_after: int):
+    return request_failed(8, f"Too many requests, please retry after {retry_after}s", 429)
+
+
+def _check_login_rate_limit(req: HttpRequest, username: str):
+    window_seconds = int(getattr(settings, "LOGIN_RATE_LIMIT_WINDOW_SECONDS", 300))
+    return check_any_rate_limit([
+        (
+            "login-ip",
+            client_ip(req),
+            int(getattr(settings, "LOGIN_RATE_LIMIT_IP_ATTEMPTS", 30)),
+            window_seconds,
+        ),
+        (
+            "login-identifier",
+            username.strip().lower(),
+            int(getattr(settings, "LOGIN_RATE_LIMIT_IDENTIFIER_ATTEMPTS", 10)),
+            window_seconds,
+        ),
+    ])
+
+
+def _check_verification_code_rate_limit(req: HttpRequest, email: str):
+    window_seconds = int(getattr(settings, "EMAIL_VERIFICATION_RATE_LIMIT_WINDOW_SECONDS", 3600))
+    return check_any_rate_limit([
+        (
+            "email-code-ip",
+            client_ip(req),
+            int(getattr(settings, "EMAIL_VERIFICATION_RATE_LIMIT_IP_ATTEMPTS", 20)),
+            window_seconds,
+        ),
+        (
+            "email-code-address",
+            email.strip().lower(),
+            int(getattr(settings, "EMAIL_VERIFICATION_RATE_LIMIT_EMAIL_ATTEMPTS", 5)),
+            window_seconds,
+        ),
+    ])
 
 
 def _subject_display_name(subject: str) -> str:
@@ -93,6 +134,19 @@ def _validate_password(password: str):
     return None
 
 
+def _validated_avatar_extension(avatar_file):
+    try:
+        avatar_file.seek(0)
+        with Image.open(avatar_file) as image:
+            image.verify()
+            extension = AVATAR_ALLOWED_IMAGE_FORMATS.get(image.format)
+        avatar_file.seek(0)
+    except (OSError, UnidentifiedImageError, ValueError):
+        return None
+
+    return extension
+
+
 @CheckRequire
 def login(req: HttpRequest):
     if req.method != "POST":
@@ -108,6 +162,10 @@ def login(req: HttpRequest):
         body, "password", "string",
         err_msg="Missing or error type of [password]", max_length=MAX_PASSWORD_LENGTH,
     )
+
+    rate_limit = _check_login_rate_limit(req, username)
+    if not rate_limit.allowed:
+        return _rate_limited_response(rate_limit.retry_after)
 
     user = User.objects.filter(username=username).first()
     if user is None:
@@ -219,6 +277,10 @@ def send_password_reset_verification_code(req: HttpRequest):
     except ValidationError:
         return request_failed(-2, "Invalid parameters. [email] format is invalid", 400)
 
+    rate_limit = _check_verification_code_rate_limit(req, email)
+    if not rate_limit.allowed:
+        return _rate_limited_response(rate_limit.retry_after)
+
     user = User.objects.filter(email=email).first()
     if user is None:
         return request_failed(2, "User not found", 404)
@@ -290,7 +352,8 @@ def reset_password_with_email_code(req: HttpRequest):
         return request_failed(5, "Verification code is invalid or expired", 400)
 
     user.set_password(password)
-    user.save(update_fields=["password"])
+    user.revoke_jwt_tokens()
+    user.save(update_fields=["password", "jwt_token_version"])
     return request_success({"username": user.username})
 
 
@@ -311,6 +374,10 @@ def send_email_verification_code(req: HttpRequest):
         validate_email(email)
     except ValidationError:
         return request_failed(-2, "Invalid parameters. [email] format is invalid", 400)
+
+    rate_limit = _check_verification_code_rate_limit(req, email)
+    if not rate_limit.allowed:
+        return _rate_limited_response(rate_limit.retry_after)
 
     if User.objects.filter(email=email).exists():
         return request_failed(4, "Email already exists", 409)
@@ -554,7 +621,8 @@ def _apply_user_role(target_user: User, role: str, mentor: Mentor | None):
 
         target_user.role = User.ROLE_MENTOR
         target_user.mentor_profile = mentor
-        target_user.save(update_fields=["role", "mentor_profile"])
+        target_user.revoke_jwt_tokens()
+        target_user.save(update_fields=["role", "mentor_profile", "jwt_token_version"])
         return None
 
     if mentor is not None:
@@ -562,7 +630,8 @@ def _apply_user_role(target_user: User, role: str, mentor: Mentor | None):
 
     target_user.role = role
     target_user.mentor_profile = None
-    target_user.save(update_fields=["role", "mentor_profile"])
+    target_user.revoke_jwt_tokens()
+    target_user.save(update_fields=["role", "mentor_profile", "jwt_token_version"])
     return None
 
 
@@ -1173,7 +1242,8 @@ def update_username(req: HttpRequest):
         return request_failed(3, "Username already exists", 409)
 
     user.username = username
-    user.save(update_fields=["username"])
+    user.revoke_jwt_tokens()
+    user.save(update_fields=["username", "jwt_token_version"])
 
     return request_success({
         "username": user.username,
@@ -1196,11 +1266,7 @@ def upload_avatar(req: HttpRequest):
     if avatar_file.size > AVATAR_MAX_SIZE:
         return request_failed(-2, "Invalid parameters. [avatar] is too large", 400)
 
-    content_type = getattr(avatar_file, "content_type", "")
-    extension = AVATAR_ALLOWED_CONTENT_TYPES.get(content_type)
-    if extension is None:
-        suffix = Path(getattr(avatar_file, "name", "")).suffix.lower()
-        extension = suffix if suffix in AVATAR_ALLOWED_CONTENT_TYPES.values() else None
+    extension = _validated_avatar_extension(avatar_file)
     if extension is None:
         return request_failed(-2, "Invalid parameters. [avatar] must be an image", 400)
 

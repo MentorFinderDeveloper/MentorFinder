@@ -2,7 +2,7 @@ import json
 import os
 import tempfile
 import unittest
-from io import StringIO
+from io import BytesIO, StringIO
 from datetime import date, datetime, timedelta
 from unittest.mock import patch
 from pathlib import Path
@@ -13,6 +13,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 from django.utils import timezone
+from PIL import Image
 
 from account.models import EmailVerificationCode, MentorVerificationRequest, PushRecord, User, MentorFollow, SubjectFollow, UserFollow, UserProfile, WeeklyPushPaperBucket
 from account.services import weekly_push_files
@@ -34,6 +35,13 @@ from utils.utils_jwt import (
     generate_jwt_token,
 )
 from utils.utils_require import CheckRequire, require
+
+
+def make_test_image_bytes(image_format: str = "PNG") -> bytes:
+    image = Image.new("RGB", (1, 1), color=(255, 255, 255))
+    buffer = BytesIO()
+    image.save(buffer, format=image_format)
+    return buffer.getvalue()
 
 
 class AccountAuthTests(TestCase):
@@ -332,6 +340,7 @@ class AccountAuthTests(TestCase):
 
     def test_reset_password_with_email_code_success(self):
         code = self.issue_verification_code("ashitemaru@example.com")
+        old_token = generate_jwt_token("Ashitemaru")
         res = self.post_json(
             "/password-reset",
             {"email": "ashitemaru@example.com", "password": "newpass123", "verificationCode": code},
@@ -341,6 +350,7 @@ class AccountAuthTests(TestCase):
         self.assertEqual(res.json()["username"], "Ashitemaru")
         user = User.objects.get(email="ashitemaru@example.com")
         self.assertTrue(check_password("newpass123", user.password))
+        self.assertIsNone(check_jwt_token(old_token))
         self.assertFalse(EmailVerificationCode.objects.filter(email="ashitemaru@example.com").exists())
 
     def test_reset_password_rejects_invalid_code(self):
@@ -1002,7 +1012,7 @@ class UserProfileViewTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
             image = SimpleUploadedFile(
                 "avatar.png",
-                b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR",
+                make_test_image_bytes("PNG"),
                 content_type="image/png",
             )
 
@@ -1039,6 +1049,19 @@ class UserProfileViewTests(TestCase):
 
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.json()["code"], -2)
+
+    def test_upload_avatar_rejects_fake_image_content_type(self):
+        fake_image = SimpleUploadedFile("avatar.png", b"not really an image", content_type="image/png")
+
+        res = self.client.post(
+            "/profile/avatar",
+            data={"avatar": fake_image},
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.json()["info"], "Invalid parameters. [avatar] must be an image")
 
     def test_upload_avatar_bad_method(self):
         res = self.client.get(
@@ -1082,7 +1105,7 @@ class UserProfileViewTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
             image = SimpleUploadedFile(
                 "avatar.txt",
-                b"jpeg bytes",
+                make_test_image_bytes("JPEG"),
                 content_type="image/jpeg",
             )
 
@@ -1104,7 +1127,7 @@ class UserProfileViewTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
             image = SimpleUploadedFile(
                 "avatar.webp",
-                b"webp bytes",
+                make_test_image_bytes("WEBP"),
                 content_type="application/octet-stream",
             )
 
@@ -1157,12 +1180,12 @@ class UserProfileViewTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
             first = SimpleUploadedFile(
                 "first.png",
-                b"first image",
+                make_test_image_bytes("PNG"),
                 content_type="image/png",
             )
             second = SimpleUploadedFile(
                 "second.png",
-                b"second image",
+                make_test_image_bytes("PNG"),
                 content_type="image/png",
             )
 
@@ -1202,7 +1225,7 @@ class UserProfileViewTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
             image = SimpleUploadedFile(
                 "avatar.png",
-                b"png bytes",
+                make_test_image_bytes("PNG"),
                 content_type="image/png",
             )
 
@@ -1228,7 +1251,7 @@ class UserProfileViewTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
             image = SimpleUploadedFile(
                 "avatar.gif",
-                b"gif bytes",
+                make_test_image_bytes("GIF"),
                 content_type="image/gif",
             )
 
@@ -1255,7 +1278,7 @@ class UserProfileViewTests(TestCase):
         with self.settings(MEDIA_ROOT=first_tmpdir.name):
             first = SimpleUploadedFile(
                 "first.png",
-                b"first image",
+                make_test_image_bytes("PNG"),
                 content_type="image/png",
             )
             first_res = self.client.post(
@@ -1269,7 +1292,7 @@ class UserProfileViewTests(TestCase):
         with self.settings(MEDIA_ROOT=second_tmpdir.name):
             second = SimpleUploadedFile(
                 "second.png",
-                b"second image",
+                make_test_image_bytes("PNG"),
                 content_type="image/png",
             )
             second_res = self.client.post(
@@ -1285,7 +1308,7 @@ class UserProfileViewTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
             image = SimpleUploadedFile(
                 "avatar.png",
-                b"png bytes",
+                make_test_image_bytes("PNG"),
                 content_type="image/png",
             )
             upload_res = self.client.post(
@@ -1307,7 +1330,7 @@ class UserProfileViewTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
             image = SimpleUploadedFile(
                 "avatar.png",
-                b"png bytes",
+                make_test_image_bytes("PNG"),
                 content_type="image/png",
             )
 
@@ -1336,7 +1359,7 @@ class UserProfileViewTests(TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
             image = SimpleUploadedFile(
                 "avatar.png",
-                b"png bytes",
+                make_test_image_bytes("PNG"),
                 content_type="image/png",
             )
 
@@ -1829,6 +1852,7 @@ class AdminUserManagementTests(TestCase):
         self.student.refresh_from_db()
         self.assertEqual(self.student.role, User.ROLE_BANNED)
         self.assertIsNone(self.student.mentor_profile)
+        self.assertIsNone(check_jwt_token(self.student_token))
 
     def test_banned_user_cannot_access_profile(self):
         self.student.role = User.ROLE_BANNED
@@ -2700,7 +2724,6 @@ class PushRecordCommandTests(TestCase):
         self.assertIn("failed_user | 20260416_20260422 | failed", output)
         self.assertNotIn("record_user | 20260416_20260422 | sent", output)
 
-
 class RecordWeeklyPushPapersCommandTests(TestCase):
     def setUp(self):
         self.paper = Paper.objects.create(
@@ -2951,6 +2974,15 @@ class JwtUtilityTests(TestCase):
 
         with patch("utils.utils_jwt.time.time", return_value=1000 + EXPIRE_IN_SECONDS - 1):
             self.assertEqual(check_jwt_token(token), {"username": "fresh-user"})
+
+    def test_check_jwt_token_rejects_revoked_user_token(self):
+        user = User.objects.create_user(username="revoked-user", email="revoked@example.com", password="abc12345")
+        token = generate_jwt_token(user.username)
+
+        user.revoke_jwt_tokens()
+        user.save(update_fields=["jwt_token_version"])
+
+        self.assertIsNone(check_jwt_token(token))
 
     def test_check_jwt_token_rejects_wrong_segment_count(self):
         self.assertIsNone(check_jwt_token("only.two"))

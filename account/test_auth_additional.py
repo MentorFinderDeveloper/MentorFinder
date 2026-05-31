@@ -2,6 +2,7 @@ import json
 from datetime import timedelta
 from unittest.mock import patch
 
+from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
@@ -17,6 +18,7 @@ from account.services.email_verification import (
 
 class AccountAuthAdditionalTests(TestCase):
     def setUp(self):
+        cache.clear()
         self.user = User.objects.create_user(
             username="auth_user",
             email="auth_user@example.com",
@@ -120,6 +122,32 @@ class AccountAuthAdditionalTests(TestCase):
         self.assertEqual(res.status_code, 401)
         self.assertEqual(res.json()["code"], 2)
         self.assertEqual(res.json()["info"], "Wrong password")
+
+    @override_settings(LOGIN_RATE_LIMIT_IDENTIFIER_ATTEMPTS=2, LOGIN_RATE_LIMIT_IP_ATTEMPTS=50, LOGIN_RATE_LIMIT_WINDOW_SECONDS=60)
+    def test_login_rate_limits_repeated_attempts_for_same_identifier(self):
+        payload = {
+            "username": "auth_user",
+            "password": "wrongpass",
+        }
+
+        self.assertEqual(self.post_json("/login", payload).status_code, 401)
+        self.assertEqual(self.post_json("/login", payload).status_code, 401)
+        res = self.post_json("/login", payload)
+
+        self.assertEqual(res.status_code, 429)
+        self.assertEqual(res.json()["code"], 8)
+        self.assertIn("Too many requests", res.json()["info"])
+
+    @override_settings(LOGIN_RATE_LIMIT_IDENTIFIER_ATTEMPTS=50, LOGIN_RATE_LIMIT_IP_ATTEMPTS=2, LOGIN_RATE_LIMIT_WINDOW_SECONDS=60)
+    def test_login_rate_limits_repeated_attempts_from_same_ip(self):
+        first = self.post_json("/login", {"username": "missing_one", "password": "wrongpass"})
+        second = self.post_json("/login", {"username": "missing_two", "password": "wrongpass"})
+        third = self.post_json("/login", {"username": "missing_three", "password": "wrongpass"})
+
+        self.assertEqual(first.status_code, 401)
+        self.assertEqual(second.status_code, 401)
+        self.assertEqual(third.status_code, 429)
+        self.assertEqual(third.json()["code"], 8)
 
     def test_register_rejects_missing_username(self):
         res = self.post_json(
@@ -319,6 +347,42 @@ class AccountAuthAdditionalTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual(res.json()["cooldownSeconds"], 120)
+
+    @override_settings(
+        EMAIL_VERIFICATION_CODE_RESEND_COOLDOWN=0,
+        EMAIL_VERIFICATION_RATE_LIMIT_EMAIL_ATTEMPTS=2,
+        EMAIL_VERIFICATION_RATE_LIMIT_IP_ATTEMPTS=50,
+        EMAIL_VERIFICATION_RATE_LIMIT_WINDOW_SECONDS=60,
+    )
+    def test_send_verification_code_rate_limits_repeated_email(self):
+        payload = {"email": "limit-email@example.com"}
+
+        self.assertEqual(self.post_json("/register/verification-code", payload).status_code, 200)
+        self.assertEqual(self.post_json("/register/verification-code", payload).status_code, 200)
+        res = self.post_json("/register/verification-code", payload)
+
+        self.assertEqual(res.status_code, 429)
+        self.assertEqual(res.json()["code"], 8)
+
+    @override_settings(
+        EMAIL_VERIFICATION_CODE_RESEND_COOLDOWN=0,
+        EMAIL_VERIFICATION_RATE_LIMIT_EMAIL_ATTEMPTS=50,
+        EMAIL_VERIFICATION_RATE_LIMIT_IP_ATTEMPTS=2,
+        EMAIL_VERIFICATION_RATE_LIMIT_WINDOW_SECONDS=60,
+    )
+    def test_password_reset_verification_code_rate_limits_repeated_ip(self):
+        User.objects.create_user(username="reset_one", email="reset-one@example.com", password="abc12345")
+        User.objects.create_user(username="reset_two", email="reset-two@example.com", password="abc12345")
+        User.objects.create_user(username="reset_three", email="reset-three@example.com", password="abc12345")
+
+        first = self.post_json("/password-reset/verification-code", {"email": "reset-one@example.com"})
+        second = self.post_json("/password-reset/verification-code", {"email": "reset-two@example.com"})
+        third = self.post_json("/password-reset/verification-code", {"email": "reset-three@example.com"})
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(third.status_code, 429)
+        self.assertEqual(third.json()["code"], 8)
 
     def test_generate_verification_code_returns_six_digits(self):
         code = generate_verification_code()

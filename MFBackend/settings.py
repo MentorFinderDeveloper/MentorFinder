@@ -18,16 +18,35 @@ https://docs.djangoproject.com/en/4.1/ref/settings/
 """
 
 import os
+import stat
+import sys
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+MANAGEMENT_COMMAND = sys.argv[1] if len(sys.argv) > 1 else ''
+RUNNING_TESTS = any('pytest' in Path(arg).name for arg in sys.argv) or MANAGEMENT_COMMAND == 'test'
+ALLOW_LOCAL_MANAGEMENT_SECRET = (
+    RUNNING_TESTS
+    or (MANAGEMENT_COMMAND in {'check', 'makemigrations', 'migrate'} and '--deploy' not in sys.argv)
+)
+
+
+def _validate_dotenv_permissions(dotenv_path: Path) -> None:
+    if RUNNING_TESTS or not dotenv_path.exists() or os.name == 'nt':
+        return
+    mode = stat.S_IMODE(dotenv_path.stat().st_mode)
+    if mode & 0o077:
+        raise RuntimeError("backend/.env must not be readable, writable, or executable by group/others; run chmod 600 backend/.env")
+
 
 # Load <BASE_DIR>/.env so secrets like the 163 SMTP auth code don't need to be
 # exported manually on every deploy. The .env file stays gitignored.
 try:
     from dotenv import load_dotenv as _load_dotenv
-    _load_dotenv(BASE_DIR / ".env")
+    _dotenv_path = BASE_DIR / ".env"
+    _validate_dotenv_permissions(_dotenv_path)
+    _load_dotenv(_dotenv_path)
 except ModuleNotFoundError:
     pass
 
@@ -35,15 +54,22 @@ except ModuleNotFoundError:
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.1/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-# Loaded from the DJANGO_SECRET_KEY environment variable (written into .env by CI,
-# same mechanism as the 163 SMTP / superuser credentials). The insecure fallback
-# only exists so local development without a .env keeps working; deployment MUST
-# provide DJANGO_SECRET_KEY (enforced in .gitlab-ci.yml).
-SECRET_KEY = os.environ.get(
-    'DJANGO_SECRET_KEY',
-    'django-insecure-xvv16d@^4vu6-_^8w73_wt+xqf-wfppqevn)_zgye!#7l^6=p$',
-)
+def _get_required_secret(name: str, min_length: int = 50) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        if ALLOW_LOCAL_MANAGEMENT_SECRET:
+            return "test-django-secret-key-0123456789abcdefghijklmnopqrstuvwxyz"
+        raise RuntimeError(f"{name} must be configured")
+    if len(value) < min_length:
+        raise RuntimeError(f"{name} must be at least {min_length} characters long")
+    if value.startswith("django-insecure-"):
+        raise RuntimeError(f"{name} must not use a Django development value")
+    if len(set(value)) < 8:
+        raise RuntimeError(f"{name} must contain enough character diversity")
+    return value
+
+
+SECRET_KEY = _get_required_secret('DJANGO_SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 # TODO Start: [Student] Disable debug mode in production
@@ -51,8 +77,18 @@ DEBUG = False
 # TODO End: [Student] Disable debug mode in production
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+_default_allowed_hosts = 'localhost,127.0.0.1,[::1],testserver'
 ALLOWED_HOSTS = [
-    '*'  # Insecure
+    host.strip()
+    for host in os.environ.get('DJANGO_ALLOWED_HOSTS', _default_allowed_hosts).split(',')
+    if host.strip()
 ]
 
 
@@ -152,6 +188,16 @@ STATIC_URL = 'static/'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
+SECURE_SSL_REDIRECT = _env_bool('DJANGO_SECURE_SSL_REDIRECT', not RUNNING_TESTS)
+SESSION_COOKIE_SECURE = _env_bool('DJANGO_SESSION_COOKIE_SECURE', True)
+CSRF_COOKIE_SECURE = _env_bool('DJANGO_CSRF_COOKIE_SECURE', True)
+SECURE_HSTS_SECONDS = int(os.environ.get('DJANGO_SECURE_HSTS_SECONDS', '31536000'))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = _env_bool('DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS', True)
+SECURE_HSTS_PRELOAD = _env_bool('DJANGO_SECURE_HSTS_PRELOAD', True)
+SECURE_CONTENT_TYPE_NOSNIFF = _env_bool('DJANGO_SECURE_CONTENT_TYPE_NOSNIFF', True)
+SECURE_REFERRER_POLICY = os.environ.get('DJANGO_SECURE_REFERRER_POLICY', 'same-origin')
+X_FRAME_OPTIONS = os.environ.get('DJANGO_X_FRAME_OPTIONS', 'DENY')
+
 
 # Email
 # 163 SMTP integration. When EMAIL_HOST_USER and EMAIL_HOST_PASSWORD are both set
@@ -177,8 +223,17 @@ DEFAULT_FROM_EMAIL = os.environ.get(
     (f'MentorFinder <{EMAIL_HOST_USER}>' if EMAIL_HOST_USER else 'MentorFinder <no-reply@mentorfinder.local>'),
 )
 
+ENABLE_DJANGO_ADMIN = os.environ.get('ENABLE_DJANGO_ADMIN', 'false').lower() in ('1', 'true', 'yes')
+DJANGO_ADMIN_URL = os.environ.get('DJANGO_ADMIN_URL', '').strip().strip('/')
+
 EMAIL_VERIFICATION_CODE_TTL_SECONDS = int(os.environ.get('EMAIL_VERIFICATION_CODE_TTL', '600'))
 EMAIL_VERIFICATION_CODE_RESEND_COOLDOWN = int(os.environ.get('EMAIL_VERIFICATION_CODE_COOLDOWN', '60'))
+LOGIN_RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get('LOGIN_RATE_LIMIT_WINDOW_SECONDS', '300'))
+LOGIN_RATE_LIMIT_IP_ATTEMPTS = int(os.environ.get('LOGIN_RATE_LIMIT_IP_ATTEMPTS', '30'))
+LOGIN_RATE_LIMIT_IDENTIFIER_ATTEMPTS = int(os.environ.get('LOGIN_RATE_LIMIT_IDENTIFIER_ATTEMPTS', '10'))
+EMAIL_VERIFICATION_RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get('EMAIL_VERIFICATION_RATE_LIMIT_WINDOW_SECONDS', '3600'))
+EMAIL_VERIFICATION_RATE_LIMIT_IP_ATTEMPTS = int(os.environ.get('EMAIL_VERIFICATION_RATE_LIMIT_IP_ATTEMPTS', '20'))
+EMAIL_VERIFICATION_RATE_LIMIT_EMAIL_ATTEMPTS = int(os.environ.get('EMAIL_VERIFICATION_RATE_LIMIT_EMAIL_ATTEMPTS', '5'))
 
 # AI weekly push (OpenAI-compatible API provided by THU CS lab)
 # Keep API key empty in repo, fill through environment variable in deployment.

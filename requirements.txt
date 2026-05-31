@@ -17,6 +17,7 @@ pypinyin
 apscheduler
 PyYAML
 python-dotenv
+Pillow
 # TODO Start: [Student] Add dependency on uWSGI
 
 # TODO End: [Student] Add dependency on uWSGI
