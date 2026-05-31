@@ -3420,6 +3420,33 @@ class SyncCommandsTest(TestCase):
         self.assertIsNotNone(record.finished_at)
         self.assertEqual(record.error_message, "")
 
+    def test_recorded_scheduler_task_can_pass_record_for_progress_updates(self):
+        from dataset.services.scheduled_task_progress import update_scheduled_task_progress
+        from utils.django_scheduler import _run_recorded_task
+
+        def runner(record):
+            update_scheduled_task_progress(
+                record.id,
+                "正在处理导师 1/2: 测试导师",
+                current=1,
+                total=2,
+            )
+
+        _run_recorded_task(
+            task_name="daily_sync_dataset",
+            runner=runner,
+            error_log_message="should not fail",
+            pass_record=True,
+        )
+
+        record = ScheduledTaskRun.objects.get(task_name="daily_sync_dataset")
+        self.assertEqual(record.status, ScheduledTaskRun.STATUS_SUCCESS)
+        self.assertEqual(record.progress_message, "正在处理导师 1/2: 测试导师")
+        self.assertEqual(record.progress_current, 1)
+        self.assertEqual(record.progress_total, 2)
+        self.assertIn("正在处理导师 1/2", record.progress_log)
+        self.assertIsNotNone(record.last_heartbeat_at)
+
     def test_recorded_scheduler_task_marks_failure(self):
         from utils.django_scheduler import _run_recorded_task
 
@@ -3455,6 +3482,29 @@ class SyncCommandsTest(TestCase):
         self.assertEqual(len(payload["runs"]), 2)
         self.assertEqual(payload["latestByTask"]["daily_sync_dataset"]["status"], ScheduledTaskRun.STATUS_SUCCESS)
         self.assertEqual(payload["latestByTask"]["weekly_home_push"]["errorMessage"], "RuntimeError: boom")
+
+    def test_scheduled_task_runs_latest_endpoint_returns_progress_fields(self):
+        run = ScheduledTaskRun.objects.create(
+            task_name="daily_sync_dataset",
+            status=ScheduledTaskRun.STATUS_RUNNING,
+            progress_message="正在处理导师 3/10: 张三",
+            progress_current=3,
+            progress_total=10,
+            progress_log="开始\n正在处理导师 3/10: 张三",
+            last_heartbeat_at=timezone.now(),
+        )
+
+        response = self.client.get("/dataset/scheduled-task-runs/latest")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        latest = payload["latestByTask"]["daily_sync_dataset"]
+        self.assertEqual(latest["id"], run.id)
+        self.assertEqual(latest["progressMessage"], "正在处理导师 3/10: 张三")
+        self.assertEqual(latest["progressCurrent"], 3)
+        self.assertEqual(latest["progressTotal"], 10)
+        self.assertIn("正在处理导师 3/10", latest["progressLog"])
+        self.assertNotEqual(latest["lastHeartbeatAt"], "")
 
 
 class AIRecentDirectionTruncationTest(TestCase):

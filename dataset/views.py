@@ -133,6 +133,14 @@ def _serialize_scheduled_task_run(run: ScheduledTaskRun):
         "startedAt": run.started_at.isoformat(sep=" ", timespec="seconds") if run.started_at else "",
         "finishedAt": run.finished_at.isoformat(sep=" ", timespec="seconds") if run.finished_at else "",
         "errorMessage": run.error_message,
+        "progressMessage": run.progress_message,
+        "progressCurrent": run.progress_current,
+        "progressTotal": run.progress_total,
+        "progressLog": run.progress_log,
+        "lastHeartbeatAt": (
+            run.last_heartbeat_at.isoformat(sep=" ", timespec="seconds")
+            if run.last_heartbeat_at else ""
+        ),
     }
 
 

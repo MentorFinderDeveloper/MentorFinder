@@ -273,6 +273,11 @@ class ScheduledTaskRun(models.Model):
     started_at = models.DateTimeField(auto_now_add=True, db_index=True, verbose_name="开始时间")
     finished_at = models.DateTimeField(blank=True, null=True, verbose_name="结束时间")
     error_message = models.TextField(blank=True, default="", verbose_name="失败信息")
+    progress_message = models.CharField(max_length=255, blank=True, default="", verbose_name="当前进度")
+    progress_current = models.PositiveIntegerField(blank=True, null=True, verbose_name="当前进度值")
+    progress_total = models.PositiveIntegerField(blank=True, null=True, verbose_name="总进度值")
+    progress_log = models.TextField(blank=True, default="", verbose_name="进度日志")
+    last_heartbeat_at = models.DateTimeField(blank=True, null=True, verbose_name="最近进度更新时间")
 
     class Meta:
         verbose_name = "定时任务执行记录"
