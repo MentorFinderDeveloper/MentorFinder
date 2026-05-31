@@ -339,7 +339,8 @@ def reset_password_with_email_code(req: HttpRequest):
         return request_failed(5, "Verification code is invalid or expired", 400)
 
     user.set_password(password)
-    user.save(update_fields=["password"])
+    user.revoke_jwt_tokens()
+    user.save(update_fields=["password", "jwt_token_version"])
     return request_success({"username": user.username})
 
 
@@ -600,7 +601,8 @@ def _apply_user_role(target_user: User, role: str, mentor: Mentor | None):
 
         target_user.role = User.ROLE_MENTOR
         target_user.mentor_profile = mentor
-        target_user.save(update_fields=["role", "mentor_profile"])
+        target_user.revoke_jwt_tokens()
+        target_user.save(update_fields=["role", "mentor_profile", "jwt_token_version"])
         return None
 
     if mentor is not None:
@@ -608,7 +610,8 @@ def _apply_user_role(target_user: User, role: str, mentor: Mentor | None):
 
     target_user.role = role
     target_user.mentor_profile = None
-    target_user.save(update_fields=["role", "mentor_profile"])
+    target_user.revoke_jwt_tokens()
+    target_user.save(update_fields=["role", "mentor_profile", "jwt_token_version"])
     return None
 
 
@@ -1219,7 +1222,8 @@ def update_username(req: HttpRequest):
         return request_failed(3, "Username already exists", 409)
 
     user.username = username
-    user.save(update_fields=["username"])
+    user.revoke_jwt_tokens()
+    user.save(update_fields=["username", "jwt_token_version"])
 
     return request_success({
         "username": user.username,

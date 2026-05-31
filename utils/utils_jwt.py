@@ -7,7 +7,7 @@ from typing import Optional
 
 from django.core import signing
 
-EXPIRE_IN_SECONDS = 60 * 60 * 24 * 1  # 1 day
+EXPIRE_IN_SECONDS = int(os.environ.get("JWT_EXPIRE_SECONDS", str(60 * 60 * 2)))
 ALT_CHARS = "-_".encode("utf-8")
 JWT_SIGNING_KEY_ENV = "JWT_SIGNING_KEY"
 JWT_SIGNING_KEY_MIN_LENGTH = 32
@@ -64,10 +64,20 @@ def b64url_decode(s: str, decode_to_str=True):
         return base64.b64decode(s, altchars=ALT_CHARS)
 
 
+def _token_version_for_username(username: str) -> int:
+    from account.models import User
+
+    user = User.objects.filter(username=username).only("jwt_token_version").first()
+    if user is None:
+        return 0
+    return user.jwt_token_version
+
+
 def generate_jwt_token(username: str):
     payload = {
         "iat": int(time.time()),
         "exp": int(time.time()) + EXPIRE_IN_SECONDS,
+        "tokenVersion": _token_version_for_username(username),
         "data": {
             "username": username
         }
@@ -90,7 +100,17 @@ def check_jwt_token(token: str) -> Optional[dict]:
         return None
     if exp < time.time():
         return None
-    
+
+    token_version = payload.get("tokenVersion", -1)
+    token_data = payload.get("data", {})
+    username = str(token_data.get("username", "") if isinstance(token_data, dict) else "").strip()
+    if username != "":
+        from account.models import User
+
+        user = User.objects.filter(username=username).only("jwt_token_version").first()
+        if user is not None and token_version != user.jwt_token_version:
+            return None
+
     return payload["data"]
 
 

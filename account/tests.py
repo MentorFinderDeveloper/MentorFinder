@@ -340,6 +340,7 @@ class AccountAuthTests(TestCase):
 
     def test_reset_password_with_email_code_success(self):
         code = self.issue_verification_code("ashitemaru@example.com")
+        old_token = generate_jwt_token("Ashitemaru")
         res = self.post_json(
             "/password-reset",
             {"email": "ashitemaru@example.com", "password": "newpass123", "verificationCode": code},
@@ -349,6 +350,7 @@ class AccountAuthTests(TestCase):
         self.assertEqual(res.json()["username"], "Ashitemaru")
         user = User.objects.get(email="ashitemaru@example.com")
         self.assertTrue(check_password("newpass123", user.password))
+        self.assertIsNone(check_jwt_token(old_token))
         self.assertFalse(EmailVerificationCode.objects.filter(email="ashitemaru@example.com").exists())
 
     def test_reset_password_rejects_invalid_code(self):
@@ -1850,6 +1852,7 @@ class AdminUserManagementTests(TestCase):
         self.student.refresh_from_db()
         self.assertEqual(self.student.role, User.ROLE_BANNED)
         self.assertIsNone(self.student.mentor_profile)
+        self.assertIsNone(check_jwt_token(self.student_token))
 
     def test_banned_user_cannot_access_profile(self):
         self.student.role = User.ROLE_BANNED
@@ -3589,6 +3592,15 @@ class JwtUtilityTests(TestCase):
 
         with patch("utils.utils_jwt.time.time", return_value=1000 + EXPIRE_IN_SECONDS - 1):
             self.assertEqual(check_jwt_token(token), {"username": "fresh-user"})
+
+    def test_check_jwt_token_rejects_revoked_user_token(self):
+        user = User.objects.create_user(username="revoked-user", email="revoked@example.com", password="abc12345")
+        token = generate_jwt_token(user.username)
+
+        user.revoke_jwt_tokens()
+        user.save(update_fields=["jwt_token_version"])
+
+        self.assertIsNone(check_jwt_token(token))
 
     def test_check_jwt_token_rejects_wrong_segment_count(self):
         self.assertIsNone(check_jwt_token("only.two"))

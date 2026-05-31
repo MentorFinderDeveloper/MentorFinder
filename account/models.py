@@ -27,6 +27,7 @@ class User(AbstractUser):
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default="student")
     real_name = models.CharField(max_length=50, blank=True, null=True, verbose_name="真实姓名")
     email = models.EmailField("email address", unique=True)
+    jwt_token_version = models.PositiveIntegerField(default=0, verbose_name="JWT 吊销版本")
     mentor_profile = models.OneToOneField(
         Mentor,
         on_delete=models.SET_NULL,
@@ -37,6 +38,9 @@ class User(AbstractUser):
         limit_choices_to={"owner__isnull": True},
     )
     objects = CustomUserManager()
+
+    def revoke_jwt_tokens(self) -> None:
+        self.jwt_token_version += 1
 
     def serialize(self):
         return {
