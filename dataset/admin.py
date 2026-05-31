@@ -1,5 +1,8 @@
+"""Django admin 配置：注册并定制 `Mentor`、`Paper`、`ScheduledTaskRun` 在管理后台的展示项。"""
+
 from django.contrib import admin
 from .models import Mentor, Paper, ScheduledTaskRun
+
 
 @admin.register(Mentor)
 class MentorAdmin(admin.ModelAdmin):
