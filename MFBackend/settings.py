@@ -11,17 +11,30 @@ https://docs.djangoproject.com/en/4.1/ref/settings/
 """
 
 import os
+import stat
 import sys
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+RUNNING_TESTS = any('pytest' in Path(arg).name for arg in sys.argv)
+
+
+def _validate_dotenv_permissions(dotenv_path: Path) -> None:
+    if RUNNING_TESTS or not dotenv_path.exists() or os.name == 'nt':
+        return
+    mode = stat.S_IMODE(dotenv_path.stat().st_mode)
+    if mode & 0o077:
+        raise RuntimeError("backend/.env must not be readable, writable, or executable by group/others; run chmod 600 backend/.env")
+
 
 # Load <BASE_DIR>/.env so secrets like the 163 SMTP auth code don't need to be
 # exported manually on every deploy. The .env file stays gitignored.
 try:
     from dotenv import load_dotenv as _load_dotenv
-    _load_dotenv(BASE_DIR / ".env")
+    _dotenv_path = BASE_DIR / ".env"
+    _validate_dotenv_permissions(_dotenv_path)
+    _load_dotenv(_dotenv_path)
 except ModuleNotFoundError:
     pass
 
@@ -29,15 +42,22 @@ except ModuleNotFoundError:
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.1/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-# Loaded from the DJANGO_SECRET_KEY environment variable (written into .env by CI,
-# same mechanism as the 163 SMTP / superuser credentials). The insecure fallback
-# only exists so local development without a .env keeps working; deployment MUST
-# provide DJANGO_SECRET_KEY (enforced in .gitlab-ci.yml).
-SECRET_KEY = os.environ.get(
-    'DJANGO_SECRET_KEY',
-    'django-insecure-xvv16d@^4vu6-_^8w73_wt+xqf-wfppqevn)_zgye!#7l^6=p$',
-)
+def _get_required_secret(name: str, min_length: int = 50) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        if RUNNING_TESTS:
+            return "test-django-secret-key-0123456789abcdefghijklmnopqrstuvwxyz"
+        raise RuntimeError(f"{name} must be configured")
+    if len(value) < min_length:
+        raise RuntimeError(f"{name} must be at least {min_length} characters long")
+    if value.startswith("django-insecure-"):
+        raise RuntimeError(f"{name} must not use a Django development value")
+    if len(set(value)) < 8:
+        raise RuntimeError(f"{name} must contain enough character diversity")
+    return value
+
+
+SECRET_KEY = _get_required_secret('DJANGO_SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 # TODO Start: [Student] Disable debug mode in production
@@ -50,9 +70,6 @@ def _env_bool(name: str, default: bool) -> bool:
     if raw_value is None:
         return default
     return raw_value.strip().lower() in ('1', 'true', 'yes', 'on')
-
-
-RUNNING_TESTS = any('pytest' in Path(arg).name for arg in sys.argv)
 
 
 _default_allowed_hosts = 'localhost,127.0.0.1,[::1],testserver'
