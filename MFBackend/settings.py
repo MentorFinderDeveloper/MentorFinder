@@ -17,7 +17,12 @@ from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-RUNNING_TESTS = any('pytest' in Path(arg).name for arg in sys.argv)
+MANAGEMENT_COMMAND = sys.argv[1] if len(sys.argv) > 1 else ''
+RUNNING_TESTS = any('pytest' in Path(arg).name for arg in sys.argv) or MANAGEMENT_COMMAND == 'test'
+ALLOW_LOCAL_MANAGEMENT_SECRET = (
+    RUNNING_TESTS
+    or (MANAGEMENT_COMMAND in {'check', 'makemigrations'} and '--deploy' not in sys.argv)
+)
 
 
 def _validate_dotenv_permissions(dotenv_path: Path) -> None:
@@ -45,7 +50,7 @@ except ModuleNotFoundError:
 def _get_required_secret(name: str, min_length: int = 50) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
-        if RUNNING_TESTS:
+        if ALLOW_LOCAL_MANAGEMENT_SECRET:
             return "test-django-secret-key-0123456789abcdefghijklmnopqrstuvwxyz"
         raise RuntimeError(f"{name} must be configured")
     if len(value) < min_length:
