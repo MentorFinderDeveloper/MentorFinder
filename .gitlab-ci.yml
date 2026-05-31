@@ -13,6 +13,7 @@ build:
     - export BUILD_IMAGE_USERNAME=$CI_REGISTRY_USER
     - export BUILD_IMAGE_PASSWORD=$CI_REGISTRY_PASSWORD
     - test -n "$JWT_SIGNING_KEY" || (echo "JWT_SIGNING_KEY is required" && exit 1)
+    - test -n "$DJANGO_SECRET_KEY" || (echo "DJANGO_SECRET_KEY is required" && exit 1)
     # 把 GitLab CI/CD Variables 中的 163 SMTP 凭据写成 .env，
     # 然后由 Dockerfile 的 COPY . . 随镜像带入，容器启动时由 load_dotenv 读取。
     - echo "EMAIL_HOST_USER=$EMAIL_HOST_USER" > .env
@@ -21,6 +22,7 @@ build:
     - echo "DJANGO_SUPERUSER_EMAIL=$DJANGO_SUPERUSER_EMAIL" >> .env
     - echo "DJANGO_SUPERUSER_PASSWORD=$DJANGO_SUPERUSER_PASSWORD" >> .env
     - echo "JWT_SIGNING_KEY=$JWT_SIGNING_KEY" >> .env
+    - echo "DJANGO_SECRET_KEY=$DJANGO_SECRET_KEY" >> .env
     - echo "THUCS_API_BASE_URL=$THUCS_API_BASE_URL" >> .env
     - echo "THUCS_API_KEY=$THUCS_API_KEY" >> .env
     - deployer build
