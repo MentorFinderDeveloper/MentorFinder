@@ -2,7 +2,7 @@ from django.test import TestCase
 
 from account.models import User
 from dataset.models import Mentor, Paper
-from search.services.engine import search_papers_fuzzy
+from search.services.engine import _split_keyword_logic, search_papers_fuzzy
 from utils.utils_jwt import generate_jwt_token
 
 
@@ -197,6 +197,21 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual([mentor["Chinese_name"] for mentor in res.json()["mentors"]], ["李四"])
 
+    # 验证逻辑关键词拆分支持符号形式的或运算符。
+    def test_split_keyword_logic_supports_pipe_operators(self):
+        self.assertEqual(_split_keyword_logic("张三 | 李四"), [["张三"], ["李四"]])
+        self.assertEqual(_split_keyword_logic("张三 || 李四"), [["张三"], ["李四"]])
+
+    # 验证逻辑关键词拆分支持符号形式的且运算符。
+    def test_split_keyword_logic_supports_ampersand_operators(self):
+        self.assertEqual(_split_keyword_logic("张三 & 机器学习"), [["张三", "机器学习"]])
+        self.assertEqual(_split_keyword_logic("张三 && 机器学习"), [["张三", "机器学习"]])
+
+    # 验证逻辑关键词拆分会忽略多余连续运算符和空白。
+    def test_split_keyword_logic_ignores_redundant_symbol_operators(self):
+        self.assertEqual(_split_keyword_logic("张三 ||| 李四"), [["张三"], ["李四"]])
+        self.assertEqual(_split_keyword_logic("张三 &&&& 机器学习"), [["张三", "机器学习"]])
+
     # 验证论文搜索可按标题精确匹配。
     def test_search_papers_by_exact_title(self):
         res = self.client.get("/search/papers", {"keyword": "机器学习方法研究"})
@@ -288,6 +303,14 @@ class SearchTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["机器学习方法研究"])
+
+    # 验证异常括号输入会回退到平铺逻辑拆分而不是报错。
+    def test_search_logic_falls_back_for_unbalanced_parentheses(self):
+        res = self.client.get("/search/mentors", {"keyword": "(张三 或 李四 且 自然语言处理"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual([mentor["Chinese_name"] for mentor in res.json()["mentors"]], ["李四"])
 
     # 验证论文搜索可按作者名命中论文。
     def test_search_papers_by_author_names(self):
