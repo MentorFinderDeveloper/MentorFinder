@@ -2648,6 +2648,31 @@ class MockWeeklyPushCommandTests(TestCase):
             )
 
 
+def _build_weekly_period_metadata(now):
+    """Derive the weekly-push period metadata for a delivery moment.
+
+    The digest is delivered each Thursday for the seven-day cycle that ran the
+    previous Thursday through Wednesday. A Friday retry must resolve to the same
+    cycle, so we anchor on the most recent Thursday on or before ``now`` and take
+    the seven days ending the day before it.
+
+    Returns ``(period_key, period_start, period_end)`` where the bounds are
+    timezone-aware datetimes covering 00:00:00 to 23:59:59 of the cycle.
+    """
+    tz = timezone.get_current_timezone()
+    delivery_thursday = now.date() - timedelta(days=(now.weekday() - 3) % 7)
+    start_date = delivery_thursday - timedelta(days=7)
+    end_date = delivery_thursday - timedelta(days=1)
+    period_start = timezone.datetime(
+        start_date.year, start_date.month, start_date.day, 0, 0, 0, tzinfo=tz
+    )
+    period_end = timezone.datetime(
+        end_date.year, end_date.month, end_date.day, 23, 59, 59, tzinfo=tz
+    )
+    period_key = f"{start_date:%Y%m%d}_{end_date:%Y%m%d}"
+    return period_key, period_start, period_end
+
+
 @unittest.skip(
     "Obsolete: send_weekly_push now reads UserWeeklyReport instead of "
     "WeeklyPushPaperBucket; these cases pin removed bucket/archive/promote "
