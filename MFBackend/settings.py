@@ -172,8 +172,8 @@ EMAIL_VERIFICATION_CODE_RESEND_COOLDOWN = int(os.environ.get('EMAIL_VERIFICATION
 # THUCS_API_BASE_URL = os.environ.get('THUCS_API_BASE_URL', 'https://api-ai.thucs.cn')
 # THUCS_API_BASE_URL = os.environ.get('THUCS_API_BASE_URL', "")
 # THUCS_API_KEY = os.environ.get('THUCS_API_KEY', '')
-THUCS_API_BASE_URL = os.environ.get('THUCS_API_BASE_URL', "https://dashscope.aliyuncs.com/compatible-mode")
-THUCS_API_KEY = os.environ.get('THUCS_API_KEY', 'sk-f0a508fdb3c44799a4d55ebd55e5853f')
+THUCS_API_BASE_URL = os.environ.get('THUCS_API_BASE_URL', "")
+THUCS_API_KEY = os.environ.get('THUCS_API_KEY', '')
 # THUCS_MODEL_NAME = os.environ.get('THUCS_MODEL_NAME', 'qwen-plus')
 THUCS_MODEL_NAME = os.environ.get('THUCS_MODEL_NAME', 'deepseek-v4-flash')
 
