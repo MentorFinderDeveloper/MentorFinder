@@ -18,7 +18,7 @@ def run_weekly_push_job():
 
 
 class Command(BaseCommand):
-    help = "每周定时执行 send_weekly_push，默认在 Asia/Shanghai 时区周日 14:30 运行"
+    help = "每周定时执行 send_weekly_push，默认在 Asia/Shanghai 时区周日 15:15 运行"
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -26,8 +26,8 @@ class Command(BaseCommand):
             default="sun",
             help="每周执行日期，默认 sun",
         )
-        parser.add_argument("--hour", type=int, default=14, help="每周执行小时，默认 14")
-        parser.add_argument("--minute", type=int, default=30, help="每周执行分钟，默认 30")
+        parser.add_argument("--hour", type=int, default=15, help="每周执行小时，默认 15")
+        parser.add_argument("--minute", type=int, default=15, help="每周执行分钟，默认 15")
 
     def handle(self, *args, **options):
         from apscheduler.schedulers.blocking import BlockingScheduler

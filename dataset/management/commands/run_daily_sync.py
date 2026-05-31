@@ -49,7 +49,7 @@ class Command(BaseCommand):
         )
         scheduler.add_job(
             run_weekly_push_job,
-            trigger=CronTrigger(day_of_week="sun", hour=14, minute=30, timezone=timezone),
+            trigger=CronTrigger(day_of_week="sun", hour=15, minute=15, timezone=timezone),
             id="weekly_home_push",
             replace_existing=True,
             coalesce=True,
@@ -59,7 +59,7 @@ class Command(BaseCommand):
 
         self.stdout.write(
             self.style.SUCCESS(
-                f"已启动定时任务：每天 {hour:02d}:{minute:02d} 同步数据；每周日 14:30 生成主页推送 ({settings.TIME_ZONE})"
+                f"已启动定时任务：每天 {hour:02d}:{minute:02d} 同步数据；每周日 15:15 生成主页推送 ({settings.TIME_ZONE})"
             )
         )
 
