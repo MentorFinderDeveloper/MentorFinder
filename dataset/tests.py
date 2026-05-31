@@ -1,3 +1,8 @@
+"""`dataset` 应用的测试套件：包含模型与功能的单元测试和集成测试。
+
+运行方式示例：`pytest` 或 `python manage.py test dataset`。
+"""
+
 from django.test import TestCase, Client
 from django.contrib.auth.models import User
 from django.utils import timezone

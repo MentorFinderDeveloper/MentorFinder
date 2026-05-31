@@ -9,6 +9,9 @@ from django.conf import settings
 from dataset.models import Mentor, Paper
 
 
+"""研究分析：支持规则统计与调用 AI 服务来总结导师近期研究方向。"""
+
+
 def call_thucs_chat_completion(
     *,
     system_prompt: str,

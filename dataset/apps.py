@@ -1,3 +1,5 @@
+"""应用配置：`dataset` 模块的 Django AppConfig。"""
+
 from django.apps import AppConfig
 
 

@@ -1,3 +1,9 @@
+"""HTTP 视图：论文时间线、导师与论文管理、周报接口与定时任务查询等。
+
+重要端点包括：论文时间线视图（按研究方向分页/日历）、导师详情与管理、
+系统周报与用户专属周报接口、以及定时任务运行记录查询。
+"""
+
 import json
 from collections import defaultdict
 from datetime import date, timedelta
@@ -46,6 +52,7 @@ SCHEDULED_TASK_RUN_MAX_LIMIT = 50
 
 
 def _extract_token(req: HttpRequest) -> str:
+    """从请求头提取 token，支持 `Bearer <token>` 或裸 token。"""
     auth_header = req.headers.get("Authorization", "").strip()
     if auth_header == "":
         return ""
@@ -55,6 +62,7 @@ def _extract_token(req: HttpRequest) -> str:
 
 
 def _require_admin(req: HttpRequest):
+    """确保请求来自管理员，返回错误响应或 None（用于直接返回）。"""
     token = _extract_token(req)
     if token == "":
         return request_failed(2, "Unauthorized", 401)
@@ -81,6 +89,7 @@ def _require_admin(req: HttpRequest):
 
 
 def _resolve_user(req: HttpRequest, reject_banned: bool = True):
+    """从请求解析用户（若未提供 token 返回 None）；用于允许匿名访问的场景。"""
     token = _extract_token(req)
     if token == "":
         return None
@@ -89,6 +98,7 @@ def _resolve_user(req: HttpRequest, reject_banned: bool = True):
 
 
 def _require_user(req: HttpRequest):
+    """确保请求来自已登录用户，返回 `(user, None)` 或 `(None, error_response)`。"""
     user = _resolve_user(req, reject_banned=False)
     if user is None:
         return None, request_failed(2, "Unauthorized", 401)

@@ -1,3 +1,8 @@
+"""周报推送文件/存储层工具：管理 `WeeklyPushPaperBucket` 的载入/追加/归档/提升等操作。
+
+负责计算周期边界、加载按日的 paper id 列表，以及将分阶段（NEXT）payload 提升为当前（CURRENT）。
+"""
+
 from datetime import datetime, timedelta
 
 from django.db import transaction

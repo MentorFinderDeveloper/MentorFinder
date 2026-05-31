@@ -1,6 +1,13 @@
+"""清华计算机系导师爬虫与姓名拼音工具。
+
+用于从公开网页抓取导师的中文名、拼音英文名、研究方向、邮箱与个人简介。
+该模块包含部分测试/脚本化代码，运行时会发起外部 HTTP 请求。
+"""
+
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
+import re
 from pypinyin import lazy_pinyin  # 新增导入拼音库
 
 url = "https://www.cs.tsinghua.edu.cn/szzk/jzgml.htm"
