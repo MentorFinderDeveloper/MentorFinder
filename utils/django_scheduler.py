@@ -63,27 +63,11 @@ def start_django_scheduler() -> bool:
         scheduler = BackgroundScheduler(timezone=timezone)
 
         if config["run_daily_sync_scheduler"]:
+            # 每天 04:00 / 12:00 / 20:00 各跑一次。用一个 job + 多小时 Cron，
+            # 避免多个 add_job 撞同一个 id 互相覆盖（同 id + replace_existing 只会保留最后一个）。
             scheduler.add_job(
                 _run_sync_dataset_job,
-                trigger=CronTrigger(hour=4, minute=0, timezone=timezone),
-                id="daily_sync_dataset",
-                replace_existing=True,
-                coalesce=True,
-                max_instances=1,
-                misfire_grace_time=3600,
-            )
-            scheduler.add_job(
-                _run_sync_dataset_job,
-                trigger=CronTrigger(hour=12, minute=0, timezone=timezone),
-                id="daily_sync_dataset",
-                replace_existing=True,
-                coalesce=True,
-                max_instances=1,
-                misfire_grace_time=3600,
-            )
-            scheduler.add_job(
-                _run_sync_dataset_job,
-                trigger=CronTrigger(hour=20, minute=0, timezone=timezone),
+                trigger=CronTrigger(hour="4,12,20", minute=0, timezone=timezone),
                 id="daily_sync_dataset",
                 replace_existing=True,
                 coalesce=True,
