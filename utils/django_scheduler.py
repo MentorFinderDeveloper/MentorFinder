@@ -52,7 +52,7 @@ def start_django_scheduler() -> bool:
             )
             scheduler.add_job(
                 _run_weekly_home_push_job,
-                trigger=CronTrigger(day_of_week="mon", hour=7, minute=0, timezone=timezone),
+                trigger=CronTrigger(day_of_week="sun", hour=15, minute=15, timezone=timezone),
                 id="weekly_home_push",
                 replace_existing=True,
                 coalesce=True,
@@ -63,7 +63,7 @@ def start_django_scheduler() -> bool:
         if config["run_weekly_push_scheduler"]:
             scheduler.add_job(
                 _run_weekly_email_push_job,
-                trigger=CronTrigger(day_of_week="sat", hour=4, minute=20, timezone=timezone),
+                trigger=CronTrigger(day_of_week="sun", hour=15, minute=15, timezone=timezone),
                 id="weekly_email_push",
                 replace_existing=True,
                 coalesce=True,
