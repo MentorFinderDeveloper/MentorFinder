@@ -21,7 +21,7 @@ MANAGEMENT_COMMAND = sys.argv[1] if len(sys.argv) > 1 else ''
 RUNNING_TESTS = any('pytest' in Path(arg).name for arg in sys.argv) or MANAGEMENT_COMMAND == 'test'
 ALLOW_LOCAL_MANAGEMENT_SECRET = (
     RUNNING_TESTS
-    or (MANAGEMENT_COMMAND in {'check', 'makemigrations'} and '--deploy' not in sys.argv)
+    or (MANAGEMENT_COMMAND in {'check', 'makemigrations', 'migrate'} and '--deploy' not in sys.argv)
 )
 
 
