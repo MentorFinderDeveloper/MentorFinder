@@ -14,6 +14,7 @@ DEFAULT_SEARCH_PAGE_SIZE = 10
 MAX_SEARCH_PAGE_SIZE = 100
 
 
+# 返回搜索模块的健康检查结果。
 def health(req: HttpRequest):
     if req.method != "GET":
         return BAD_METHOD
@@ -24,6 +25,7 @@ def health(req: HttpRequest):
     })
 
 
+# 读取并校验搜索关键词参数。
 def _get_keyword(req: HttpRequest) -> str:
     keyword = require(
         req.GET,
@@ -35,18 +37,21 @@ def _get_keyword(req: HttpRequest) -> str:
     return keyword
 
 
+# 读取并校验搜索模式参数。
 def _get_search_mode(req: HttpRequest) -> str:
     search_mode = str(req.GET.get("search_mode", "exact")).strip().lower()
     assert search_mode in {"exact", "fuzzy"}, "Invalid parameters. [search_mode] must be exact or fuzzy"
     return search_mode
 
 
+# 读取并校验排序模式参数。
 def _get_sort_mode(req: HttpRequest) -> str:
     sort_mode = str(req.GET.get("sort_mode", "default")).strip().lower()
     assert sort_mode in {"default", "early", "late"}, "Invalid parameters. [sort_mode] must be default, early or late"
     return sort_mode
 
 
+# 将输入值解析为限定范围内的正整数。
 def _parse_positive_int(raw_value, default_value: int, minimum: int = 1, maximum: int | None = None) -> int:
     try:
         parsed = int(str(raw_value).strip())
@@ -60,6 +65,7 @@ def _parse_positive_int(raw_value, default_value: int, minimum: int = 1, maximum
     return parsed
 
 
+# 读取导师可见性过滤参数。
 def _get_visibility(req: HttpRequest) -> str:
     visibility = str(req.GET.get("visibility", "all")).strip().lower()
     if visibility not in {"all", "mine", "public"}:
@@ -67,6 +73,7 @@ def _get_visibility(req: HttpRequest) -> str:
     return visibility
 
 
+# 读取并规范化分页参数。
 def _get_pagination(req: HttpRequest) -> tuple[int, int]:
     page = _parse_positive_int(req.GET.get("page"), DEFAULT_SEARCH_PAGE)
     page_size = _parse_positive_int(
@@ -77,6 +84,7 @@ def _get_pagination(req: HttpRequest) -> tuple[int, int]:
     return page, page_size
 
 
+# 从请求头中解析当前登录用户。
 def _resolve_user(req: HttpRequest):
     auth_header = req.headers.get("Authorization", "").strip()
     if auth_header == "":
@@ -89,6 +97,7 @@ def _resolve_user(req: HttpRequest):
     return resolve_user_from_token(token)
 
 
+# 处理导师搜索接口请求并返回分页结果。
 @CheckRequire
 def mentors(req: HttpRequest):
     if req.method != "GET":
@@ -115,6 +124,7 @@ def mentors(req: HttpRequest):
     })
 
 
+# 处理论文搜索接口请求并返回分页结果。
 @CheckRequire
 def papers(req: HttpRequest):
     if req.method != "GET":
