@@ -74,13 +74,49 @@ def _split_keyword_logic(keyword: str) -> list[list[str]]:
     if normalized_keyword == "":
         return []
 
-    or_groups = [segment.strip() for segment in re.split(r"\s*(?:或|\|\|?)\s*", normalized_keyword) if segment.strip() != ""]
+    def split_by_operator(text: str, operator_chars: set[str], operator_words: set[str]) -> list[str]:
+        segments: list[str] = []
+        current_chars: list[str] = []
+        index = 0
+        while index < len(text):
+            char = text[index]
+            if char in operator_words:
+                segment = "".join(current_chars).strip()
+                if segment != "":
+                    segments.append(segment)
+                current_chars.clear()
+                index += 1
+                while index < len(text) and text[index].isspace():
+                    index += 1
+                continue
+
+            if char in operator_chars:
+                segment = "".join(current_chars).strip()
+                if segment != "":
+                    segments.append(segment)
+                current_chars.clear()
+                index += 1
+                while index < len(text) and text[index] in operator_chars:
+                    index += 1
+                while index < len(text) and text[index].isspace():
+                    index += 1
+                continue
+
+            current_chars.append(char)
+            index += 1
+
+        segment = "".join(current_chars).strip()
+        if segment != "":
+            segments.append(segment)
+        return segments
+
+    or_groups = split_by_operator(normalized_keyword, {"|"}, {"或"})
     if not or_groups:
         return [[normalized_keyword]]
 
     logic_groups: list[list[str]] = []
     for group in or_groups:
-        and_terms = [term.strip() for term in re.split(r"\s*(?:且|&&?)\s*", group) if term.strip() != ""]
+        and_terms = split_by_operator(group, {"&"}, {"且"})
         logic_groups.append(and_terms if and_terms else [group])
 
     return logic_groups
