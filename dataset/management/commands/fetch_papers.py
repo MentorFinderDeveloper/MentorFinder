@@ -25,7 +25,13 @@ class Command(BaseCommand):
     ARXIV_CLIENT_PAGE_SIZE = 100
     ARXIV_CLIENT_DELAY_SECONDS = 5.0
     ARXIV_CLIENT_NUM_RETRIES = 5
-    ARXIV_RATE_LIMIT_BACKOFF_SECONDS = [20, 60, 180]
+    # 429 限流：首次失败后按此间隔（秒）退避重试，用尽则跳过该导师。
+    ARXIV_RATE_LIMIT_BACKOFF_SECONDS = [20, 40, 60]
+    # arxiv 库内部请求默认不带超时，遇到服务端挂起会无限阻塞、卡死整轮同步在某位导师。
+    # 给它的 HTTP 请求注入这个超时作为兜底（秒）。
+    ARXIV_HTTP_TIMEOUT_SECONDS = 30
+    # 请求超时：首次超时后按此间隔（秒）退避重试，最多 3 次，用尽则跳过该导师。
+    ARXIV_TIMEOUT_RETRY_BACKOFF_SECONDS = [20, 40, 60]
     PAPERS_PER_MENTOR_LIMIT = 10
 
     SEMANTIC_SCHOLAR_API_TEMPLATE = "https://api.semanticscholar.org/graph/v1/paper/ARXIV:{arxiv_id}"
@@ -50,20 +56,32 @@ class Command(BaseCommand):
             help="Which weekly push cycle to record into, defaults to auto",
         )
         parser.add_argument("--scheduled-run-id", type=int, default=None)
+        parser.add_argument(
+            "--start-index",
+            type=int,
+            default=0,
+            help="从第 N 位导师之后开始处理（断点续跑用，0 表示从头）",
+        )
 
     def handle(self, *args, **options):
         self.created_paper_ids = set()
-        mentors = Mentor.objects.all()
-        total_mentors = mentors.count()
+        # 按 id 稳定排序，保证“第 N 位导师”的含义在多次（含续跑）运行间一致。
+        mentors = list(Mentor.objects.all().order_by("id"))
+        total_mentors = len(mentors)
         scheduled_run_id = options["scheduled_run_id"]
+        start_index = max(0, options.get("start_index") or 0)
+        resume_note = f"（从第 {start_index} 位之后续跑）" if start_index > 0 else ""
         update_scheduled_task_progress(
             scheduled_run_id,
-            f"开始抓取论文，共 {total_mentors} 位导师",
-            current=0,
+            f"开始抓取论文，共 {total_mentors} 位导师{resume_note}",
+            current=min(start_index, total_mentors),
             total=total_mentors,
         )
 
         for index, mentor in enumerate(mentors, start=1):
+            # 续跑时跳过已处理过的前 start_index 位导师。
+            if index <= start_index:
+                continue
             update_scheduled_task_progress(
                 scheduled_run_id,
                 f"正在处理导师 {index}/{total_mentors}: {mentor.Chinese_name} ({mentor.English_name or '无英文名'})",
@@ -165,38 +183,75 @@ class Command(BaseCommand):
 
     def fetch_from_arxiv(self, mentor):
         self.stdout.write(f"  -> 正在 arXiv 搜索: {mentor.English_name}...")
-        
-        for attempt_index in range(len(self.ARXIV_RATE_LIMIT_BACKOFF_SECONDS) + 1):
+
+        # 429 限流与请求超时各自独立计数重试；其他错误直接放弃这位导师。
+        rate_limit_attempt = 0
+        timeout_attempt = 0
+        while True:
             try:
                 self._fetch_from_arxiv_once(mentor)
                 return
             except Exception as e:
-                if not self._is_arxiv_rate_limit_error(e):
-                    self.stdout.write(self.style.ERROR(f"  arXiv 抓取报错: {e}"))
-                    return
-
-                if attempt_index >= len(self.ARXIV_RATE_LIMIT_BACKOFF_SECONDS):
-                    self.stdout.write(self.style.ERROR(f"  arXiv 抓取报错: {e}"))
-                    return
-
-                backoff_seconds = self.ARXIV_RATE_LIMIT_BACKOFF_SECONDS[attempt_index]
-                self.stdout.write(
-                    self.style.WARNING(
-                        f"  arXiv 返回 429，等待 {backoff_seconds} 秒后重试（第 {attempt_index + 1} 次）..."
+                if self._is_arxiv_rate_limit_error(e):
+                    if rate_limit_attempt >= len(self.ARXIV_RATE_LIMIT_BACKOFF_SECONDS):
+                        self.stdout.write(self.style.ERROR(f"  arXiv 抓取报错（429 重试已用尽）: {e}"))
+                        return
+                    backoff_seconds = self.ARXIV_RATE_LIMIT_BACKOFF_SECONDS[rate_limit_attempt]
+                    rate_limit_attempt += 1
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f"  arXiv 返回 429，等待 {backoff_seconds} 秒后重试（第 {rate_limit_attempt} 次）..."
+                        )
                     )
-                )
-                time.sleep(backoff_seconds)
+                    time.sleep(backoff_seconds)
+                    continue
+
+                if self._is_arxiv_timeout_error(e):
+                    if timeout_attempt >= len(self.ARXIV_TIMEOUT_RETRY_BACKOFF_SECONDS):
+                        self.stdout.write(self.style.ERROR(f"  arXiv 抓取报错（超时重试已用尽）: {e}"))
+                        return
+                    backoff_seconds = self.ARXIV_TIMEOUT_RETRY_BACKOFF_SECONDS[timeout_attempt]
+                    timeout_attempt += 1
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f"  arXiv 请求超时，等待 {backoff_seconds} 秒后重试（第 {timeout_attempt} 次）..."
+                        )
+                    )
+                    time.sleep(backoff_seconds)
+                    continue
+
+                self.stdout.write(self.style.ERROR(f"  arXiv 抓取报错: {e}"))
+                return
 
     def _build_arxiv_client(self):
-        return arxiv.Client(
+        client = arxiv.Client(
             page_size=self.ARXIV_CLIENT_PAGE_SIZE,
             delay_seconds=self.ARXIV_CLIENT_DELAY_SECONDS,
             num_retries=self.ARXIV_CLIENT_NUM_RETRIES,
         )
+        # arxiv 2.x 内部用 requests.Session().get(url) 抓取且不带 timeout，服务端挂起时会
+        # 无限阻塞，导致整轮同步卡死在某位导师。这里包一层默认超时作为兜底：超时会抛
+        # requests 异常，被 fetch_from_arxiv 当作非-429 错误捕获 → 记录日志并跳到下一位导师。
+        session = getattr(client, "_session", None)
+        if session is not None:
+            original_request = session.request
+
+            def _request_with_timeout(method, url, **kwargs):
+                kwargs.setdefault("timeout", self.ARXIV_HTTP_TIMEOUT_SECONDS)
+                return original_request(method, url, **kwargs)
+
+            session.request = _request_with_timeout
+        return client
 
     def _is_arxiv_rate_limit_error(self, error: Exception) -> bool:
         error_message = str(error)
         return "HTTP 429" in error_message or "429" in error_message
+
+    def _is_arxiv_timeout_error(self, error: Exception) -> bool:
+        if isinstance(error, requests.exceptions.Timeout):
+            return True
+        error_message = str(error).lower()
+        return "timed out" in error_message or "timeout" in error_message
 
     def _clean_arxiv_author_names(self, author_names: str) -> str:
         parts = [part.strip() for part in str(author_names or "").split(",")]
