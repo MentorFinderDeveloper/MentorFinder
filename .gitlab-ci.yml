@@ -21,6 +21,8 @@ build:
     - echo "DJANGO_SUPERUSER_EMAIL=$DJANGO_SUPERUSER_EMAIL" >> .env
     - echo "DJANGO_SUPERUSER_PASSWORD=$DJANGO_SUPERUSER_PASSWORD" >> .env
     - echo "JWT_SIGNING_KEY=$JWT_SIGNING_KEY" >> .env
+    - echo "THUCS_API_BASE_URL=$THUCS_API_BASE_URL" >> .env
+    - echo "THUCS_API_KEY=$THUCS_API_KEY" >> .env
     - deployer build
 
 unit-test:
