@@ -32,6 +32,7 @@ RESUME_PAPERS_PHASE_MIN_TOTAL = 3
 RESUME_DELAY_SECONDS = 10
 
 
+# 按启动配置初始化 Django 进程内调度器，并在需要时恢复中断任务。
 def start_django_scheduler() -> bool:
     """Start the in-process scheduler once for the Django web process."""
     if not _should_start_scheduler():
@@ -124,6 +125,7 @@ def start_django_scheduler() -> bool:
         return True
 
 
+# 判断当前进程是否适合启动调度器。
 def _should_start_scheduler() -> bool:
     argv = set(sys.argv[1:])
     management_commands_without_scheduler = {
@@ -145,12 +147,14 @@ def _should_start_scheduler() -> bool:
     return True
 
 
+# 判断 runserver 当前是否处于实际处理请求的主进程。
 def _is_runserver_main_process() -> bool:
     import os
 
     return os.environ.get("RUN_MAIN") == "true"
 
 
+# 执行每日数据同步定时任务。
 def _run_sync_dataset_job():
     _run_recorded_task(
         task_name="daily_sync_dataset",
@@ -160,6 +164,7 @@ def _run_sync_dataset_job():
     )
 
 
+# 执行首页周推送内容生成任务。
 def _run_weekly_home_push_job():
     _run_recorded_task(
         task_name="weekly_home_push",
@@ -168,7 +173,9 @@ def _run_weekly_home_push_job():
     )
 
 
+# 执行周报生成与邮件推送任务。
 def _run_weekly_email_push_job():
+    # 顺序执行周报生成与周推送发送。
     def runner():
         call_command("generate_user_weekly_reports")
         call_command("send_weekly_push")
@@ -180,6 +187,7 @@ def _run_weekly_email_push_job():
     )
 
 
+# 清理因进程中断而残留的 running 状态任务记录。
 def _mark_orphaned_running_tasks_failed(exclude_id=None) -> int:
     """把上一轮进程残留、卡在 running 的任务判死。
 
@@ -211,6 +219,7 @@ def _mark_orphaned_running_tasks_failed(exclude_id=None) -> int:
     return updated
 
 
+# 查找最近一条可用于断点续跑的数据同步任务记录。
 def _find_resumable_sync_run():
     """找出最近一次被中断、可从断点续跑的 daily_sync 记录。
 
@@ -233,6 +242,7 @@ def _find_resumable_sync_run():
     )
 
 
+# 使用已有任务记录从断点继续执行数据同步。
 def _resume_sync_dataset_job(record_id: int, start_index: int, skip_mentors: bool):
     """复用既有记录，从断点继续跑 sync_dataset（不新建记录，进度连续）。"""
     from dataset.models import ScheduledTaskRun
@@ -269,6 +279,7 @@ def _resume_sync_dataset_job(record_id: int, start_index: int, skip_mentors: boo
     record.save(update_fields=["status", "finished_at", "error_message"])
 
 
+# 判断是否已有同名且心跳仍然新鲜的运行中任务。
 def _has_fresh_running_task(task_name: str) -> bool:
     """判断是否已有同名任务正在运行（心跳新鲜），用于避免重复触发。"""
     from dataset.models import ScheduledTaskRun
@@ -285,6 +296,7 @@ def _has_fresh_running_task(task_name: str) -> bool:
     )
 
 
+# 创建任务运行记录并统一处理执行结果与异常状态。
 def _run_recorded_task(*, task_name: str, runner, error_log_message: str, pass_record: bool = False):
     from dataset.models import ScheduledTaskRun
 
@@ -317,6 +329,7 @@ def _run_recorded_task(*, task_name: str, runner, error_log_message: str, pass_r
     record.save(update_fields=["status", "finished_at", "error_message"])
 
 
+# 格式化异常信息，便于写入任务记录和日志。
 def _format_exception(exc: Exception) -> str:
     message = str(exc).strip()
     if message:
