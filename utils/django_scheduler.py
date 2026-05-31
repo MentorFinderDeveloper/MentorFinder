@@ -43,7 +43,7 @@ def start_django_scheduler() -> bool:
         if config["run_daily_sync_scheduler"]:
             scheduler.add_job(
                 _run_sync_dataset_job,
-                trigger=CronTrigger(hour=13, minute=55, timezone=timezone),
+                trigger=CronTrigger(hour=14, minute=15, timezone=timezone),
                 id="daily_sync_dataset",
                 replace_existing=True,
                 coalesce=True,
