@@ -1,3 +1,5 @@
+"""URL 路由：将 `dataset` 应用的视图函数暴露为 HTTP 接口。"""
+
 from django.urls import path
 
 import dataset.views as views

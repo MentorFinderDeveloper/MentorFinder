@@ -1,3 +1,5 @@
+"""每周推送摘要构建：生成固定摘要、调用 AI 生成摘要并构造 payload。"""
+
 from collections import Counter
 from datetime import timedelta
 

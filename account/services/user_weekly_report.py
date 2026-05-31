@@ -1,3 +1,5 @@
+"""用户周报服务：生成、查询并持久化用户专属周报。"""
+
 from collections import defaultdict
 
 from django.db import transaction

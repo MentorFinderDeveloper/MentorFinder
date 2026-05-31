@@ -1,3 +1,5 @@
+"""周报构建与邮件渲染：根据关注的导师与板块对论文进行分组并生成邮件正文。"""
+
 from collections import Counter
 from collections.abc import Iterable
 
