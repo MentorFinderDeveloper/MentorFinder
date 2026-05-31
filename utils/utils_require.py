@@ -35,6 +35,7 @@ MAX_AUTHOR_NAMES_LENGTH = 1000      # INPUT_LIMITS.AUTHOR_NAMES
 MAX_KEYWORD_LENGTH = 200            # INPUT_LIMITS.KEYWORD
 
 
+# 校验字符串长度是否超限，并在超限时抛出请求参数错误。
 def check_length(value, key, max_length=MAX_CHAR_LENGTH, err_code=-2):
     """Ensure a string value does not exceed `max_length` characters.
 
@@ -51,7 +52,9 @@ def check_length(value, key, max_length=MAX_CHAR_LENGTH, err_code=-2):
 
 
 # A decorator function for processing `require` in view function.
+# 包装参数校验函数，并将异常统一转换为失败响应。
 def CheckRequire(check_fn):
+    # 捕获校验异常并返回统一的 400 JSON 响应。
     @wraps(check_fn)
     def decorated(*args, **kwargs):
         try:
@@ -65,6 +68,7 @@ def CheckRequire(check_fn):
 
 # Here err_code == -2 denotes "Error in request body"
 # And err_code == -1 denotes "Error in request URL parsing"
+# 从请求体中提取并校验指定字段的存在性、类型和长度。
 def require(body, key, type="string", err_msg=None, err_code=-2, max_length=None):
 
     if key not in body.keys():

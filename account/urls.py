@@ -1,3 +1,8 @@
+"""URL 路由：将 HTTP 路径映射到 `account.views` 中的视图函数。
+
+路由均使用函数视图，具体的请求方法检查在视图内部完成。
+"""
+
 from django.urls import path
 from django.views.decorators.csrf import csrf_exempt
 

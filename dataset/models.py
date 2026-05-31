@@ -1,3 +1,8 @@
+"""数据模型：定义 `Paper`、`Mentor`、`WeeklyPaperPush`、`ScheduledTaskRun` 等核心模型。
+
+包含作者名与导师匹配、导师论文列表的维护、周报推送记录与定时任务执行记录。
+"""
+
 import re
 
 from django.conf import settings
@@ -29,6 +34,11 @@ from dataset.services.author_matching import is_exact_english_author_match
 
 
 class Paper(models.Model):
+    """论文模型，包含题目、摘要、作者列表、学科与绑定的导师 id 列表。
+
+    提供解析作者与导师匹配的工具方法（`get_author_mentor_ids` 等），用于在导入
+    或同步论文时自动与 `Mentor` 进行关联。
+    """
     title = models.CharField(max_length=255, verbose_name="论文题目")
     abstract = models.TextField(blank=True, null=True, verbose_name="摘要")
     publish_date = models.DateField(blank=True, null=True, verbose_name="发表日期")
@@ -164,6 +174,11 @@ class Paper(models.Model):
         self.save(update_fields=["mentor_ids"])
 
 class Mentor(models.Model):
+    """导师模型，保存导师的中文/英文名、研究方向、邮箱、画像以及关联的论文 id 列表。
+
+    论文 id 列以逗号分隔字符串存储，提供 `get_paper_id_list` / `set_paper_id_list` 等便捷方法。
+    支持私有导师（`owner` 字段非空），并提供 `is_visible_to` 判断可见性。
+    """
     Chinese_name = models.CharField(max_length=100, verbose_name="中文姓名")
     English_name = models.CharField(max_length=100, blank=True, null=True, verbose_name="英文名")
     research_direction = models.CharField(max_length=255, verbose_name="研究方向")
@@ -224,6 +239,7 @@ class Mentor(models.Model):
 
 
 class WeeklyPaperPush(models.Model):
+    """系统每周推送记录，用于保存推送的元信息和生成的内容。"""
     week_start = models.DateField(unique=True, verbose_name="周开始日期")
     week_end = models.DateField(verbose_name="周结束日期")
     paper_count = models.IntegerField(default=0, verbose_name="论文数量")
@@ -258,6 +274,7 @@ class WeeklyPaperPush(models.Model):
 
 
 class ScheduledTaskRun(models.Model):
+    """记录后台定时任务的运行状态与进度日志，供管理与监控使用。"""
     STATUS_RUNNING = "running"
     STATUS_SUCCESS = "success"
     STATUS_FAILED = "failed"

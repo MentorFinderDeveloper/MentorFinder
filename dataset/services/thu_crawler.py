@@ -1,3 +1,9 @@
+"""清华计算机系导师爬虫与姓名拼音工具。
+
+用于从公开网页抓取导师的中文名、拼音英文名、研究方向、邮箱与个人简介。
+该模块包含部分测试/脚本化代码，运行时会发起外部 HTTP 请求。
+"""
+
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
@@ -13,7 +19,8 @@ BASE_HEADERS = {
     # "Cookie": "JSESSIONID=9BADD2F3B34224773C1E64E4F391F457.yunxing21"
 }
 
-BRACKETED_TEXT_RE = re.compile(r"\s*[\(（][^()（）]*[\)）]\s*")
+OPEN_BRACKETS = {"(", "（"}
+CLOSE_BRACKETS = {")", "）"}
 
 def fetch_html(url: str) -> str:
     resp = requests.get(url, headers=BASE_HEADERS, timeout=15)
@@ -27,10 +34,35 @@ def strip_bracketed_name_content(name: str) -> str:
     if normalized == "":
         return ""
 
-    previous = None
-    while previous != normalized:
-        previous = normalized
-        normalized = BRACKETED_TEXT_RE.sub(" ", normalized)
+    ranges: list[tuple[int, int]] = []
+    stack: list[int] = []
+    for index, char in enumerate(normalized):
+        if char in OPEN_BRACKETS:
+            stack.append(index)
+        elif char in CLOSE_BRACKETS and stack:
+            start = stack.pop()
+            ranges.append((start, index + 1))
+
+    if not ranges:
+        return normalized
+
+    merged_ranges: list[tuple[int, int]] = []
+    for start, end in sorted(ranges):
+        if not merged_ranges or start > merged_ranges[-1][1]:
+            merged_ranges.append((start, end))
+            continue
+
+        previous_start, previous_end = merged_ranges[-1]
+        merged_ranges[-1] = (previous_start, max(previous_end, end))
+
+    cleaned_parts: list[str] = []
+    previous_end = 0
+    for start, end in merged_ranges:
+        cleaned_parts.append(normalized[previous_end:start])
+        cleaned_parts.append(" ")
+        previous_end = end
+    cleaned_parts.append(normalized[previous_end:])
+    normalized = "".join(cleaned_parts)
 
     return " ".join(normalized.split()).strip()
 
@@ -105,6 +137,42 @@ def _english_name_variants(english_name: str) -> set[str]:
     return variants
 
 
+def _extract_email_from_text(text: str) -> str | None:
+    allowed_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._%+-@")
+    candidate_chars: list[str] = []
+
+    def flush_candidate() -> str | None:
+        if not candidate_chars:
+            return None
+
+        candidate = "".join(candidate_chars).strip(".,;:!?()[]{}<>\"'，。；：！？（）【】《》")
+        candidate_chars.clear()
+        if candidate.count("@") != 1:
+            return None
+
+        local_part, domain = candidate.split("@", 1)
+        if not local_part or not domain or "." not in domain:
+            return None
+        if domain.startswith(".") or domain.endswith("."):
+            return None
+
+        suffix = domain.rsplit(".", 1)[-1]
+        if len(suffix) < 2 or not suffix.isalpha():
+            return None
+        return candidate
+
+    for char in str(text or ""):
+        if char in allowed_chars:
+            candidate_chars.append(char)
+            continue
+
+        candidate = flush_candidate()
+        if candidate is not None:
+            return candidate
+
+    return flush_candidate()
+
+
 def crawl_mentor_by_name(chinese_name: str = "", english_name: str = "") -> dict | None:
     target_cn = strip_bracketed_name_content(chinese_name)
     target_en_variants = _english_name_variants(english_name)
@@ -152,11 +220,13 @@ def parse_mentor_detail(detail_url: str) -> dict:
 
     # 查找内容中邮箱
     email = None
-    email_tag = soup.find('p', string=re.compile("邮箱")) if soup.find('p', string=re.compile("邮箱")) else soup.find('p', string=re.compile("邮件"))
+    email_tag = (
+        soup.find(lambda tag: tag.name == "p" and "邮箱" in tag.get_text())
+        or soup.find(lambda tag: tag.name == "p" and "邮件" in tag.get_text())
+    )
     if email_tag:
         email_text = email_tag.get_text()
-        email_match = re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', email_text)
-        email = email_match.group(0) if email_match else "未提供"
+        email = _extract_email_from_text(email_text) or "未提供"
         
     #导师概况
     profile = ""

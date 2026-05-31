@@ -1,3 +1,8 @@
+"""`dataset` 应用的测试套件：包含模型与功能的单元测试和集成测试。
+
+运行方式示例：`pytest` 或 `python manage.py test dataset`。
+"""
+
 from django.test import TestCase, Client
 from django.contrib.auth.models import User
 from django.utils import timezone
@@ -1941,6 +1946,19 @@ class ThuCrawlerUtilityTest(TestCase):
 
         self.assertEqual(mentor["email"], "未提供")
 
+    @patch("dataset.services.thu_crawler.fetch_html")
+    def test_parse_mentor_detail_extracts_email_wrapped_by_punctuation(self, mock_fetch_html):
+        mock_fetch_html.return_value = """
+        <html>
+          <head><title>赵六-清华大学计算机系</title></head>
+          <body><p>邮件：&lt;jie@example.com&gt;；欢迎联系</p></body>
+        </html>
+        """
+
+        mentor = parse_mentor_detail("https://example.com/zhaoliu.htm")
+
+        self.assertEqual(mentor["email"], "jie@example.com")
+
     @patch("dataset.services.thu_crawler.parse_mentor_detail")
     @patch("dataset.services.thu_crawler.fetch_html")
     def test_parse_mentor_list_uses_each_h2_anchor_detail_page(self, mock_fetch_html, mock_parse_detail):
@@ -3363,6 +3381,12 @@ class ThuCrawlerHelperTest(TestCase):
         self.assertEqual(strip_bracketed_name_content("张三（教授）"), "张三")
         self.assertEqual(strip_bracketed_name_content("Zhang San (Prof.)"), "Zhang San")
         self.assertEqual(strip_bracketed_name_content("张三（系主任）（博士）"), "张三")
+        self.assertEqual(strip_bracketed_name_content("张三（系主任（博士））"), "张三")
+
+    def test_strip_bracketed_name_content_preserves_word_boundaries(self):
+        from dataset.services.thu_crawler import strip_bracketed_name_content
+
+        self.assertEqual(strip_bracketed_name_content("John(Jack)Doe"), "John Doe")
 
     def test_strip_bracketed_name_content_returns_empty_for_blank_input(self):
         from dataset.services.thu_crawler import strip_bracketed_name_content

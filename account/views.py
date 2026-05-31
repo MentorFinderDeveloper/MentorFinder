@@ -1,3 +1,14 @@
+"""HTTP 视图集合：实现 `account` 应用的 API 端点。
+
+包含：
+- 认证：登录/注册/邮箱验证码/密码重置
+- 用户资料：查看/更新/头像上传/公开资料
+- 关注系统：关注导师/用户/板块及相关查询
+- 管理端接口：用户管理与导师认证审核
+
+视图函数均由 `urls.py` 中注册，通用响应格式使用 `request_success` / `request_failed`。
+"""
+
 import json
 import re
 import uuid
@@ -100,10 +111,12 @@ def _check_verification_code_rate_limit(req: HttpRequest, email: str):
 
 
 def _subject_display_name(subject: str) -> str:
+    """将 arXiv 学科码映射为可展示的中文/友好名称（若无映射则返回原始码）。"""
     return ARXIV_SUBJECT_MAPPING.get(subject, subject)
 
 
 def _validate_password(password: str):
+    """校验密码强度与长度，返回错误响应（`request_failed`）或 None 表示通过。"""
     if password.strip() == "":
         return request_failed(-2, "Invalid parameters. [password] cannot be empty", 400)
     if len(password) < 8 or not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
@@ -389,6 +402,7 @@ def send_email_verification_code(req: HttpRequest):
     })
 
 def _extract_token(req: HttpRequest) -> str:
+    """从请求头中提取 Authorization token（支持 `Bearer <token>` 或裸 token）。"""
     auth_header = req.headers.get("Authorization", "").strip()
     if auth_header == "":
         return ""
@@ -397,6 +411,11 @@ def _extract_token(req: HttpRequest) -> str:
     return auth_header
 
 def _require_user(req: HttpRequest):
+    """验证请求中的 JWT 并返回对应的 `User`。
+
+    返回 `(user, None)` 表示验证成功，返回 `(None, error_response)` 表示验证失败，
+    便于在视图中直接返回统一的错误格式。
+    """
     token = _extract_token(req)
     if token == "":
         return None, request_failed(2, "Unauthorized", 401)
@@ -416,6 +435,7 @@ def _require_user(req: HttpRequest):
 
 
 def _require_admin(req: HttpRequest):
+    """确保请求来自管理员用户，返回 `(admin_user, None)` 或 `(None, error_response)`。"""
     user, auth_error = _require_user(req)
     if auth_error is not None:
         return None, auth_error

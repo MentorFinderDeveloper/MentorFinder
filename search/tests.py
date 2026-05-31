@@ -2,11 +2,12 @@ from django.test import TestCase
 
 from account.models import User
 from dataset.models import Mentor, Paper
-from search.services.engine import search_papers_fuzzy
+from search.services.engine import _split_keyword_logic, search_papers_fuzzy
 from utils.utils_jwt import generate_jwt_token
 
 
 class SearchTests(TestCase):
+    # 初始化搜索测试所需的用户、导师、论文和鉴权令牌数据。
     def setUp(self):
         self.owner = User.objects.create_user(
             username="owner1",
@@ -92,9 +93,11 @@ class SearchTests(TestCase):
         self.ls.add_paper(self.paper2.id)
         self.private_mentor.add_paper(self.private_paper.id)
 
+    # 生成带 Bearer 前缀的认证请求头。
     def auth_headers(self, token: str):
         return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
 
+    # 验证健康检查接口返回搜索模块状态。
     def test_search_health(self):
         res = self.client.get("/search/health")
 
@@ -102,12 +105,14 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual(res.json()["module"], "search")
 
+    # 验证健康检查接口会拒绝错误的请求方法。
     def test_search_health_bad_method(self):
         res = self.client.post("/search/health")
 
         self.assertEqual(res.status_code, 405)
         self.assertEqual(res.json()["code"], -3)
 
+    # 验证导师搜索可按中文姓名精确匹配。
     def test_search_mentors_by_name(self):
         res = self.client.get("/search/mentors", {"keyword": "张三"})
 
@@ -127,6 +132,7 @@ class SearchTests(TestCase):
         self.assertEqual(mentor["paperTitles"], ["机器学习方法研究", "大语言模型在问答系统中的应用"])
         self.assertEqual(mentor["is_private"], False)
 
+    # 验证导师搜索可按研究方向精确匹配。
     def test_search_mentors_by_research_direction(self):
         res = self.client.get("/search/mentors", {"keyword": "机器学习"})
 
@@ -135,6 +141,7 @@ class SearchTests(TestCase):
         self.assertEqual(len(res.json()["mentors"]), 1)
         self.assertEqual(res.json()["mentors"][0]["Chinese_name"], "张三")
 
+    # 验证导师搜索支持英文名精确匹配。
     def test_search_mentors_by_english_name(self):
         res = self.client.get("/search/mentors", {"keyword": "Zhang San"})
 
@@ -143,6 +150,7 @@ class SearchTests(TestCase):
         self.assertEqual(len(res.json()["mentors"]), 1)
         self.assertEqual(res.json()["mentors"][0]["Chinese_name"], "张三")
 
+    # 验证导师搜索对英文名匹配不区分大小写。
     def test_search_mentors_by_english_name_case_insensitive(self):
         res = self.client.get("/search/mentors", {"keyword": "zhang san"})
 
@@ -151,6 +159,7 @@ class SearchTests(TestCase):
         self.assertEqual(len(res.json()["mentors"]), 1)
         self.assertEqual(res.json()["mentors"][0]["Chinese_name"], "张三")
 
+    # 验证导师搜索支持英文名顺序和逗号变体的精确匹配。
     def test_search_mentors_by_english_name_variants_exact(self):
         for keyword in ["San Zhang", "San, Zhang"]:
             with self.subTest(keyword=keyword):
@@ -161,6 +170,7 @@ class SearchTests(TestCase):
                 self.assertEqual(len(res.json()["mentors"]), 1)
                 self.assertEqual(res.json()["mentors"][0]["Chinese_name"], "张三")
 
+    # 验证导师搜索支持且逻辑组合查询。
     def test_search_mentors_supports_and_logic(self):
         res = self.client.get("/search/mentors", {"keyword": "张三 且 机器学习"})
 
@@ -168,6 +178,7 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual([mentor["Chinese_name"] for mentor in res.json()["mentors"]], ["张三"])
 
+    # 验证导师搜索支持或逻辑组合查询。
     def test_search_mentors_supports_or_logic(self):
         res = self.client.get("/search/mentors", {"keyword": "张三 或 李四"})
 
@@ -178,6 +189,7 @@ class SearchTests(TestCase):
             {"张三", "李四"},
         )
 
+    # 验证导师搜索支持括号优先级逻辑。
     def test_search_mentors_supports_parentheses_precedence(self):
         res = self.client.get("/search/mentors", {"keyword": "(张三 或 李四) 且 自然语言处理"})
 
@@ -185,6 +197,22 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual([mentor["Chinese_name"] for mentor in res.json()["mentors"]], ["李四"])
 
+    # 验证逻辑关键词拆分支持符号形式的或运算符。
+    def test_split_keyword_logic_supports_pipe_operators(self):
+        self.assertEqual(_split_keyword_logic("张三 | 李四"), [["张三"], ["李四"]])
+        self.assertEqual(_split_keyword_logic("张三 || 李四"), [["张三"], ["李四"]])
+
+    # 验证逻辑关键词拆分支持符号形式的且运算符。
+    def test_split_keyword_logic_supports_ampersand_operators(self):
+        self.assertEqual(_split_keyword_logic("张三 & 机器学习"), [["张三", "机器学习"]])
+        self.assertEqual(_split_keyword_logic("张三 && 机器学习"), [["张三", "机器学习"]])
+
+    # 验证逻辑关键词拆分会忽略多余连续运算符和空白。
+    def test_split_keyword_logic_ignores_redundant_symbol_operators(self):
+        self.assertEqual(_split_keyword_logic("张三 ||| 李四"), [["张三"], ["李四"]])
+        self.assertEqual(_split_keyword_logic("张三 &&&& 机器学习"), [["张三", "机器学习"]])
+
+    # 验证论文搜索可按标题精确匹配。
     def test_search_papers_by_exact_title(self):
         res = self.client.get("/search/papers", {"keyword": "机器学习方法研究"})
 
@@ -204,6 +232,7 @@ class SearchTests(TestCase):
         self.assertEqual(paper["mentor_ids"], [self.zs.id])
         self.assertEqual(paper["author_names"], "张三")
 
+    # 验证论文搜索可匹配逗号分隔的 subjects 词项。
     def test_search_papers_by_subject_token_in_comma_separated_subjects(self):
         res = self.client.get("/search/papers", {"keyword": "cs.AI"})
 
@@ -211,6 +240,7 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["机器学习方法研究"])
 
+    # 验证论文搜索可通过导师研究方向命中关联论文。
     def test_search_papers_by_mentor_research_direction(self):
         res = self.client.get("/search/papers", {"keyword": "机器学习"})
 
@@ -221,6 +251,7 @@ class SearchTests(TestCase):
             {"机器学习方法研究", "大语言模型在问答系统中的应用"},
         )
 
+    # 验证论文搜索可通过导师中文名命中关联论文。
     def test_search_papers_by_mentor_name(self):
         res = self.client.get("/search/papers", {"keyword": "李四"})
 
@@ -228,6 +259,7 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["大语言模型在问答系统中的应用"])
 
+    # 验证论文搜索可通过导师英文名命中关联论文。
     def test_search_papers_by_mentor_english_name(self):
         res = self.client.get("/search/papers", {"keyword": "Li Si"})
 
@@ -235,6 +267,7 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["大语言模型在问答系统中的应用"])
 
+    # 验证论文搜索支持导师英文名变体的精确匹配。
     def test_search_papers_by_mentor_english_name_variants_exact(self):
         for keyword in ["Si Li", "Si, Li"]:
             with self.subTest(keyword=keyword):
@@ -244,6 +277,7 @@ class SearchTests(TestCase):
                 self.assertEqual(res.json()["code"], 0)
                 self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["大语言模型在问答系统中的应用"])
 
+    # 验证论文搜索支持且逻辑组合查询。
     def test_search_papers_supports_and_logic(self):
         res = self.client.get("/search/papers", {"keyword": "张三 且 cs.AI"})
 
@@ -251,6 +285,7 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["机器学习方法研究"])
 
+    # 验证论文搜索支持或逻辑组合查询。
     def test_search_papers_supports_or_logic(self):
         res = self.client.get("/search/papers", {"keyword": "cs.AI 或 cs.CL"})
 
@@ -261,6 +296,7 @@ class SearchTests(TestCase):
             {"机器学习方法研究", "大语言模型在问答系统中的应用"},
         )
 
+    # 验证论文搜索支持括号优先级逻辑。
     def test_search_papers_supports_parentheses_precedence(self):
         res = self.client.get("/search/papers", {"keyword": "(张三 或 李四) 且 cs.AI"})
 
@@ -268,6 +304,15 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["机器学习方法研究"])
 
+    # 验证异常括号输入会回退到平铺逻辑拆分而不是报错。
+    def test_search_logic_falls_back_for_unbalanced_parentheses(self):
+        res = self.client.get("/search/mentors", {"keyword": "(张三 或 李四 且 自然语言处理"})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual([mentor["Chinese_name"] for mentor in res.json()["mentors"]], ["李四"])
+
+    # 验证论文搜索可按作者名命中论文。
     def test_search_papers_by_author_names(self):
         res = self.client.get("/search/papers", {"keyword": "张三"})
 
@@ -278,6 +323,7 @@ class SearchTests(TestCase):
             {"机器学习方法研究", "大语言模型在问答系统中的应用"},
         )
 
+    # 验证超大作者列表的论文仍能稳定完成搜索序列化。
     def test_search_papers_with_large_author_list(self):
         authors = [f"Author {index}" for index in range(1001)]
         target_mentor = Mentor.objects.create(
@@ -302,6 +348,7 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["papers"][0]["title"], large_author_paper.title)
         self.assertIn(target_mentor.id, res.json()["papers"][0]["mentor_ids"])
 
+    # 验证论文搜索会去重多来源命中的同一论文。
     def test_search_papers_deduplicate_multi_source_matches(self):
         res = self.client.get("/search/papers", {"keyword": "张三"})
 
@@ -315,6 +362,7 @@ class SearchTests(TestCase):
         )
         self.assertEqual(len(paper_titles), len(set(paper_titles)))
 
+    # 验证标题精确命中优先于导师匹配结果。
     def test_search_papers_title_match_has_priority_over_mentor_match(self):
         mentor_same_as_title = Mentor.objects.create(
             Chinese_name="机器学习方法研究",
@@ -331,6 +379,7 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["机器学习方法研究"])
 
+    # 验证精确模式下标题不支持模糊子串匹配。
     def test_search_papers_title_does_not_support_fuzzy_match(self):
         res = self.client.get("/search/papers", {"keyword": "语言模型"})
 
@@ -338,11 +387,13 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual(res.json()["papers"], [])
 
+    # 验证论文模糊搜索支持标题子串匹配。
     def test_search_papers_fuzzy_by_title_substring(self):
         papers = search_papers_fuzzy("语言模型")
 
         self.assertEqual([paper["title"] for paper in papers], ["大语言模型在问答系统中的应用"])
 
+    # 验证论文模糊搜索支持导师中文名子串匹配。
     def test_search_papers_fuzzy_by_mentor_chinese_name_substring(self):
         papers = search_papers_fuzzy("张")
 
@@ -351,11 +402,13 @@ class SearchTests(TestCase):
             {"机器学习方法研究", "大语言模型在问答系统中的应用"},
         )
 
+    # 验证论文模糊搜索支持导师英文名子串匹配。
     def test_search_papers_fuzzy_by_mentor_english_name_substring(self):
         papers = search_papers_fuzzy("Li")
 
         self.assertEqual([paper["title"] for paper in papers], ["大语言模型在问答系统中的应用"])
 
+    # 验证论文模糊搜索支持导师英文名变体匹配。
     def test_search_papers_fuzzy_by_mentor_english_name_variants(self):
         mentor_variant = Mentor.objects.create(
             Chinese_name="薛伟",
@@ -389,21 +442,25 @@ class SearchTests(TestCase):
         self.assertEqual(paper_res.json()["code"], 0)
         self.assertEqual(paper_res.json()["papers"][0]["mentor_ids"], [mentor_variant.id])
 
+    # 验证论文模糊搜索支持导师研究方向子串匹配。
     def test_search_papers_fuzzy_by_research_direction_substring(self):
         papers = search_papers_fuzzy("自然语言")
 
         self.assertEqual([paper["title"] for paper in papers], ["大语言模型在问答系统中的应用"])
 
+    # 验证论文模糊搜索支持摘要子串匹配。
     def test_search_papers_fuzzy_by_abstract_substring(self):
         papers = search_papers_fuzzy("智能问答")
 
         self.assertEqual([paper["title"] for paper in papers], ["大语言模型在问答系统中的应用"])
 
+    # 验证论文模糊搜索支持 subjects 子串匹配。
     def test_search_papers_fuzzy_by_subject_substring(self):
         papers = search_papers_fuzzy("cs.AI")
 
         self.assertEqual([paper["title"] for paper in papers], ["机器学习方法研究"])
 
+    # 验证分词后的模糊短语可跨字段无序匹配。
     def test_search_papers_fuzzy_tokenized_phrase_matches_unordered_fields(self):
         paper = Paper.objects.create(
             title="Retrieval augmented generation survey",
@@ -417,6 +474,7 @@ class SearchTests(TestCase):
 
         self.assertIn(paper.title, [item["title"] for item in papers])
 
+    # 验证论文模糊搜索会优先返回更直接的匹配结果。
     def test_search_papers_fuzzy_orders_more_direct_matches_first(self):
         abstract_only = Paper.objects.create(
             title="辅助测试论文",
@@ -438,17 +496,20 @@ class SearchTests(TestCase):
         titles = [paper["title"] for paper in papers]
         self.assertLess(titles.index(title_match.title), titles.index(abstract_only.title))
 
+    # 验证论文模糊搜索结果会做去重处理。
     def test_search_papers_fuzzy_deduplicates_results(self):
         papers = search_papers_fuzzy("张")
 
         paper_titles = [paper["title"] for paper in papers]
         self.assertEqual(len(paper_titles), len(set(paper_titles)))
 
+    # 验证论文模糊搜索在无匹配时返回空列表。
     def test_search_papers_fuzzy_no_match_returns_empty_list(self):
         papers = search_papers_fuzzy("量子拓扑星舰")
 
         self.assertEqual(papers, [])
 
+    # 验证导师接口支持模糊搜索模式。
     def test_search_mentors_api_fuzzy_mode(self):
         res = self.client.get("/search/mentors", {"keyword": "张", "search_mode": "fuzzy"})
 
@@ -458,6 +519,7 @@ class SearchTests(TestCase):
         self.assertEqual(len(res.json()["mentors"]), 1)
         self.assertEqual(res.json()["mentors"][0]["Chinese_name"], "张三")
 
+    # 验证论文接口支持模糊搜索模式。
     def test_search_papers_api_fuzzy_mode(self):
         res = self.client.get("/search/papers", {"keyword": "语言模型", "search_mode": "fuzzy"})
 
@@ -466,6 +528,7 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["search_mode"], "fuzzy")
         self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["大语言模型在问答系统中的应用"])
 
+    # 验证论文接口默认返回 default 排序模式。
     def test_search_papers_default_sort_mode(self):
         res = self.client.get("/search/papers", {"keyword": "机器学习"})
 
@@ -473,6 +536,7 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual(res.json()["sort_mode"], "default")
 
+    # 验证论文接口支持按最早时间排序。
     def test_search_papers_sort_mode_early(self):
         res = self.client.get("/search/papers", {"keyword": "机器学习", "sort_mode": "early"})
 
@@ -484,6 +548,7 @@ class SearchTests(TestCase):
             ["机器学习方法研究", "大语言模型在问答系统中的应用"],
         )
 
+    # 验证论文接口支持按最晚时间排序。
     def test_search_papers_sort_mode_late(self):
         res = self.client.get("/search/papers", {"keyword": "机器学习", "sort_mode": "late"})
 
@@ -495,6 +560,7 @@ class SearchTests(TestCase):
             ["大语言模型在问答系统中的应用", "机器学习方法研究"],
         )
 
+    # 验证导师搜索接口支持分页能力。
     def test_search_mentors_supports_pagination(self):
         Mentor.objects.create(
             Chinese_name="张六",
@@ -543,6 +609,7 @@ class SearchTests(TestCase):
         self.assertTrue(page2_data["has_previous"])
         self.assertEqual(len(page2_data["mentors"]), 1)
 
+    # 验证论文搜索接口支持分页能力。
     def test_search_papers_supports_pagination(self):
         page1 = self.client.get(
             "/search/papers",
@@ -585,18 +652,21 @@ class SearchTests(TestCase):
         self.assertFalse(page2_data["has_next"])
         self.assertTrue(page2_data["has_previous"])
 
+    # 验证接口会拒绝非法的搜索模式参数。
     def test_search_api_invalid_search_mode(self):
         res = self.client.get("/search/papers", {"keyword": "机器学习", "search_mode": "partial"})
 
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.json()["code"], -2)
 
+    # 验证接口会拒绝非法的排序模式参数。
     def test_search_api_invalid_sort_mode(self):
         res = self.client.get("/search/papers", {"keyword": "机器学习", "sort_mode": "random"})
 
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.json()["code"], -2)
 
+    # 验证搜索无匹配时导师和论文接口均返回空列表。
     def test_search_no_match_returns_empty_list(self):
         mentor_res = self.client.get("/search/mentors", {"keyword": "量子拓扑星舰"})
         paper_res = self.client.get("/search/papers", {"keyword": "量子拓扑星舰"})
@@ -606,6 +676,7 @@ class SearchTests(TestCase):
         self.assertEqual(paper_res.status_code, 200)
         self.assertEqual(paper_res.json()["papers"], [])
 
+    # 验证匿名用户搜索导师时不会看到私有导师。
     def test_search_mentors_excludes_private_mentor_without_auth(self):
         res = self.client.get("/search/mentors", {"keyword": "王五"})
 
@@ -613,6 +684,7 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual(res.json()["mentors"], [])
 
+    # 验证私有导师所有者可搜索到自己的私有导师。
     def test_search_mentors_includes_private_mentor_for_owner(self):
         res = self.client.get(
             "/search/mentors",
@@ -625,6 +697,7 @@ class SearchTests(TestCase):
         self.assertEqual(len(res.json()["mentors"]), 1)
         self.assertEqual(res.json()["mentors"][0]["Chinese_name"], "王五")
 
+    # 验证其他普通用户搜索不到他人的私有导师。
     def test_search_mentors_excludes_private_mentor_for_other_user(self):
         res = self.client.get(
             "/search/mentors",
@@ -636,6 +709,7 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual(res.json()["mentors"], [])
 
+    # 验证私有导师所有者可通过导师名搜索到关联私有论文。
     def test_search_papers_by_private_mentor_name_includes_owner_results(self):
         res = self.client.get(
             "/search/papers",
@@ -647,6 +721,7 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["隐私导师论文"])
 
+    # 验证其他普通用户无法通过私有导师名搜索到私有论文。
     def test_search_papers_by_private_mentor_name_excludes_other_user_results(self):
         res = self.client.get(
             "/search/papers",
@@ -658,6 +733,7 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual(res.json()["papers"], [])
 
+    # 验证私有导师相关的论文模糊搜索遵守所有者可见性。
     def test_search_papers_fuzzy_private_mentor_respects_owner_visibility(self):
         owner_res = self.client.get(
             "/search/papers",
@@ -675,6 +751,7 @@ class SearchTests(TestCase):
         self.assertEqual(other_res.status_code, 200)
         self.assertEqual(other_res.json()["papers"], [])
 
+    # 验证管理员可以搜索到私有导师。
     def test_search_mentors_includes_private_mentor_for_admin(self):
         res = self.client.get(
             "/search/mentors",
@@ -687,6 +764,7 @@ class SearchTests(TestCase):
         self.assertEqual(len(res.json()["mentors"]), 1)
         self.assertEqual(res.json()["mentors"][0]["Chinese_name"], "王五")
 
+    # 验证管理员可以通过私有导师名搜索到私有论文。
     def test_search_papers_by_private_mentor_name_includes_admin_results(self):
         res = self.client.get(
             "/search/papers",
@@ -698,12 +776,14 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual([paper["title"] for paper in res.json()["papers"]], ["隐私导师论文"])
 
+    # 验证缺少关键词参数时接口返回参数错误。
     def test_search_keyword_missing(self):
         res = self.client.get("/search/mentors")
 
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.json()["code"], -2)
 
+    # 验证空关键词会返回当前用户可见的全部论文。
     def test_search_keyword_empty(self):
         res = self.client.get("/search/papers", {"keyword": "   "})
 
@@ -716,6 +796,7 @@ class SearchTests(TestCase):
         self.assertEqual(titles, {"机器学习方法研究", "大语言模型在问答系统中的应用"})
         self.assertNotIn("隐私导师论文", titles)
 
+    # 验证空关键词下所有者可看到私有论文。
     def test_search_papers_empty_keyword_includes_private_for_owner(self):
         res = self.client.get(
             "/search/papers",
@@ -728,6 +809,7 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["total"], 3)
         self.assertIn("隐私导师论文", {paper["title"] for paper in res.json()["papers"]})
 
+    # 验证空关键词下其他普通用户看不到私有论文。
     def test_search_papers_empty_keyword_excludes_private_for_other_user(self):
         res = self.client.get(
             "/search/papers",
@@ -740,6 +822,7 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["total"], 2)
         self.assertNotIn("隐私导师论文", {paper["title"] for paper in res.json()["papers"]})
 
+    # 验证空关键词下管理员可看到私有论文。
     def test_search_papers_empty_keyword_includes_private_for_admin(self):
         res = self.client.get(
             "/search/papers",
@@ -752,6 +835,7 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["total"], 3)
         self.assertIn("隐私导师论文", {paper["title"] for paper in res.json()["papers"]})
 
+    # 验证匿名模糊搜索空关键词时不会泄漏私有论文。
     def test_search_papers_empty_keyword_fuzzy_excludes_private_for_anonymous(self):
         res = self.client.get(
             "/search/papers",
@@ -763,6 +847,7 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["total"], 2)
         self.assertNotIn("隐私导师论文", {paper["title"] for paper in res.json()["papers"]})
 
+    # 验证公共论文即使被私有导师收藏也仍然保持公开可见。
     def test_search_papers_public_paper_added_by_private_mentor_stays_visible(self):
         # 已在公共库的论文（被公共导师张三关联），同时被他人私有导师收藏，
         # 应对所有用户保持可见——公共优先。
@@ -779,6 +864,7 @@ class SearchTests(TestCase):
         self.assertIn("机器学习方法研究", titles)
         self.assertNotIn("隐私导师论文", titles)
 
+    # 验证空关键词导师搜索会返回当前用户可见的全部导师。
     def test_search_empty_keyword_returns_all_visible_mentors(self):
         anonymous_res = self.client.get("/search/mentors", {"keyword": ""})
         owner_res = self.client.get(
@@ -800,18 +886,21 @@ class SearchTests(TestCase):
             {"张三", "李四", "王五"},
         )
 
+    # 验证导师搜索会拒绝过长关键词。
     def test_search_keyword_too_long_for_mentors(self):
         res = self.client.get("/search/mentors", {"keyword": "x" * 256})
 
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.json()["code"], -2)
 
+    # 验证论文搜索会拒绝过长关键词。
     def test_search_keyword_too_long_for_papers(self):
         res = self.client.get("/search/papers", {"keyword": "x" * 256})
 
         self.assertEqual(res.status_code, 400)
         self.assertEqual(res.json()["code"], -2)
 
+    # 验证搜索前会先裁剪关键词两端空白。
     def test_search_keyword_trimmed_before_search(self):
         mentor_res = self.client.get("/search/mentors", {"keyword": "  张三  "})
         paper_res = self.client.get("/search/papers", {"keyword": "  李四  "})
@@ -824,18 +913,21 @@ class SearchTests(TestCase):
         self.assertEqual(paper_res.json()["keyword"], "李四")
         self.assertEqual([paper["title"] for paper in paper_res.json()["papers"]], ["大语言模型在问答系统中的应用"])
 
+    # 验证导师搜索接口会拒绝错误的请求方法。
     def test_search_bad_method(self):
         res = self.client.post("/search/mentors", {"keyword": "张三"})
 
         self.assertEqual(res.status_code, 405)
         self.assertEqual(res.json()["code"], -3)
 
+    # 验证论文搜索接口会拒绝错误的请求方法。
     def test_search_papers_bad_method(self):
         res = self.client.post("/search/papers", {"keyword": "张三"})
 
         self.assertEqual(res.status_code, 405)
         self.assertEqual(res.json()["code"], -3)
 
+    # 验证 visibility=mine 时只返回当前用户拥有的私有导师。
     def test_search_mentors_visibility_mine_returns_only_owned_private_mentors(self):
         res = self.client.get(
             "/search/mentors",
@@ -848,6 +940,7 @@ class SearchTests(TestCase):
         names = [mentor["Chinese_name"] for mentor in res.json()["mentors"]]
         self.assertEqual(names, ["王五"])
 
+    # 验证 visibility=public 时只返回公共导师。
     def test_search_mentors_visibility_public_excludes_private_owned_mentors(self):
         res = self.client.get(
             "/search/mentors",
@@ -860,6 +953,7 @@ class SearchTests(TestCase):
         names = {mentor["Chinese_name"] for mentor in res.json()["mentors"]}
         self.assertEqual(names, {"张三", "李四"})
 
+    # 验证非法 visibility 参数会回退到 all。
     def test_search_mentors_invalid_visibility_falls_back_to_all(self):
         res = self.client.get(
             "/search/mentors",
@@ -872,6 +966,7 @@ class SearchTests(TestCase):
         names = {mentor["Chinese_name"] for mentor in res.json()["mentors"]}
         self.assertEqual(names, {"张三", "李四", "王五"})
 
+    # 验证非法令牌会被静默当作匿名用户处理。
     def test_search_mentors_rejects_invalid_token_silently_and_returns_public(self):
         res = self.client.get(
             "/search/mentors",
@@ -884,6 +979,7 @@ class SearchTests(TestCase):
         names = {mentor["Chinese_name"] for mentor in res.json()["mentors"]}
         self.assertEqual(names, {"张三", "李四"})
 
+    # 验证空的 Bearer 令牌会被当作匿名用户处理。
     def test_search_mentors_treats_blank_bearer_token_as_anonymous(self):
         res = self.client.get(
             "/search/mentors",
@@ -895,6 +991,7 @@ class SearchTests(TestCase):
         names = {mentor["Chinese_name"] for mentor in res.json()["mentors"]}
         self.assertEqual(names, {"张三", "李四"})
 
+    # 验证被封禁用户令牌不会获得私有导师可见性。
     def test_search_mentors_treats_banned_token_as_anonymous(self):
         res = self.client.get(
             "/search/mentors",
@@ -906,6 +1003,7 @@ class SearchTests(TestCase):
         self.assertEqual(res.json()["code"], 0)
         self.assertEqual(res.json()["mentors"], [])
 
+    # 验证非法分页参数会回退到默认页码和页大小。
     def test_search_mentors_invalid_page_inputs_fall_back_to_defaults(self):
         res = self.client.get(
             "/search/mentors",

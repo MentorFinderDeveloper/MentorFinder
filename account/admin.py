@@ -1,3 +1,9 @@
+"""admin 配置：注册并定制 `account` 应用在 Django 管理后台的展示。
+
+- 提供 `CustomUserAdmin` 用于在用户后台展示扩展字段。
+- 为 `UserProfile`、`UserFollow`、`PushRecord` 提供简洁的后台列表配置。
+"""
+
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 

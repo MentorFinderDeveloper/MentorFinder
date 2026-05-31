@@ -14,6 +14,7 @@ DEFAULT_STARTUP_CONFIG = {
 }
 
 
+# 加载启动配置文件，并对缺省值和类型做兜底处理。
 def load_startup_config(config_path: Path | None = None) -> dict:
     target_path = config_path or CONFIG_FILE
     if not target_path.exists():
@@ -47,12 +48,14 @@ def load_startup_config(config_path: Path | None = None) -> dict:
     }
 
 
+# 返回一份默认启动配置的独立副本。
 def _clone_default_startup_config() -> dict:
     return {
         "startup": dict(DEFAULT_STARTUP_CONFIG["startup"]),
     }
 
 
+# 在配置值为布尔类型时直接返回，否则回退到默认值。
 def _coerce_bool(value, default: bool) -> bool:
     if isinstance(value, bool):
         return value

@@ -1,3 +1,10 @@
+"""account 应用的数据模型定义。
+
+包含自定义用户 `User`、用户资料 `UserProfile`、邮箱验证码 `EmailVerificationCode`、
+导师/用户/板块关注模型以及与周报推送相关的模型（`WeeklyPushPaperBucket`、`PushRecord`、`UserWeeklyReport`）。
+这些模型同时提供用于 API 序列化的 `serialize()` 方法，以及友好的 `__str__` 表示。
+"""
+
 from django.contrib.auth.models import AbstractUser, UserManager
 from django.db import models
 from dataset.models import Mentor
@@ -6,12 +13,18 @@ from django.utils.timezone import localtime
 
 
 class CustomUserManager(UserManager):
+    """扩展的用户管理器：为超级用户创建时默认设置 `role='admin'`。"""
+
     def create_superuser(self, username, email=None, password=None, **extra_fields):
         extra_fields.setdefault("role", "admin")
         return super().create_superuser(username, email, password, **extra_fields)
 
 
 class User(AbstractUser):
+    """自定义用户模型，扩展了角色、真实姓名及可选绑定的公共导师档案。
+
+    提供 `serialize()` 与 `serialize_mentor_profile()` 用于 API 层返回 JSON 结构。
+    """
     ROLE_STUDENT = "student"
     ROLE_MENTOR = "mentor"
     ROLE_ADMIN = "admin"
@@ -69,6 +82,11 @@ class User(AbstractUser):
 
 
 class EmailVerificationCode(models.Model):
+    """存储发往邮箱的验证码及其过期时间与校验尝试计数。
+
+    `attempt_count` 用于限制连续失败次数以防暴力穷举。
+    """
+
     email = models.EmailField(unique=True, verbose_name="邮箱")
     code = models.CharField(max_length=10, verbose_name="验证码")
     expires_at = models.DateTimeField(verbose_name="过期时间")
@@ -84,6 +102,11 @@ class EmailVerificationCode(models.Model):
 
 
 class UserProfile(models.Model):
+    """用户扩展资料模型，用于存储头像、个性签名、个人简介等展示字段。
+
+    `serialize()` 返回前端所需的键名及格式化的 `updatedAt`。
+    """
+
     user = models.OneToOneField(
         User,
         on_delete=models.CASCADE,
@@ -121,6 +144,8 @@ class UserProfile(models.Model):
 
 
 class MentorVerificationRequest(models.Model):
+    """用户提交的导师认证请求，含状态字段与提交时间。"""
+
     STATUS_PENDING = "pending"
     STATUS_APPROVED = "approved"
     STATUS_REJECTED = "rejected"
@@ -161,6 +186,11 @@ class MentorVerificationRequest(models.Model):
 
 
 class MentorFollow(models.Model):
+    """学生关注导师关系模型。
+
+    使用 `unique_together` 防止重复关注。
+    """
+
     student = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
@@ -182,6 +212,11 @@ class MentorFollow(models.Model):
 
 
 class UserFollow(models.Model):
+    """用户之间的关注关系（一个用户关注另一个用户）。
+
+    使用 `unique_together` 防止重复关注记录。
+    """
+
     follower = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
@@ -203,6 +238,8 @@ class UserFollow(models.Model):
 
 
 class SubjectFollow(models.Model):
+    """用户关注的板块记录模型（按字符串存储板块代码）。"""
+
     user = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
@@ -220,6 +257,8 @@ class SubjectFollow(models.Model):
 
 
 class WeeklyPushPaperBucket(models.Model):
+    """周报推送的论文桶模型：用于分周期、分日存储待推送的论文 id。"""
+
     CYCLE_CURRENT = "current"
     CYCLE_NEXT = "next"
     CYCLE_ARCHIVED = "archived"
@@ -257,6 +296,8 @@ class WeeklyPushPaperBucket(models.Model):
 
 
 class PushRecord(models.Model):
+    """记录已发送或待发送的推送（如周报），用于去重与状态追踪。"""
+
     TYPE_WEEKLY = "weekly"
 
     TYPE_CHOICES = (
@@ -301,6 +342,12 @@ class PushRecord(models.Model):
 
 
 class UserWeeklyReport(models.Model):
+    """用户专属周报的持久化模型。
+
+    - `payload` 存储用于前端展示的完整结构
+    - `digest` 存储用于邮件构造的摘要信息
+    保证同一用户同一周只会存在一条记录（唯一约束）。
+    """
     GENERATED_BY_USER = "user"
     GENERATED_BY_SCHEDULED = "scheduled"
 
