@@ -1,0 +1,267 @@
+"""清华计算机系导师爬虫与姓名拼音工具。
+
+用于从公开网页抓取导师的中文名、拼音英文名、研究方向、邮箱与个人简介。
+该模块包含部分测试/脚本化代码，运行时会发起外部 HTTP 请求。
+"""
+
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
+import re
+from pypinyin import lazy_pinyin  # 新增导入拼音库
+
+url = "https://www.cs.tsinghua.edu.cn/szzk/jzgml.htm"
+
+BASE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+    "Accept-Language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Host": "www.cs.tsinghua.edu.cn",
+    # "Cookie": "JSESSIONID=9BADD2F3B34224773C1E64E4F391F457.yunxing21"
+}
+
+OPEN_BRACKETS = {"(", "（"}
+CLOSE_BRACKETS = {")", "）"}
+
+def fetch_html(url: str) -> str:
+    resp = requests.get(url, headers=BASE_HEADERS, timeout=15)
+    resp.raise_for_status()
+    resp.encoding = resp.apparent_encoding
+    return resp.text
+
+
+def strip_bracketed_name_content(name: str) -> str:
+    normalized = str(name or "").replace("\u3000", " ").strip()
+    if normalized == "":
+        return ""
+
+    ranges: list[tuple[int, int]] = []
+    stack: list[int] = []
+    for index, char in enumerate(normalized):
+        if char in OPEN_BRACKETS:
+            stack.append(index)
+        elif char in CLOSE_BRACKETS and stack:
+            start = stack.pop()
+            ranges.append((start, index + 1))
+
+    if not ranges:
+        return normalized
+
+    merged_ranges: list[tuple[int, int]] = []
+    for start, end in sorted(ranges):
+        if not merged_ranges or start > merged_ranges[-1][1]:
+            merged_ranges.append((start, end))
+            continue
+
+        previous_start, previous_end = merged_ranges[-1]
+        merged_ranges[-1] = (previous_start, max(previous_end, end))
+
+    cleaned_parts: list[str] = []
+    previous_end = 0
+    for start, end in merged_ranges:
+        cleaned_parts.append(normalized[previous_end:start])
+        cleaned_parts.append(" ")
+        previous_end = end
+    cleaned_parts.append(normalized[previous_end:])
+    normalized = "".join(cleaned_parts)
+
+    return " ".join(normalized.split()).strip()
+
+def get_english_name(chinese_name: str) -> str:
+    """将中文姓名转换为英文拼音，格式为 '名 姓' (例如 'Guangwen Yang')"""
+    chinese_name = strip_bracketed_name_content(chinese_name)
+    if not chinese_name:
+        return ""
+
+    # lazy_pinyin('黄振春') 会返回 ['huang', 'zhen', 'chun']
+    pinyin_list = lazy_pinyin(chinese_name)
+    
+    if len(pinyin_list) == 0:
+        return ""
+    elif len(pinyin_list) == 1:
+        return pinyin_list[0].capitalize()
+    else:
+        # 中国人姓名通常第一个字是姓
+        last_name = pinyin_list[0].capitalize()
+        # 后面的字合并在一起作为名，并首字母大写
+        first_name = "".join(pinyin_list[1:]).capitalize()
+        return f"{first_name} {last_name}"
+
+def parse_mentor_list(ch_url: str) -> list[dict]:
+    # 移除了所有对英文 url 的请求，大幅提升爬虫速度
+    html = fetch_html(ch_url)
+    soup = BeautifulSoup(html, "lxml")
+
+    mentors = []
+    for item in soup.select("h2"):
+        relative_url = item.select_one("a")["href"]
+        detail_url = urljoin(url, relative_url)
+        mentors.append(parse_mentor_detail(detail_url))
+        
+    return mentors
+
+
+def build_given_name_surname_pinyin(chinese_name: str) -> str:
+    """将中文姓名转换为名-姓全拼，例如“唐杰” -> "jie-tang"。"""
+    normalized = strip_bracketed_name_content(chinese_name)
+    if normalized == "":
+        return ""
+
+    pinyin_list = lazy_pinyin(normalized)
+    if len(pinyin_list) == 0:
+        return ""
+    if len(pinyin_list) == 1:
+        return pinyin_list[0].lower()
+
+    surname = pinyin_list[0].lower()
+    given_name = "".join(pinyin_list[1:]).lower()
+    return f"{given_name}-{surname}"
+
+
+def _normalize_name(name: str) -> str:
+    lowered = strip_bracketed_name_content(name).lower()
+    # Support inputs like "jie-tang" and "tang, jie" by normalizing separators.
+    lowered = lowered.replace("-", " ").replace(",", " ")
+    return " ".join(lowered.split())
+
+
+def _english_name_variants(english_name: str) -> set[str]:
+    normalized = _normalize_name(english_name)
+    if normalized == "":
+        return set()
+
+    variants = {normalized}
+    parts = normalized.split(" ")
+    if len(parts) == 2:
+        variants.add(f"{parts[1]} {parts[0]}")
+        variants.add(f"{parts[1]}, {parts[0]}")
+    return variants
+
+
+def _extract_email_from_text(text: str) -> str | None:
+    allowed_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._%+-@")
+    candidate_chars: list[str] = []
+
+    def flush_candidate() -> str | None:
+        if not candidate_chars:
+            return None
+
+        candidate = "".join(candidate_chars).strip(".,;:!?()[]{}<>\"'，。；：！？（）【】《》")
+        candidate_chars.clear()
+        if candidate.count("@") != 1:
+            return None
+
+        local_part, domain = candidate.split("@", 1)
+        if not local_part or not domain or "." not in domain:
+            return None
+        if domain.startswith(".") or domain.endswith("."):
+            return None
+
+        suffix = domain.rsplit(".", 1)[-1]
+        if len(suffix) < 2 or not suffix.isalpha():
+            return None
+        return candidate
+
+    for char in str(text or ""):
+        if char in allowed_chars:
+            candidate_chars.append(char)
+            continue
+
+        candidate = flush_candidate()
+        if candidate is not None:
+            return candidate
+
+    return flush_candidate()
+
+
+def crawl_mentor_by_name(chinese_name: str = "", english_name: str = "") -> dict | None:
+    target_cn = strip_bracketed_name_content(chinese_name)
+    target_en_variants = _english_name_variants(english_name)
+
+    if target_cn == "" and not target_en_variants:
+        return None
+
+    html = fetch_html(url)
+    soup = BeautifulSoup(html, "lxml")
+
+    for item in soup.select("h2"):
+        anchor = item.select_one("a")
+        if anchor is None or "href" not in anchor.attrs:
+            continue
+
+        detail_url = urljoin(url, anchor["href"])
+        mentor = parse_mentor_detail(detail_url)
+
+        if target_cn and mentor.get("Chinese_name", "").strip() == target_cn:
+            return mentor
+
+        mentor_en_variants = _english_name_variants(str(mentor.get("English_name", "")))
+        if target_en_variants and mentor_en_variants & target_en_variants:
+            return mentor
+
+    return None
+
+def parse_mentor_detail(detail_url: str) -> dict:
+    html = fetch_html(detail_url)
+    soup = BeautifulSoup(html, "lxml")
+    #查找研究领域
+    start_node = soup.find(lambda tag: tag.name == "p" and "研究领域" in tag.get_text())
+    direction_list = []
+
+    if start_node:
+        for sibling in start_node.find_next_siblings():
+            if sibling.find('strong') or sibling.name=='h4' or "研究概况" in sibling.get_text(strip = True)  \
+                or "讲授课程" in sibling.get_text(strip = True) or "工作履历" in sibling.get_text(strip = True)  \
+                or "研究概况" in sibling.get_text(strip = True) or "奖励与荣誉" in sibling.get_text(strip = True):
+                break
+            text = sibling.get_text(strip=True)
+            if text:
+                direction_list.append(text)
+    research_direction = "\n".join(direction_list)
+
+    # 查找内容中邮箱
+    email = None
+    email_tag = (
+        soup.find(lambda tag: tag.name == "p" and "邮箱" in tag.get_text())
+        or soup.find(lambda tag: tag.name == "p" and "邮件" in tag.get_text())
+    )
+    if email_tag:
+        email_text = email_tag.get_text()
+        email = _extract_email_from_text(email_text) or "未提供"
+        
+    #导师概况
+    profile = ""
+    for description in ["教育背景","研究概况","奖励与荣誉"]:
+        start_node = soup.find(lambda tag: tag.name == "p" and description in tag.get_text())
+        info_list = []
+
+        if start_node:
+            for sibling in start_node.find_next_siblings():
+                if sibling.find('strong') or "学术成果" in sibling.get_text(strip = True)   \
+                    or "代表性论文" in sibling.get_text(strip = True) or "研究概况" in sibling.get_text(strip = True) or "奖励与荣誉" in sibling.get_text(strip = True):
+                    break
+                text = sibling.get_text(strip=True)
+                if text:
+                    info_list.append(text)
+        if len(info_list):
+            info_list.insert(0, description)
+        profile += "\n".join(info_list) + '\n'
+
+    # 提取中文名
+    chinese_name_raw = soup.select_one("title").get_text().split('-')[0]
+    chinese_name = strip_bracketed_name_content(chinese_name_raw)
+
+    return {
+        "Chinese_name": chinese_name,
+        "English_name": get_english_name(chinese_name),  # 直接使用函数转换拼音
+        "research_direction": research_direction,
+        "email": email,
+        "profile": profile,
+    }
+
+# 测试代码（方便你在本地直接测试运行）
+if __name__ == "__main__":
+    mentors = parse_mentor_list(url)
+    print(f"成功抓取 {len(mentors)} 位导师信息！")
+    # 打印前2个检查效果
+    for m in mentors[:2]:
+        print(f"中文名: {m['Chinese_name']} -> 英文名: {m['English_name']}")

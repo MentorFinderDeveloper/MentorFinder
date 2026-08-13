@@ -1,0 +1,447 @@
+import re
+import arxiv
+import time
+import requests
+from pathlib import Path
+from scholarly import scholarly
+from django.core.management.base import BaseCommand
+
+from account.models import WeeklyPushPaperBucket
+from account.services.weekly_push_files import (
+    append_weekly_push_paper_ids,
+    build_weekly_push_bucket_period_key,
+    get_weekly_push_day_key,
+    resolve_weekly_push_record_target_cycle,
+)
+from dataset.models import Mentor, Paper
+from dataset.services.author_matching import has_exact_english_author_match
+from dataset.services.scheduled_task_progress import update_scheduled_task_progress
+
+
+class Command(BaseCommand):
+    help = '从 arXiv 和 Google Scholar 抓取导师的论文'
+    S2_API_URL = "https://api.semanticscholar.org/graph/v1/paper/ARXIV:{arxiv_id}"
+    S2_FIELDS = "s2FieldsOfStudy,tldr"
+    ARXIV_CLIENT_PAGE_SIZE = 100
+    ARXIV_CLIENT_DELAY_SECONDS = 5.0
+    ARXIV_CLIENT_NUM_RETRIES = 5
+    # 429 限流：首次失败后按此间隔（秒）退避重试，用尽则跳过该导师。
+    ARXIV_RATE_LIMIT_BACKOFF_SECONDS = [20, 40, 60]
+    # arxiv 库内部请求默认不带超时，遇到服务端挂起会无限阻塞、卡死整轮同步在某位导师。
+    # 给它的 HTTP 请求注入这个超时作为兜底（秒）。
+    ARXIV_HTTP_TIMEOUT_SECONDS = 30
+    # 请求超时：首次超时后按此间隔（秒）退避重试，最多 3 次，用尽则跳过该导师。
+    ARXIV_TIMEOUT_RETRY_BACKOFF_SECONDS = [20, 40, 60]
+    PAPERS_PER_MENTOR_LIMIT = 10
+
+    SEMANTIC_SCHOLAR_API_TEMPLATE = "https://api.semanticscholar.org/graph/v1/paper/ARXIV:{arxiv_id}"
+    SEMANTIC_SCHOLAR_FIELDS = "s2FieldsOfStudy,tldr"
+    _ARXIV_VERSION_PATTERN = re.compile(r"v\d+$", re.IGNORECASE)
+
+    def __init__(self):
+        super().__init__()
+        self.semantic_scholar_cache: dict[str, tuple[list[str], str]] = {}
+        self.created_paper_ids: set[int] = set()
+
+    def add_arguments(self, parser):
+        parser.add_argument(
+            "--disable-weekly-record",
+            action="store_true",
+            help="Do not record newly discovered paper IDs into the weekly push bucket table",
+        )
+        parser.add_argument(
+            "--record-cycle",
+            default="auto",
+            choices=["auto", WeeklyPushPaperBucket.CYCLE_CURRENT, WeeklyPushPaperBucket.CYCLE_NEXT],
+            help="Which weekly push cycle to record into, defaults to auto",
+        )
+        parser.add_argument("--scheduled-run-id", type=int, default=None)
+        parser.add_argument(
+            "--start-index",
+            type=int,
+            default=0,
+            help="从第 N 位导师之后开始处理（断点续跑用，0 表示从头）",
+        )
+
+    def handle(self, *args, **options):
+        self.created_paper_ids = set()
+        # 按 id 稳定排序，保证“第 N 位导师”的含义在多次（含续跑）运行间一致。
+        mentors = list(Mentor.objects.all().order_by("id"))
+        total_mentors = len(mentors)
+        scheduled_run_id = options["scheduled_run_id"]
+        start_index = max(0, options.get("start_index") or 0)
+        resume_note = f"（从第 {start_index} 位之后续跑）" if start_index > 0 else ""
+        update_scheduled_task_progress(
+            scheduled_run_id,
+            f"开始抓取论文，共 {total_mentors} 位导师{resume_note}",
+            current=min(start_index, total_mentors),
+            total=total_mentors,
+        )
+
+        for index, mentor in enumerate(mentors, start=1):
+            # 续跑时跳过已处理过的前 start_index 位导师。
+            if index <= start_index:
+                continue
+            update_scheduled_task_progress(
+                scheduled_run_id,
+                f"正在处理导师 {index}/{total_mentors}: {mentor.Chinese_name} ({mentor.English_name or '无英文名'})",
+                current=index - 1,
+                total=total_mentors,
+            )
+            self.stdout.write(f"正在处理导师: {mentor.Chinese_name} ({mentor.English_name})")
+            
+            # 由于外文期刊主要用英文名，如果没有英文名则跳过（或者你可以引入拼音转换库）
+            if not mentor.English_name:
+                self.stdout.write(self.style.WARNING(f"缺少英文名，跳过 {mentor.Chinese_name}"))
+                update_scheduled_task_progress(
+                    scheduled_run_id,
+                    f"已跳过导师 {index}/{total_mentors}: {mentor.Chinese_name} 缺少英文名",
+                    current=index,
+                    total=total_mentors,
+                )
+                continue
+
+            # 1. 从 arXiv 获取论文
+            self.fetch_from_arxiv(mentor)
+            update_scheduled_task_progress(
+                scheduled_run_id,
+                f"已完成导师 {index}/{total_mentors}: {mentor.Chinese_name}，本次新增论文 {len(self.created_paper_ids)} 篇",
+                current=index,
+                total=total_mentors,
+            )
+
+            # 2. 从 Google Scholar 获取论文 (取消注释以启用，但注意可能被Google暂时封IP)
+            # self.fetch_from_scholar(mentor)
+            time.sleep(3)
+
+        if not options["disable_weekly_record"]:
+            update_scheduled_task_progress(
+                scheduled_run_id,
+                f"正在写入周报增量记录，本次新增论文 {len(self.created_paper_ids)} 篇",
+                current=total_mentors,
+                total=total_mentors,
+            )
+            self._record_new_papers_for_weekly_push(
+                paper_ids=sorted(self.created_paper_ids),
+                record_cycle=options["record_cycle"],
+            )
+        update_scheduled_task_progress(
+            scheduled_run_id,
+            f"论文抓取完成，共处理 {total_mentors} 位导师，本次新增论文 {len(self.created_paper_ids)} 篇",
+            current=total_mentors,
+            total=total_mentors,
+        )
+
+    def _extract_arxiv_id(self, entry_id: str) -> str:
+        # arXiv entry_id examples:
+        # - http://arxiv.org/abs/2504.12345v1
+        # - http://arxiv.org/abs/cs/0112017v1
+        if not entry_id:
+            return ""
+        arxiv_part = entry_id.rsplit("/abs/", 1)[-1].strip()
+        if arxiv_part == "":
+            return ""
+        return arxiv_part.split("v", 1)[0]
+
+    def _build_arxiv_url(self, arxiv_id: str) -> str:
+        if arxiv_id == "":
+            return ""
+        return f"https://arxiv.org/abs/{arxiv_id}"
+
+    def _fetch_s2_metadata(self, arxiv_id: str) -> tuple[str, str]:
+        if arxiv_id == "":
+            return "", ""
+
+        url = self.S2_API_URL.format(arxiv_id=arxiv_id)
+        try:
+            response = requests.get(
+                url,
+                params={"fields": self.S2_FIELDS},
+                timeout=15,
+                headers={"User-Agent": "MentorFinder/1.0"},
+            )
+            if response.status_code != 200:
+                return "", ""
+
+            payload = response.json()
+
+            fields = payload.get("s2FieldsOfStudy") or []
+            field_names = []
+            for field_item in fields:
+                category = str(field_item.get("category", "")).strip()
+                if category:
+                    field_names.append(category)
+            # 去重并保留顺序
+            unique_field_names = list(dict.fromkeys(field_names))
+            subjects_str = ", ".join(unique_field_names)
+
+            tldr_data = payload.get("tldr") or {}
+            tldr_text = str(tldr_data.get("text", "")).strip()
+            return subjects_str, tldr_text
+        except Exception:
+            return "", ""
+
+    def fetch_from_arxiv(self, mentor):
+        self.stdout.write(f"  -> 正在 arXiv 搜索: {mentor.English_name}...")
+
+        # 429 限流与请求超时各自独立计数重试；其他错误直接放弃这位导师。
+        rate_limit_attempt = 0
+        timeout_attempt = 0
+        while True:
+            try:
+                self._fetch_from_arxiv_once(mentor)
+                return
+            except Exception as e:
+                if self._is_arxiv_rate_limit_error(e):
+                    if rate_limit_attempt >= len(self.ARXIV_RATE_LIMIT_BACKOFF_SECONDS):
+                        self.stdout.write(self.style.ERROR(f"  arXiv 抓取报错（429 重试已用尽）: {e}"))
+                        return
+                    backoff_seconds = self.ARXIV_RATE_LIMIT_BACKOFF_SECONDS[rate_limit_attempt]
+                    rate_limit_attempt += 1
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f"  arXiv 返回 429，等待 {backoff_seconds} 秒后重试（第 {rate_limit_attempt} 次）..."
+                        )
+                    )
+                    time.sleep(backoff_seconds)
+                    continue
+
+                if self._is_arxiv_timeout_error(e):
+                    if timeout_attempt >= len(self.ARXIV_TIMEOUT_RETRY_BACKOFF_SECONDS):
+                        self.stdout.write(self.style.ERROR(f"  arXiv 抓取报错（超时重试已用尽）: {e}"))
+                        return
+                    backoff_seconds = self.ARXIV_TIMEOUT_RETRY_BACKOFF_SECONDS[timeout_attempt]
+                    timeout_attempt += 1
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f"  arXiv 请求超时，等待 {backoff_seconds} 秒后重试（第 {timeout_attempt} 次）..."
+                        )
+                    )
+                    time.sleep(backoff_seconds)
+                    continue
+
+                self.stdout.write(self.style.ERROR(f"  arXiv 抓取报错: {e}"))
+                return
+
+    def _build_arxiv_client(self):
+        client = arxiv.Client(
+            page_size=self.ARXIV_CLIENT_PAGE_SIZE,
+            delay_seconds=self.ARXIV_CLIENT_DELAY_SECONDS,
+            num_retries=self.ARXIV_CLIENT_NUM_RETRIES,
+        )
+        # arxiv 2.x 内部用 requests.Session().get(url) 抓取且不带 timeout，服务端挂起时会
+        # 无限阻塞，导致整轮同步卡死在某位导师。这里包一层默认超时作为兜底：超时会抛
+        # requests 异常，被 fetch_from_arxiv 当作非-429 错误捕获 → 记录日志并跳到下一位导师。
+        session = getattr(client, "_session", None)
+        if session is not None:
+            original_request = session.request
+
+            def _request_with_timeout(method, url, **kwargs):
+                kwargs.setdefault("timeout", self.ARXIV_HTTP_TIMEOUT_SECONDS)
+                return original_request(method, url, **kwargs)
+
+            session.request = _request_with_timeout
+        return client
+
+    def _is_arxiv_rate_limit_error(self, error: Exception) -> bool:
+        error_message = str(error)
+        return "HTTP 429" in error_message or "429" in error_message
+
+    def _is_arxiv_timeout_error(self, error: Exception) -> bool:
+        if isinstance(error, requests.exceptions.Timeout):
+            return True
+        error_message = str(error).lower()
+        return "timed out" in error_message or "timeout" in error_message
+
+    def _clean_arxiv_author_names(self, author_names: str) -> str:
+        parts = [part.strip() for part in str(author_names or "").split(",")]
+
+        while parts and parts[0] == "":
+            parts.pop(0)
+
+        if not parts:
+            return ""
+
+        for index in range(min(2, len(parts))):
+            current_part = parts[index]
+            if ":" not in current_part and "：" not in current_part:
+                continue
+
+            _, suffix = re.split(r"[:：]", current_part, maxsplit=1)
+            suffix = suffix.strip()
+            parts = parts[index + 1:]
+            if suffix != "":
+                parts.insert(0, suffix)
+            break
+
+        while parts and parts[0] in {"", ":", "："}:
+            parts.pop(0)
+
+        return ", ".join(part for part in parts if part != "")
+
+    def _extract_arxiv_authors(self, result) -> list[str]:
+        raw_authors = [str(author.name).strip() for author in getattr(result, "authors", []) if str(author.name).strip()]
+        cleaned_author_names = self._clean_arxiv_author_names(", ".join(raw_authors))
+        return [author.strip() for author in cleaned_author_names.split(",") if author.strip()]
+
+    def _fetch_from_arxiv_once(self, mentor):
+        client = self._build_arxiv_client()
+        search = arxiv.Search(
+            query=f'au:"{mentor.English_name}"',
+            sort_by=arxiv.SortCriterion.SubmittedDate,
+            max_results=self.PAPERS_PER_MENTOR_LIMIT,
+        )
+
+        for result in client.results(search):
+            title = result.title
+            abstract = result.summary.replace('\n', ' ').strip()
+            publish_date = result.published.date()
+            author_list = self._extract_arxiv_authors(result)
+            if not has_exact_english_author_match(author_list, mentor.English_name):
+                continue
+            authors = ", ".join(author_list)
+            arxiv_id = self._extract_arxiv_id(result.entry_id)
+            arxiv_url = self._build_arxiv_url(arxiv_id)
+            arxiv_subjects = ", ".join(result.categories)
+            s2_subjects, s2_tldr = self._fetch_s2_metadata(arxiv_id)
+            subjects_str = s2_subjects or arxiv_subjects
+
+            paper = None
+            created = False
+            if arxiv_id:
+                paper = Paper.objects.filter(arxiv_id=arxiv_id).first()
+
+            if paper is None:
+                paper, created = Paper.objects.get_or_create(
+                    title=title,
+                    defaults={
+                        "abstract": abstract,
+                        "publish_date": publish_date,
+                        "author_names": authors,
+                        "subjects": subjects_str,
+                        "arxiv_id": arxiv_id,
+                        "arxiv_url": arxiv_url or None,
+                        "tldr": s2_tldr or None,
+                    },
+                )
+            else:
+                changed = False
+                if paper.title != title:
+                    paper.title = title
+                    changed = True
+                if not paper.abstract and abstract:
+                    paper.abstract = abstract
+                    changed = True
+                if paper.publish_date is None and publish_date:
+                    paper.publish_date = publish_date
+                    changed = True
+                if not paper.author_names and authors:
+                    paper.author_names = authors
+                    changed = True
+                if not paper.subjects and subjects_str:
+                    paper.subjects = subjects_str
+                    changed = True
+                if not paper.arxiv_id and arxiv_id:
+                    paper.arxiv_id = arxiv_id
+                    changed = True
+                if not paper.arxiv_url and arxiv_url:
+                    paper.arxiv_url = arxiv_url
+                    changed = True
+                if not paper.tldr and s2_tldr:
+                    paper.tldr = s2_tldr
+                    changed = True
+                if changed:
+                    paper.save()
+
+            if created:
+                self.stdout.write(self.style.SUCCESS(f"    [新增论文] {title} (分类: {subjects_str})"))
+                if paper.id is not None:
+                    self.created_paper_ids.add(paper.id)
+            else:
+                updated = False
+                if not paper.subjects and subjects_str:
+                    paper.subjects = subjects_str
+                    updated = True
+                if not paper.tldr and s2_tldr:
+                    paper.tldr = s2_tldr
+                    updated = True
+                if not paper.arxiv_id and arxiv_id:
+                    paper.arxiv_id = arxiv_id
+                    updated = True
+                if not paper.arxiv_url and arxiv_url:
+                    paper.arxiv_url = arxiv_url
+                    updated = True
+                if updated:
+                    paper.save()
+                    self.stdout.write(self.style.SUCCESS(f"    [更新论文元数据] {title} (分类: {subjects_str})"))
+            
+            paper.bind_to_mentors_by_authors()
+
+
+    def fetch_from_scholar(self, mentor):
+        self.stdout.write(f"  -> 正在 Google Scholar 搜索: {mentor.English_name}...")
+        try:
+            # 搜索作者
+            search_query = scholarly.search_author(mentor.English_name)
+            author = next(search_query) # 获取第一个匹配的作者
+            author = scholarly.fill(author) # 填充该作者的详细信息（包括论文列表）
+
+            for pub in author['publications'][:self.PAPERS_PER_MENTOR_LIMIT]:
+                pub_filled = scholarly.fill(pub) # 填充单篇论文详细信息获取摘要和作者
+                
+                title = pub_filled['bib'].get('title', '')
+                abstract = pub_filled['bib'].get('abstract', '')
+                authors = pub_filled['bib'].get('author', '')
+                
+                # 处理年份 (Scholar 通常只有年份)
+                pub_year = pub_filled['bib'].get('pub_year')
+                publish_date = f"{pub_year}-01-01" if pub_year else None
+
+                paper, created = Paper.objects.get_or_create(
+                    title=title,
+                    defaults={
+                        'abstract': abstract,
+                        'publish_date': publish_date,
+                        'author_names': authors
+                    }
+                )
+                if created:
+                    self.stdout.write(self.style.SUCCESS(f"    [新增论文] {title}"))
+                paper.bind_to_mentors_by_authors()
+
+        except StopIteration:
+            self.stdout.write(self.style.WARNING(f"    在 Scholar 未找到该作者"))
+        except Exception as e:
+            self.stdout.write(self.style.ERROR(f"  Scholar 抓取报错: {e}"))
+
+    def _record_new_papers_for_weekly_push(
+        self,
+        paper_ids: list[int],
+        record_cycle: str = "auto",
+        now=None,
+    ):
+        if not paper_ids:
+            self.stdout.write("本次未发现新增论文，未更新周报增量文件。")
+            return
+
+        day_key = get_weekly_push_day_key(now)
+        target_cycle = (
+            resolve_weekly_push_record_target_cycle(now)
+            if record_cycle == "auto"
+            else record_cycle
+        )
+        period_key = build_weekly_push_bucket_period_key(
+            now=now,
+            cycle=target_cycle,
+        )
+        added_count = append_weekly_push_paper_ids(
+            cycle=target_cycle,
+            period_key=period_key,
+            day_key=day_key,
+            paper_ids=paper_ids,
+        )
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"已将 {added_count} 篇新增论文记录到周期 [{target_cycle}] / [{period_key}] 的 {day_key} 列表。"
+            )
+        )

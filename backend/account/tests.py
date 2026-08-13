@@ -1,0 +1,3936 @@
+import json
+import os
+import tempfile
+import unittest
+from io import StringIO
+from datetime import date, datetime, timedelta
+from unittest.mock import patch
+from pathlib import Path
+
+from django.contrib.auth.hashers import check_password
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
+from django.core.management.base import CommandError
+from django.test import TestCase, override_settings
+from django.utils import timezone
+
+from account.models import EmailVerificationCode, MentorVerificationRequest, PushRecord, User, MentorFollow, SubjectFollow, UserFollow, UserProfile, WeeklyPushPaperBucket
+from account.services import weekly_push_files
+from account.services.weekly_push_files import (
+    build_weekly_push_bucket_period_key,
+)
+from account.services.weekly_push import (
+    build_weekly_push_digest,
+    render_weekly_push_email,
+    send_weekly_push_email,
+)
+from dataset.models import Mentor, Paper
+from utils.startup_config import load_startup_config
+from utils.utils_jwt import (
+    EXPIRE_IN_SECONDS,
+    b64url_decode,
+    b64url_encode,
+    check_jwt_token,
+    generate_jwt_token,
+)
+from utils.utils_require import CheckRequire, require
+
+
+class AccountAuthTests(TestCase):
+    def setUp(self):
+        User.objects.create_user(username="Ashitemaru", password="abc12345", email="ashitemaru@example.com")
+        User.objects.create_user(
+            username="banned_user",
+            password="abc12345",
+            email="banned@example.com",
+            role=User.ROLE_BANNED,
+        )
+
+    def post_json(self, path: str, payload: dict):
+        return self.client.post(path, data=json.dumps(payload), content_type="application/json")
+
+    def issue_verification_code(self, email: str, code: str = "123456", expires_in: timedelta = timedelta(minutes=10)) -> str:
+        """预置一条有效验证码记录，返回 6 位 code，供 register 测试用。"""
+        EmailVerificationCode.objects.update_or_create(
+            email=email.strip(),
+            defaults={
+                "code": code,
+                "expires_at": timezone.now() + expires_in,
+            },
+        )
+        return code
+
+    def test_login_existing_user_correct_password(self):
+        res = self.post_json("/login", {"username": "Ashitemaru", "password": "abc12345"})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(check_jwt_token(res.json()["token"]), {"username": "Ashitemaru"})
+        self.assertEqual(res.json()["username"], "Ashitemaru")
+        self.assertEqual(res.json()["role"], "student")
+
+    def test_login_with_email_correct_password(self):
+        res = self.post_json("/login", {"username": "ashitemaru@example.com", "password": "abc12345"})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(check_jwt_token(res.json()["token"]), {"username": "Ashitemaru"})
+        self.assertEqual(res.json()["username"], "Ashitemaru")
+        self.assertEqual(res.json()["role"], "student")
+
+    def test_login_non_existing_user(self):
+        res = self.post_json("/login", {"username": "NewUser", "password": "abc12345"})
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+        self.assertEqual(res.json()["info"], "User not found")
+
+    def test_login_wrong_password(self):
+        res = self.post_json("/login", {"username": "Ashitemaru", "password": "wrongpassword"})
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+        self.assertEqual(res.json()["info"], "Wrong password")
+
+    def test_login_banned_user_rejected(self):
+        res = self.post_json("/login", {"username": "banned_user", "password": "abc12345"})
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.json()["code"], 3)
+        self.assertEqual(res.json()["info"], "User is banned")
+
+    def test_login_with_email_wrong_password(self):
+        res = self.post_json("/login", {"username": "ashitemaru@example.com", "password": "wrongpassword"})
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+        self.assertEqual(res.json()["info"], "Wrong password")
+
+    def test_register_success(self):
+        code = self.issue_verification_code("newuser@example.com")
+        res = self.post_json(
+            "/register",
+            {"username": "NewUser", "password": "abc12345", "email": "newuser@example.com", "verificationCode": code},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(check_jwt_token(res.json()["token"]), {"username": "NewUser"})
+        self.assertEqual(res.json()["role"], "student")
+        user = User.objects.filter(username="NewUser", email="newuser@example.com").first()
+        self.assertIsNotNone(user)
+        self.assertNotEqual(user.password, "abc12345")
+        self.assertTrue(check_password("abc12345", user.password))
+
+    def test_register_success_with_underscore_and_hyphen_username(self):
+        code = self.issue_verification_code("new-user@example.com")
+        res = self.post_json(
+            "/register",
+            {"username": "new_user-1", "password": "abc12345", "email": "new-user@example.com", "verificationCode": code},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertTrue(User.objects.filter(username="new_user-1", email="new-user@example.com").exists())
+
+    def test_register_invalid_username_characters(self):
+        res = self.post_json(
+            "/register",
+            {"username": "Bad User!", "password": "abc12345", "email": "baduser@example.com"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertFalse(User.objects.filter(email="baduser@example.com").exists())
+
+    def test_register_password_too_short(self):
+        res = self.post_json(
+            "/register",
+            {"username": "ShortPwdUser", "password": "ab123", "email": "shortpwd@example.com"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_register_password_without_digit(self):
+        res = self.post_json(
+            "/register",
+            {"username": "NoDigitUser", "password": "abcdefgh", "email": "nodigit@example.com"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_register_password_without_letter(self):
+        res = self.post_json(
+            "/register",
+            {"username": "NoLetterUser", "password": "12345678", "email": "noletter@example.com"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_register_missing_email(self):
+        res = self.post_json("/register", {"username": "NewUser", "password": "abc12345"})
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_register_invalid_email(self):
+        res = self.post_json(
+            "/register",
+            {"username": "NewUser", "password": "abc12345", "email": "not-an-email"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_register_invalid_email_without_valid_domain(self):
+        res = self.post_json(
+            "/register",
+            {"username": "AnotherNewUser", "password": "abc12345", "email": "user@invalid"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_register_valid_email_with_plus_tag(self):
+        code = self.issue_verification_code("user+tag@example.com")
+        res = self.post_json(
+            "/register",
+            {"username": "PlusTagUser", "password": "abc12345", "email": "user+tag@example.com", "verificationCode": code},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+
+    def test_register_email_with_surrounding_spaces(self):
+        code = self.issue_verification_code("trim@example.com")
+        res = self.post_json(
+            "/register",
+            {"username": "TrimEmailUser", "password": "abc12345", "email": "  trim@example.com  ", "verificationCode": code},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertTrue(User.objects.filter(username="TrimEmailUser", email="trim@example.com").exists())
+
+    def test_register_invalid_email_double_at(self):
+        res = self.post_json(
+            "/register",
+            {"username": "BadEmailUser", "password": "abc12345", "email": "user@@example.com"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_register_duplicate_username(self):
+        res = self.post_json(
+            "/register",
+            {"username": "Ashitemaru", "password": "abc12345", "email": "new@example.com"},
+        )
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.json()["code"], 3)
+
+    def test_register_duplicate_username_after_trimming_spaces(self):
+        res = self.post_json(
+            "/register",
+            {"username": "  Ashitemaru  ", "password": "abc12345", "email": "trimmed@example.com"},
+        )
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.json()["code"], 3)
+        self.assertFalse(User.objects.filter(email="trimmed@example.com").exists())
+
+    def test_register_duplicate_email(self):
+        res = self.post_json(
+            "/register",
+            {"username": "AnotherUser", "password": "abc12345", "email": "ashitemaru@example.com"},
+        )
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.json()["code"], 4)
+
+    def test_login_bad_method(self):
+        res = self.client.get("/login")
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+    def test_register_bad_method(self):
+        res = self.client.get("/register")
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+    def test_register_requires_verification_code(self):
+        res = self.post_json(
+            "/register",
+            {"username": "NoCodeUser", "password": "abc12345", "email": "nocode@example.com"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], 5)
+        self.assertFalse(User.objects.filter(username="NoCodeUser").exists())
+
+    def test_register_invalid_verification_code(self):
+        self.issue_verification_code("badcode@example.com", code="111111")
+        res = self.post_json(
+            "/register",
+            {"username": "BadCodeUser", "password": "abc12345", "email": "badcode@example.com", "verificationCode": "999999"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], 5)
+        self.assertFalse(User.objects.filter(username="BadCodeUser").exists())
+        # 错误码不应被消费，原记录仍在
+        self.assertTrue(EmailVerificationCode.objects.filter(email="badcode@example.com").exists())
+
+    def test_register_expired_verification_code_rejected(self):
+        self.issue_verification_code("expired@example.com", code="123456", expires_in=timedelta(seconds=-1))
+        res = self.post_json(
+            "/register",
+            {"username": "ExpiredUser", "password": "abc12345", "email": "expired@example.com", "verificationCode": "123456"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], 5)
+        # 过期记录在校验时被清理
+        self.assertFalse(EmailVerificationCode.objects.filter(email="expired@example.com").exists())
+
+    def test_register_consumes_verification_code(self):
+        code = self.issue_verification_code("consume@example.com")
+        res = self.post_json(
+            "/register",
+            {"username": "ConsumeUser", "password": "abc12345", "email": "consume@example.com", "verificationCode": code},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        # 注册成功后验证码记录应被消费
+        self.assertFalse(EmailVerificationCode.objects.filter(email="consume@example.com").exists())
+
+    def test_send_verification_code_success(self):
+        res = self.post_json("/register/verification-code", {"email": "fresh@example.com"})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["cooldownSeconds"], 60)
+        record = EmailVerificationCode.objects.filter(email="fresh@example.com").first()
+        self.assertIsNotNone(record)
+        self.assertEqual(len(record.code), 6)
+        self.assertTrue(record.code.isdigit())
+
+    def test_send_verification_code_duplicate_email_rejected(self):
+        res = self.post_json("/register/verification-code", {"email": "ashitemaru@example.com"})
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.json()["code"], 4)
+
+    def test_send_verification_code_invalid_email_format(self):
+        res = self.post_json("/register/verification-code", {"email": "not-an-email"})
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_send_verification_code_cooldown(self):
+        first = self.post_json("/register/verification-code", {"email": "cool@example.com"})
+        self.assertEqual(first.json()["code"], 0)
+        second = self.post_json("/register/verification-code", {"email": "cool@example.com"})
+        self.assertEqual(second.status_code, 429)
+        self.assertEqual(second.json()["code"], 6)
+
+    def test_send_verification_code_bad_method(self):
+        res = self.client.get("/register/verification-code")
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+    def test_send_password_reset_code_success_for_existing_email(self):
+        res = self.post_json("/password-reset/verification-code", {"email": "ashitemaru@example.com"})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        record = EmailVerificationCode.objects.filter(email="ashitemaru@example.com").first()
+        self.assertIsNotNone(record)
+        self.assertEqual(len(record.code), 6)
+        self.assertTrue(record.code.isdigit())
+
+    def test_send_password_reset_code_rejects_unknown_email(self):
+        res = self.post_json("/password-reset/verification-code", {"email": "missing@example.com"})
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_reset_password_with_email_code_success(self):
+        code = self.issue_verification_code("ashitemaru@example.com")
+        res = self.post_json(
+            "/password-reset",
+            {"email": "ashitemaru@example.com", "password": "newpass123", "verificationCode": code},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["username"], "Ashitemaru")
+        user = User.objects.get(email="ashitemaru@example.com")
+        self.assertTrue(check_password("newpass123", user.password))
+        self.assertFalse(EmailVerificationCode.objects.filter(email="ashitemaru@example.com").exists())
+
+    def test_reset_password_rejects_invalid_code(self):
+        self.issue_verification_code("ashitemaru@example.com", code="111111")
+        res = self.post_json(
+            "/password-reset",
+            {"email": "ashitemaru@example.com", "password": "newpass123", "verificationCode": "999999"},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], 5)
+        user = User.objects.get(email="ashitemaru@example.com")
+        self.assertTrue(check_password("abc12345", user.password))
+        self.assertTrue(EmailVerificationCode.objects.filter(email="ashitemaru@example.com").exists())
+
+    def test_reset_password_rejects_weak_password(self):
+        code = self.issue_verification_code("ashitemaru@example.com")
+        res = self.post_json(
+            "/password-reset",
+            {"email": "ashitemaru@example.com", "password": "short1", "verificationCode": code},
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        user = User.objects.get(email="ashitemaru@example.com")
+        self.assertTrue(check_password("abc12345", user.password))
+
+    def test_password_reset_bad_methods(self):
+        code_res = self.client.get("/password-reset/verification-code")
+        reset_res = self.client.get("/password-reset")
+        self.assertEqual(code_res.status_code, 405)
+        self.assertEqual(code_res.json()["code"], -3)
+        self.assertEqual(reset_res.status_code, 405)
+        self.assertEqual(reset_res.json()["code"], -3)
+
+
+class MentorFollowViewTests(TestCase):
+    def setUp(self):
+        self.student = User.objects.create_user(
+            username="student1",
+            email="student1@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.student_token = generate_jwt_token("student1")
+
+        self.other_student = User.objects.create_user(
+            username="student2",
+            email="student2@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.other_student_token = generate_jwt_token("student2")
+
+        self.admin = User.objects.create_user(
+            username="admin1",
+            email="admin1@example.com",
+            password="abc12345",
+            role="admin",
+        )
+        self.admin_token = generate_jwt_token("admin1")
+
+        self.mentor = Mentor.objects.create(
+            Chinese_name="张三",
+            English_name="Zhang San",
+            research_direction="机器学习",
+            email="zhangsan@example.com",
+            profile="主要研究机器学习。",
+        )
+
+        self.other_mentor = Mentor.objects.create(
+            Chinese_name="李四",
+            English_name="Li Si",
+            research_direction="自然语言处理",
+            email="lisi@example.com",
+            profile="主要研究自然语言处理。",
+        )
+
+        self.private_mentor = Mentor.objects.create(
+            Chinese_name="王五",
+            English_name="Wang Wu",
+            research_direction="强化学习",
+            email="wangwu@example.com",
+            profile="私有导师",
+            owner=self.other_student,
+        )
+
+    def auth_headers(self, token: str):
+        return {
+            "HTTP_AUTHORIZATION": f"Bearer {token}",
+        }
+
+    def test_student_can_follow_mentor(self):
+        res = self.client.post(
+            f"/follow/mentors/{self.mentor.id}",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["followed"], True)
+        self.assertTrue(
+            MentorFollow.objects.filter(
+                student=self.student,
+                mentor=self.mentor,
+            ).exists()
+        )
+
+    def test_follow_mentor_requires_login(self):
+        res = self.client.post(f"/follow/mentors/{self.mentor.id}")
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_admin_can_follow_mentor(self):
+        res = self.client.post(
+            f"/follow/mentors/{self.mentor.id}",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["followed"], True)
+        self.assertTrue(
+            MentorFollow.objects.filter(
+                student=self.admin,
+                mentor=self.mentor,
+            ).exists()
+        )
+
+    def test_follow_non_existing_mentor_returns_404(self):
+        res = self.client.post(
+            "/follow/mentors/999999",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
+        self.assertEqual(res.json()["info"], "Mentor not found")
+
+    def test_student_cannot_follow_other_students_private_mentor(self):
+        res = self.client.post(
+            f"/follow/mentors/{self.private_mentor.id}",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
+        self.assertFalse(
+            MentorFollow.objects.filter(
+                student=self.student,
+                mentor=self.private_mentor,
+            ).exists()
+        )
+
+    def test_duplicate_follow_is_idempotent(self):
+        first_res = self.client.post(
+            f"/follow/mentors/{self.mentor.id}",
+            **self.auth_headers(self.student_token),
+        )
+        second_res = self.client.post(
+            f"/follow/mentors/{self.mentor.id}",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(first_res.status_code, 200)
+        self.assertEqual(second_res.status_code, 200)
+        self.assertEqual(
+            MentorFollow.objects.filter(
+                student=self.student,
+                mentor=self.mentor,
+            ).count(),
+            1,
+        )
+
+    def test_student_can_unfollow_mentor(self):
+        MentorFollow.objects.create(
+            student=self.student,
+            mentor=self.mentor,
+        )
+
+        res = self.client.delete(
+            f"/follow/mentors/{self.mentor.id}",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["followed"], False)
+        self.assertFalse(
+            MentorFollow.objects.filter(
+                student=self.student,
+                mentor=self.mentor,
+            ).exists()
+        )
+
+    def test_unfollow_not_followed_mentor_is_ok(self):
+        res = self.client.delete(
+            f"/follow/mentors/{self.mentor.id}",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["followed"], False)
+
+    def test_get_followed_mentors_requires_login(self):
+        res = self.client.get("/follow/mentors")
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_get_followed_mentors_returns_current_students_follows(self):
+        MentorFollow.objects.create(
+            student=self.student,
+            mentor=self.mentor,
+        )
+        MentorFollow.objects.create(
+            student=self.student,
+            mentor=self.other_mentor,
+        )
+        MentorFollow.objects.create(
+            student=self.other_student,
+            mentor=self.other_mentor,
+        )
+
+        res = self.client.get(
+            "/follow/mentors",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+
+        mentors = res.json()["mentors"]
+        mentor_names = {mentor["Chinese_name"] for mentor in mentors}
+
+        self.assertEqual(mentor_names, {"张三", "李四"})
+        self.assertEqual(len(mentors), 2)
+
+    def test_student_can_follow_subject(self):
+        Paper.objects.create(
+            title="AI paper",
+            subjects="cs.AI, cs.LG",
+            publish_date=date(2026, 5, 1),
+        )
+
+        res = self.client.post(
+            "/follow/subjects/cs.AI",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["followed"], True)
+        self.assertTrue(
+            SubjectFollow.objects.filter(
+                user=self.student,
+                subject="cs.AI",
+            ).exists()
+        )
+        self.assertEqual(res.json()["subject"]["paperCount"], 1)
+
+    def test_get_followed_subject_summaries_and_available_subjects(self):
+        Paper.objects.create(
+            title="Old AI paper",
+            subjects="cs.AI",
+            publish_date=date(2026, 4, 1),
+            author_names="A",
+        )
+        Paper.objects.create(
+            title="New AI paper",
+            subjects="cs.AI, cs.LG",
+            publish_date=date(2026, 5, 1),
+            author_names="B",
+        )
+        Paper.objects.create(
+            title="NLP paper",
+            subjects="cs.CL",
+            publish_date=date(2026, 5, 2),
+        )
+        SubjectFollow.objects.create(user=self.student, subject="cs.AI")
+
+        followed_res = self.client.get(
+            "/follow/subjects/followed",
+            **self.auth_headers(self.student_token),
+        )
+        available_res = self.client.get(
+            "/follow/subjects/available",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(followed_res.status_code, 200)
+        self.assertEqual(followed_res.json()["code"], 0)
+        self.assertEqual(followed_res.json()["subjects"][0]["subject"], "cs.AI")
+        self.assertEqual(followed_res.json()["subjects"][0]["subjectName"], "人工智能 (Artificial Intelligence)")
+        self.assertEqual(followed_res.json()["subjects"][0]["paperCount"], 2)
+        self.assertNotIn("recentPapers", followed_res.json()["subjects"][0])
+
+        self.assertEqual(available_res.status_code, 200)
+        self.assertEqual(available_res.json()["code"], 0)
+        self.assertIn(
+            {"subject": "cs.CL", "subjectName": "自然语言处理 (NLP)", "paperCount": 1, "followed": False},
+            available_res.json()["availableSubjects"],
+        )
+        self.assertIn(
+            {"subject": "cs.AI", "subjectName": "人工智能 (Artificial Intelligence)", "paperCount": 2, "followed": True},
+            available_res.json()["availableSubjects"],
+        )
+
+    def test_get_followed_subject_papers_on_demand(self):
+        Paper.objects.create(
+            title="Old AI paper",
+            subjects="cs.AI",
+            publish_date=date(2026, 4, 1),
+            author_names="A",
+        )
+        Paper.objects.create(
+            title="New AI paper",
+            subjects="cs.AI, cs.LG",
+            publish_date=date(2026, 5, 1),
+            author_names="B",
+        )
+        SubjectFollow.objects.create(user=self.student, subject="cs.AI")
+
+        res = self.client.get(
+            "/follow/subjects/cs.AI/papers",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["subject"], "cs.AI")
+        self.assertEqual(res.json()["recentPapers"][0]["title"], "New AI paper")
+
+    def test_follow_counts_returns_lightweight_sidebar_totals(self):
+        MentorFollow.objects.create(student=self.student, mentor=self.mentor)
+        UserFollow.objects.create(follower=self.student, following=self.other_student)
+        UserFollow.objects.create(follower=self.other_student, following=self.student)
+        SubjectFollow.objects.create(user=self.student, subject="cs.AI")
+
+        res = self.client.get(
+            "/follow/counts",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["mentorCount"], 1)
+        self.assertEqual(res.json()["userCount"], 1)
+        self.assertEqual(res.json()["subjectCount"], 1)
+        self.assertEqual(res.json()["followerCount"], 1)
+
+    def test_student_can_unfollow_subject(self):
+        Paper.objects.create(title="AI paper", subjects="cs.AI")
+        SubjectFollow.objects.create(user=self.student, subject="cs.AI")
+
+        res = self.client.delete(
+            "/follow/subjects/cs.AI",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["followed"], False)
+        self.assertFalse(
+            SubjectFollow.objects.filter(
+                user=self.student,
+                subject="cs.AI",
+            ).exists()
+        )
+
+    def test_follow_unknown_subject_returns_404(self):
+        res = self.client.post(
+            "/follow/subjects/cs.UNKNOWN",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_admin_can_view_own_followed_mentors(self):
+        MentorFollow.objects.create(
+            student=self.admin,
+            mentor=self.mentor,
+        )
+        MentorFollow.objects.create(
+            student=self.student,
+            mentor=self.other_mentor,
+        )
+
+        res = self.client.get(
+            "/follow/mentors",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+
+        mentors = res.json()["mentors"]
+        self.assertEqual(len(mentors), 1)
+        self.assertEqual(mentors[0]["Chinese_name"], "张三")
+
+    def test_get_followed_mentors_returns_empty_list(self):
+        res = self.client.get(
+            "/follow/mentors",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["mentors"], [])
+
+    def test_follow_mentor_bad_method(self):
+        res = self.client.get(
+            f"/follow/mentors/{self.mentor.id}",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+    def test_followed_mentors_bad_method(self):
+        res = self.client.post(
+            "/follow/mentors",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+    def test_get_followers_returns_users_following_current_user(self):
+        banned_user = User.objects.create_user(
+            username="banned1",
+            email="banned1@example.com",
+            password="abc12345",
+            role=User.ROLE_BANNED,
+        )
+        UserProfile.objects.create(
+            user=self.other_student,
+            signature="我关注了你",
+        )
+        UserFollow.objects.create(follower=self.other_student, following=self.student)
+        UserFollow.objects.create(follower=self.admin, following=self.student)
+        UserFollow.objects.create(follower=banned_user, following=self.student)
+        UserFollow.objects.create(follower=self.student, following=self.other_student)
+
+        res = self.client.get(
+            "/follow/followers",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+
+        followers = res.json()["users"]
+        follower_names = {follower["username"] for follower in followers}
+        followed_by_username = {follower["username"]: follower["followed"] for follower in followers}
+
+        self.assertEqual(follower_names, {"student2", "admin1"})
+        self.assertTrue(followed_by_username["student2"])
+        self.assertFalse(followed_by_username["admin1"])
+        self.assertEqual(
+            next(follower for follower in followers if follower["username"] == "student2")["signature"],
+            "我关注了你",
+        )
+
+    def test_get_followers_includes_bound_mentor_followers_without_duplicates(self):
+        banned_user = User.objects.create_user(
+            username="banned2",
+            email="banned2@example.com",
+            password="abc12345",
+            role=User.ROLE_BANNED,
+        )
+        self.student.role = User.ROLE_MENTOR
+        self.student.mentor_profile = self.mentor
+        self.student.save(update_fields=["role", "mentor_profile"])
+
+        UserFollow.objects.create(follower=self.other_student, following=self.student)
+        MentorFollow.objects.create(student=self.other_student, mentor=self.mentor)
+        MentorFollow.objects.create(student=self.admin, mentor=self.mentor)
+        MentorFollow.objects.create(student=banned_user, mentor=self.mentor)
+        MentorFollow.objects.create(student=self.student, mentor=self.mentor)
+
+        res = self.client.get(
+            "/follow/followers",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+
+        followers = res.json()["users"]
+        follower_names = [follower["username"] for follower in followers]
+
+        self.assertEqual(set(follower_names), {"student2", "admin1"})
+        self.assertEqual(follower_names.count("student2"), 1)
+        self.assertNotIn("student1", follower_names)
+        self.assertNotIn("banned2", follower_names)
+
+    def test_get_followers_requires_login(self):
+        res = self.client.get("/follow/followers")
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_followers_bad_method(self):
+        res = self.client.post(
+            "/follow/followers",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+
+class UserProfileViewTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="profile_user",
+            email="profile_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.token = generate_jwt_token("profile_user")
+
+    def auth_headers(self, token: str):
+        return {
+            "HTTP_AUTHORIZATION": f"Bearer {token}",
+        }
+
+    def test_get_profile_requires_login(self):
+        res = self.client.get("/profile/me")
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_get_profile_returns_default_profile(self):
+        res = self.client.get(
+            "/profile/me",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["profile"]["avatarUrl"], "")
+        self.assertEqual(res.json()["profile"]["signature"], "")
+        self.assertEqual(res.json()["profile"]["personalIntro"], "")
+        self.assertEqual(res.json()["profile"]["researchExperience"], "")
+        self.assertEqual(res.json()["profile"]["honors"], "")
+        self.assertEqual(res.json()["profile"]["projectExperience"], "")
+        self.assertTrue(res.json()["profile"]["showPersonalIntro"])
+        self.assertTrue(res.json()["profile"]["showResearchExperience"])
+        self.assertTrue(res.json()["profile"]["showHonors"])
+        self.assertTrue(res.json()["profile"]["showProjectExperience"])
+        self.assertIsNone(res.json()["mentorVerificationRequest"])
+
+    def test_put_profile_updates_fields(self):
+        res = self.client.put(
+            "/profile/me",
+            data=json.dumps(
+                {
+                    "personalIntro": "热爱人机交互与数据挖掘的本科生",
+                    "researchExperience": "发表2篇CCF论文",
+                    "honors": "国家奖学金",
+                    "projectExperience": "参与导师课题系统开发",
+                }
+            ),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["profile"]["personalIntro"], "热爱人机交互与数据挖掘的本科生")
+        self.assertEqual(res.json()["profile"]["researchExperience"], "发表2篇CCF论文")
+        self.assertEqual(res.json()["profile"]["honors"], "国家奖学金")
+        self.assertEqual(res.json()["profile"]["projectExperience"], "参与导师课题系统开发")
+
+    def test_put_profile_updates_display_settings_without_clearing_content(self):
+        profile = UserProfile.objects.create(
+            user=self.user,
+            personal_intro="原个人简介",
+            research_experience="原科研经历",
+            honors="原荣誉",
+            project_experience="原项目经历",
+        )
+
+        res = self.client.put(
+            "/profile/me",
+            data=json.dumps(
+                {
+                    "avatarUrl": "https://example.com/avatar.png",
+                    "signature": "努力做一点有意思的研究",
+                    "showPersonalIntro": False,
+                    "showResearchExperience": True,
+                    "showHonors": False,
+                    "showProjectExperience": True,
+                }
+            ),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        profile.refresh_from_db()
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["profile"]["avatarUrl"], "https://example.com/avatar.png")
+        self.assertEqual(res.json()["profile"]["signature"], "努力做一点有意思的研究")
+        self.assertFalse(res.json()["profile"]["showPersonalIntro"])
+        self.assertFalse(res.json()["profile"]["showHonors"])
+        self.assertEqual(profile.personal_intro, "原个人简介")
+        self.assertEqual(profile.research_experience, "原科研经历")
+        self.assertEqual(profile.honors, "原荣誉")
+        self.assertEqual(profile.project_experience, "原项目经历")
+
+    def test_put_profile_rejects_non_string_field(self):
+        res = self.client.put(
+            "/profile/me",
+            data=json.dumps(
+                {
+                    "personalIntro": "ok",
+                    "researchExperience": ["wrong type"],
+                    "honors": "ok",
+                    "projectExperience": "ok",
+                }
+            ),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_put_profile_rejects_non_boolean_display_setting(self):
+        res = self.client.put(
+            "/profile/me",
+            data=json.dumps(
+                {
+                    "showHonors": "yes",
+                }
+            ),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_profile_bad_method(self):
+        res = self.client.post(
+            "/profile/me",
+            data=json.dumps({}),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+    def test_upload_avatar_saves_image_and_updates_profile(self):
+        with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
+            image = SimpleUploadedFile(
+                "avatar.png",
+                b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR",
+                content_type="image/png",
+            )
+
+            res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": image},
+                **self.auth_headers(self.token),
+            )
+
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.json()["code"], 0)
+            self.assertTrue(res.json()["avatarUrl"].startswith("/media/avatars/user-"))
+            profile = UserProfile.objects.get(user=self.user)
+            self.assertEqual(profile.avatar_url, res.json()["avatarUrl"])
+            media_res = self.client.get(res.json()["avatarUrl"])
+            self.assertEqual(media_res.status_code, 200)
+
+    def test_upload_avatar_requires_login(self):
+        image = SimpleUploadedFile("avatar.png", b"fake", content_type="image/png")
+
+        res = self.client.post("/profile/avatar", data={"avatar": image})
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_upload_avatar_rejects_non_image(self):
+        text_file = SimpleUploadedFile("avatar.txt", b"not image", content_type="text/plain")
+
+        res = self.client.post(
+            "/profile/avatar",
+            data={"avatar": text_file},
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_upload_avatar_bad_method(self):
+        res = self.client.get(
+            "/profile/avatar",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+    def test_upload_avatar_missing_file(self):
+        res = self.client.post(
+            "/profile/avatar",
+            data={},
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.json()["info"], "Missing or error type of [avatar]")
+
+    def test_upload_avatar_rejects_too_large_image(self):
+        image = SimpleUploadedFile(
+            "large.png",
+            b"x" * (2 * 1024 * 1024 + 1),
+            content_type="image/png",
+        )
+
+        res = self.client.post(
+            "/profile/avatar",
+            data={"avatar": image},
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.json()["info"], "Invalid parameters. [avatar] is too large")
+        self.assertFalse(UserProfile.objects.filter(user=self.user).exists())
+
+    def test_upload_avatar_uses_content_type_extension_when_filename_is_wrong(self):
+        with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
+            image = SimpleUploadedFile(
+                "avatar.txt",
+                b"jpeg bytes",
+                content_type="image/jpeg",
+            )
+
+            res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": image},
+                **self.auth_headers(self.token),
+            )
+
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.json()["code"], 0)
+            self.assertTrue(res.json()["avatarUrl"].endswith(".jpg"))
+            self.assertEqual(
+                UserProfile.objects.get(user=self.user).avatar_url,
+                res.json()["avatarUrl"],
+            )
+
+    def test_upload_avatar_falls_back_to_safe_filename_extension(self):
+        with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
+            image = SimpleUploadedFile(
+                "avatar.webp",
+                b"webp bytes",
+                content_type="application/octet-stream",
+            )
+
+            res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": image},
+                **self.auth_headers(self.token),
+            )
+
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.json()["code"], 0)
+            self.assertTrue(res.json()["avatarUrl"].endswith(".webp"))
+            self.assertEqual(self.client.get(res.json()["avatarUrl"]).status_code, 200)
+
+    def test_upload_avatar_rejects_unknown_extension_without_image_type(self):
+        file_without_image_type = SimpleUploadedFile(
+            "avatar",
+            b"raw bytes",
+            content_type="application/octet-stream",
+        )
+
+        res = self.client.post(
+            "/profile/avatar",
+            data={"avatar": file_without_image_type},
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.json()["info"], "Invalid parameters. [avatar] must be an image")
+
+    def test_upload_avatar_rejects_svg_even_when_declared_as_image(self):
+        svg = SimpleUploadedFile(
+            "avatar.svg",
+            b"<svg></svg>",
+            content_type="image/svg+xml",
+        )
+
+        res = self.client.post(
+            "/profile/avatar",
+            data={"avatar": svg},
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.json()["info"], "Invalid parameters. [avatar] must be an image")
+
+    def test_upload_avatar_replaces_profile_url_on_second_upload(self):
+        with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
+            first = SimpleUploadedFile(
+                "first.png",
+                b"first image",
+                content_type="image/png",
+            )
+            second = SimpleUploadedFile(
+                "second.png",
+                b"second image",
+                content_type="image/png",
+            )
+
+            first_res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": first},
+                **self.auth_headers(self.token),
+            )
+            second_res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": second},
+                **self.auth_headers(self.token),
+            )
+
+            self.assertEqual(first_res.status_code, 200)
+            self.assertEqual(second_res.status_code, 200)
+            self.assertNotEqual(first_res.json()["avatarUrl"], second_res.json()["avatarUrl"])
+            profile = UserProfile.objects.get(user=self.user)
+            self.assertEqual(profile.avatar_url, second_res.json()["avatarUrl"])
+            self.assertEqual(self.client.get(first_res.json()["avatarUrl"]).status_code, 200)
+            self.assertEqual(self.client.get(second_res.json()["avatarUrl"]).status_code, 200)
+
+    def test_upload_avatar_preserves_existing_profile_settings(self):
+        profile = UserProfile.objects.create(
+            user=self.user,
+            signature="原签名",
+            personal_intro="原个人简介",
+            research_experience="原科研经历",
+            honors="原荣誉",
+            project_experience="原项目经历",
+            show_personal_intro=False,
+            show_research_experience=True,
+            show_honors=False,
+            show_project_experience=True,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
+            image = SimpleUploadedFile(
+                "avatar.png",
+                b"png bytes",
+                content_type="image/png",
+            )
+
+            res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": image},
+                **self.auth_headers(self.token),
+            )
+
+        profile.refresh_from_db()
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(profile.signature, "原签名")
+        self.assertEqual(profile.personal_intro, "原个人简介")
+        self.assertEqual(profile.research_experience, "原科研经历")
+        self.assertEqual(profile.honors, "原荣誉")
+        self.assertEqual(profile.project_experience, "原项目经历")
+        self.assertFalse(profile.show_personal_intro)
+        self.assertTrue(profile.show_research_experience)
+        self.assertFalse(profile.show_honors)
+        self.assertTrue(profile.show_project_experience)
+
+    def test_upload_avatar_response_contains_serialized_profile(self):
+        with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
+            image = SimpleUploadedFile(
+                "avatar.gif",
+                b"gif bytes",
+                content_type="image/gif",
+            )
+
+            res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": image},
+                **self.auth_headers(self.token),
+            )
+
+            payload = res.json()
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(payload["code"], 0)
+            self.assertEqual(payload["profile"]["avatarUrl"], payload["avatarUrl"])
+            self.assertIn("signature", payload["profile"])
+            self.assertIn("showPersonalIntro", payload["profile"])
+            self.assertIn("updatedAt", payload["profile"])
+
+    def test_media_route_uses_current_media_root_setting(self):
+        first_tmpdir = tempfile.TemporaryDirectory()
+        second_tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(first_tmpdir.cleanup)
+        self.addCleanup(second_tmpdir.cleanup)
+
+        with self.settings(MEDIA_ROOT=first_tmpdir.name):
+            first = SimpleUploadedFile(
+                "first.png",
+                b"first image",
+                content_type="image/png",
+            )
+            first_res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": first},
+                **self.auth_headers(self.token),
+            )
+            self.assertEqual(first_res.status_code, 200)
+            self.assertEqual(self.client.get(first_res.json()["avatarUrl"]).status_code, 200)
+
+        with self.settings(MEDIA_ROOT=second_tmpdir.name):
+            second = SimpleUploadedFile(
+                "second.png",
+                b"second image",
+                content_type="image/png",
+            )
+            second_res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": second},
+                **self.auth_headers(self.token),
+            )
+            self.assertEqual(second_res.status_code, 200)
+            self.assertEqual(self.client.get(second_res.json()["avatarUrl"]).status_code, 200)
+            self.assertEqual(self.client.get(first_res.json()["avatarUrl"]).status_code, 404)
+
+    def test_get_profile_after_upload_returns_avatar_url(self):
+        with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
+            image = SimpleUploadedFile(
+                "avatar.png",
+                b"png bytes",
+                content_type="image/png",
+            )
+            upload_res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": image},
+                **self.auth_headers(self.token),
+            )
+
+            res = self.client.get(
+                "/profile/me",
+                **self.auth_headers(self.token),
+            )
+
+            self.assertEqual(upload_res.status_code, 200)
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.json()["profile"]["avatarUrl"], upload_res.json()["avatarUrl"])
+
+    def test_upload_avatar_returns_relative_media_url(self):
+        with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
+            image = SimpleUploadedFile(
+                "avatar.png",
+                b"png bytes",
+                content_type="image/png",
+            )
+
+            res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": image},
+                **self.auth_headers(self.token),
+            )
+
+            avatar_url = res.json()["avatarUrl"]
+            self.assertEqual(res.status_code, 200)
+            self.assertTrue(avatar_url.startswith("/media/avatars/"))
+            self.assertNotIn("http://", avatar_url)
+            self.assertNotIn("https://", avatar_url)
+            self.assertNotIn("127.0.0.1", avatar_url)
+
+    def test_media_route_returns_404_for_missing_avatar_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
+            res = self.client.get("/media/avatars/missing-avatar.png")
+
+            self.assertEqual(res.status_code, 404)
+
+    def test_upload_avatar_creates_profile_when_missing(self):
+        self.assertFalse(UserProfile.objects.filter(user=self.user).exists())
+
+        with tempfile.TemporaryDirectory() as tmpdir, self.settings(MEDIA_ROOT=tmpdir):
+            image = SimpleUploadedFile(
+                "avatar.png",
+                b"png bytes",
+                content_type="image/png",
+            )
+
+            res = self.client.post(
+                "/profile/avatar",
+                data={"avatar": image},
+                **self.auth_headers(self.token),
+            )
+
+            self.assertEqual(res.status_code, 200)
+            self.assertTrue(UserProfile.objects.filter(user=self.user).exists())
+            self.assertEqual(UserProfile.objects.get(user=self.user).avatar_url, res.json()["avatarUrl"])
+            self.assertEqual(res.json()["profile"]["avatarUrl"], res.json()["avatarUrl"])
+
+    def test_public_profile_includes_avatar_and_signature(self):
+        UserProfile.objects.create(
+            user=self.user,
+            avatar_url="/media/avatars/profile-user.png",
+            signature="公开签名",
+        )
+
+        res = self.client.get(
+            f"/users/{self.user.id}/profile",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["user"]["avatarUrl"], "/media/avatars/profile-user.png")
+        self.assertEqual(res.json()["user"]["signature"], "公开签名")
+        self.assertTrue(res.json()["user"]["isSelf"])
+
+    def test_public_profile_hides_sections_by_display_settings(self):
+        UserProfile.objects.create(
+            user=self.user,
+            personal_intro="不展示个人简介",
+            research_experience="不展示科研经历",
+            honors="不展示荣誉",
+            project_experience="不展示项目经历",
+            show_personal_intro=False,
+            show_research_experience=False,
+            show_honors=False,
+            show_project_experience=False,
+        )
+
+        res = self.client.get(
+            f"/users/{self.user.id}/profile",
+            **self.auth_headers(self.token),
+        )
+
+        profile = res.json()["user"]["profile"]
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(profile["personalIntro"], "")
+        self.assertEqual(profile["researchExperience"], "")
+        self.assertEqual(profile["honors"], "")
+        self.assertEqual(profile["projectExperience"], "")
+        self.assertFalse(profile["showPersonalIntro"])
+        self.assertFalse(profile["showResearchExperience"])
+        self.assertFalse(profile["showHonors"])
+        self.assertFalse(profile["showProjectExperience"])
+
+    def test_public_profile_shows_followed_state_for_current_user(self):
+        other_user = User.objects.create_user(
+            username="other_profile_user",
+            email="other_profile_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+        UserFollow.objects.create(follower=self.user, following=other_user)
+
+        res = self.client.get(
+            f"/users/{other_user.id}/profile",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["user"]["username"], "other_profile_user")
+        self.assertTrue(res.json()["user"]["followed"])
+        self.assertFalse(res.json()["user"]["isSelf"])
+
+    def test_put_profile_trims_string_fields(self):
+        res = self.client.put(
+            "/profile/me",
+            data=json.dumps(
+                {
+                    "avatarUrl": "  https://example.com/avatar.png  ",
+                    "signature": "  带空格的签名  ",
+                    "personalIntro": "  带空格的简介  ",
+                    "researchExperience": "  带空格的科研经历  ",
+                    "honors": "  带空格的荣誉  ",
+                    "projectExperience": "  带空格的项目经历  ",
+                }
+            ),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        profile = res.json()["profile"]
+        self.assertEqual(profile["avatarUrl"], "https://example.com/avatar.png")
+        self.assertEqual(profile["signature"], "带空格的签名")
+        self.assertEqual(profile["personalIntro"], "带空格的简介")
+        self.assertEqual(profile["researchExperience"], "带空格的科研经历")
+        self.assertEqual(profile["honors"], "带空格的荣誉")
+        self.assertEqual(profile["projectExperience"], "带空格的项目经历")
+
+    def test_put_profile_preserves_omitted_fields(self):
+        profile = UserProfile.objects.create(
+            user=self.user,
+            avatar_url="https://example.com/old.png",
+            signature="旧签名",
+            personal_intro="旧个人简介",
+            research_experience="旧科研经历",
+            honors="旧荣誉",
+            project_experience="旧项目经历",
+            show_personal_intro=False,
+            show_research_experience=False,
+            show_honors=True,
+            show_project_experience=False,
+        )
+
+        res = self.client.put(
+            "/profile/me",
+            data=json.dumps({"signature": "新签名"}),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        profile.refresh_from_db()
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(profile.avatar_url, "https://example.com/old.png")
+        self.assertEqual(profile.signature, "新签名")
+        self.assertEqual(profile.personal_intro, "旧个人简介")
+        self.assertEqual(profile.research_experience, "旧科研经历")
+        self.assertEqual(profile.honors, "旧荣誉")
+        self.assertEqual(profile.project_experience, "旧项目经历")
+        self.assertFalse(profile.show_personal_intro)
+        self.assertFalse(profile.show_research_experience)
+        self.assertTrue(profile.show_honors)
+        self.assertFalse(profile.show_project_experience)
+
+    def test_put_profile_rejects_non_object_body(self):
+        res = self.client.put(
+            "/profile/me",
+            data=json.dumps(["not", "object"]),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.json()["info"], "Invalid parameters. [body] must be an object")
+
+    def test_student_can_submit_mentor_verification_request(self):
+        res = self.client.post(
+            "/profile/mentor-verification-request",
+            data=json.dumps({
+                "submittedName": "张老师",
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["mentorVerificationRequest"]["submittedName"], "张老师")
+        self.assertTrue(
+            MentorVerificationRequest.objects.filter(
+                user=self.user,
+                submitted_name="张老师",
+                status=MentorVerificationRequest.STATUS_PENDING,
+            ).exists()
+        )
+
+    def test_cannot_submit_duplicate_pending_mentor_verification_request(self):
+        MentorVerificationRequest.objects.create(
+            user=self.user,
+            submitted_name="张老师",
+            status=MentorVerificationRequest.STATUS_PENDING,
+        )
+
+        res = self.client.post(
+            "/profile/mentor-verification-request",
+            data=json.dumps({
+                "submittedName": "李老师",
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.json()["code"], 3)
+        self.assertEqual(res.json()["info"], "A pending mentor verification request already exists")
+
+    def test_get_profile_returns_latest_mentor_verification_request(self):
+        MentorVerificationRequest.objects.create(
+            user=self.user,
+            submitted_name="旧申请",
+            status=MentorVerificationRequest.STATUS_REJECTED,
+        )
+        latest_request = MentorVerificationRequest.objects.create(
+            user=self.user,
+            submitted_name="新申请",
+            status=MentorVerificationRequest.STATUS_PENDING,
+        )
+
+        res = self.client.get(
+            "/profile/me",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["mentorVerificationRequest"]["id"], latest_request.id)
+        self.assertEqual(res.json()["mentorVerificationRequest"]["submittedName"], "新申请")
+
+    def test_can_submit_new_mentor_verification_after_rejection(self):
+        MentorVerificationRequest.objects.create(
+            user=self.user,
+            submitted_name="旧申请",
+            status=MentorVerificationRequest.STATUS_REJECTED,
+        )
+
+        res = self.client.post(
+            "/profile/mentor-verification-request",
+            data=json.dumps({
+                "submittedName": "再次申请",
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(
+            MentorVerificationRequest.objects.filter(
+                user=self.user,
+                submitted_name="再次申请",
+                status=MentorVerificationRequest.STATUS_PENDING,
+            ).count(),
+            1,
+        )
+
+    def test_submit_mentor_verification_rejects_empty_name(self):
+        res = self.client.post(
+            "/profile/mentor-verification-request",
+            data=json.dumps({
+                "submittedName": "   ",
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(MentorVerificationRequest.objects.filter(user=self.user).count(), 0)
+
+
+class AdminUserManagementTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="admin_manager",
+            email="admin_manager@example.com",
+            password="abc12345",
+            role=User.ROLE_ADMIN,
+        )
+        self.admin_token = generate_jwt_token("admin_manager")
+
+        self.student = User.objects.create_user(
+            username="managed_student",
+            email="managed_student@example.com",
+            password="abc12345",
+            role=User.ROLE_STUDENT,
+        )
+        self.student_token = generate_jwt_token("managed_student")
+
+        self.public_mentor = Mentor.objects.create(
+            Chinese_name="公共导师",
+            English_name="Public Mentor",
+            research_direction="机器学习",
+            email="mentor@example.com",
+            profile="公共导师档案",
+        )
+
+    def auth_headers(self, token: str):
+        return {
+            "HTTP_AUTHORIZATION": f"Bearer {token}",
+        }
+
+    def test_admin_can_list_users(self):
+        res = self.client.get(
+            "/management/users",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        usernames = {user["username"] for user in res.json()["users"]}
+        self.assertIn("admin_manager", usernames)
+        self.assertIn("managed_student", usernames)
+
+    def test_non_admin_cannot_list_users(self):
+        res = self.client.get(
+            "/management/users",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.json()["code"], 3)
+
+    def test_admin_users_rejects_bad_method(self):
+        res = self.client.post(
+            "/management/users",
+            data=json.dumps({}),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+    def test_admin_users_rejects_invalid_role_filter(self):
+        res = self.client.get(
+            "/management/users",
+            {"role": "superuser"},
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.json()["info"], "Invalid parameters. [role] is invalid")
+
+    def test_admin_users_rejects_keyword_that_is_too_long(self):
+        res = self.client.get(
+            "/management/users",
+            {"keyword": "x" * 256},
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.json()["info"], "Invalid parameters. [keyword] is too long")
+
+    def test_admin_can_promote_student_to_admin(self):
+        res = self.client.put(
+            f"/management/users/{self.student.id}",
+            data=json.dumps({"role": User.ROLE_ADMIN}),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.student.refresh_from_db()
+        self.assertEqual(self.student.role, User.ROLE_ADMIN)
+        self.assertIsNone(self.student.mentor_profile)
+
+    def test_admin_can_bind_public_mentor_and_set_role_to_mentor(self):
+        res = self.client.put(
+            f"/management/users/{self.student.id}",
+            data=json.dumps({"role": User.ROLE_MENTOR, "mentorId": self.public_mentor.id}),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.student.refresh_from_db()
+        self.assertEqual(self.student.role, User.ROLE_MENTOR)
+        self.assertEqual(self.student.mentor_profile_id, self.public_mentor.id)
+        self.assertEqual(res.json()["user"]["mentorProfile"]["id"], self.public_mentor.id)
+
+    def test_mentor_role_requires_public_mentor_binding(self):
+        res = self.client.put(
+            f"/management/users/{self.student.id}",
+            data=json.dumps({"role": User.ROLE_MENTOR}),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], 3)
+        self.assertEqual(res.json()["info"], "Mentor binding is required for mentor role")
+
+    def test_non_mentor_role_cannot_bind_mentor_profile(self):
+        res = self.client.put(
+            f"/management/users/{self.student.id}",
+            data=json.dumps({"role": User.ROLE_STUDENT, "mentorId": self.public_mentor.id}),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], 3)
+        self.assertEqual(res.json()["info"], "Only mentor role can bind a mentor profile")
+
+    def test_admin_update_user_returns_404_for_missing_user(self):
+        res = self.client.put(
+            "/management/users/999999",
+            data=json.dumps({"role": User.ROLE_STUDENT}),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
+        self.assertEqual(res.json()["info"], "User not found")
+
+    def test_admin_update_user_rejects_invalid_role(self):
+        res = self.client.put(
+            f"/management/users/{self.student.id}",
+            data=json.dumps({"role": "superuser"}),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.json()["info"], "Invalid parameters. [role] is invalid")
+
+    def test_admin_update_user_rejects_invalid_mentor_id(self):
+        res = self.client.put(
+            f"/management/users/{self.student.id}",
+            data=json.dumps({"role": User.ROLE_MENTOR, "mentorId": "not-a-number"}),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.json()["info"], "Invalid parameters. [mentorId] must be an integer")
+
+    def test_admin_update_user_rejects_mentor_bound_to_another_user(self):
+        User.objects.create_user(
+            username="existing_mentor_user",
+            email="existing_mentor_user@example.com",
+            password="abc12345",
+            role=User.ROLE_MENTOR,
+            mentor_profile=self.public_mentor,
+        )
+
+        res = self.client.put(
+            f"/management/users/{self.student.id}",
+            data=json.dumps({"role": User.ROLE_MENTOR, "mentorId": self.public_mentor.id}),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.json()["code"], 3)
+        self.assertEqual(res.json()["info"], "Mentor is already bound to another user")
+
+    def test_admin_update_user_rejects_private_mentor_binding(self):
+        private_mentor = Mentor.objects.create(
+            Chinese_name="私有导师",
+            English_name="Private Mentor",
+            research_direction="系统安全",
+            owner=self.student,
+        )
+
+        res = self.client.put(
+            f"/management/users/{self.student.id}",
+            data=json.dumps({"role": User.ROLE_MENTOR, "mentorId": private_mentor.id}),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], 2)
+        self.assertEqual(res.json()["info"], "Mentor not found")
+
+    def test_admin_update_user_rejects_missing_mentor(self):
+        res = self.client.put(
+            f"/management/users/{self.student.id}",
+            data=json.dumps({"role": User.ROLE_MENTOR, "mentorId": 999999}),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], 2)
+        self.assertEqual(res.json()["info"], "Mentor not found")
+
+    def test_admin_can_ban_user(self):
+        res = self.client.put(
+            f"/management/users/{self.student.id}",
+            data=json.dumps({"role": User.ROLE_BANNED}),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.student.refresh_from_db()
+        self.assertEqual(self.student.role, User.ROLE_BANNED)
+        self.assertIsNone(self.student.mentor_profile)
+
+    def test_banned_user_cannot_access_profile(self):
+        self.student.role = User.ROLE_BANNED
+        self.student.save(update_fields=["role"])
+
+        res = self.client.get(
+            "/profile/me",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.json()["code"], 3)
+        self.assertEqual(res.json()["info"], "User is banned")
+
+    def test_admin_cannot_ban_self(self):
+        res = self.client.put(
+            f"/management/users/{self.admin.id}",
+            data=json.dumps({"role": User.ROLE_BANNED}),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], 3)
+        self.assertEqual(res.json()["info"], "Admin cannot ban self")
+
+    def test_admin_can_search_users_by_email_and_real_name(self):
+        self.student.real_name = "张同学"
+        self.student.save(update_fields=["real_name"])
+
+        email_res = self.client.get(
+            "/management/users",
+            {"keyword": "managed_student@example.com"},
+            **self.auth_headers(self.admin_token),
+        )
+        self.assertEqual(email_res.status_code, 200)
+        self.assertEqual(
+            [user["username"] for user in email_res.json()["users"]],
+            ["managed_student"],
+        )
+
+        real_name_res = self.client.get(
+            "/management/users",
+            {"keyword": "张同学"},
+            **self.auth_headers(self.admin_token),
+        )
+        self.assertEqual(real_name_res.status_code, 200)
+        self.assertEqual(
+            [user["username"] for user in real_name_res.json()["users"]],
+            ["managed_student"],
+        )
+
+    def test_admin_can_filter_users_by_role(self):
+        mentor_user = User.objects.create_user(
+            username="mentor_user",
+            email="mentor_user@example.com",
+            password="abc12345",
+            role=User.ROLE_MENTOR,
+            mentor_profile=self.public_mentor,
+        )
+
+        res = self.client.get(
+            "/management/users",
+            {"role": User.ROLE_MENTOR},
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["roleFilter"], User.ROLE_MENTOR)
+        self.assertEqual(
+            [user["username"] for user in res.json()["users"]],
+            [mentor_user.username],
+        )
+
+    def test_admin_can_view_verification_request_list(self):
+        request_obj = MentorVerificationRequest.objects.create(
+            user=self.student,
+            submitted_name="待认证导师姓名",
+            status=MentorVerificationRequest.STATUS_PENDING,
+        )
+
+        res = self.client.get(
+            "/management/users",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        verification_requests = res.json()["verificationRequests"]
+        self.assertEqual(len(verification_requests), 1)
+        self.assertEqual(verification_requests[0]["id"], request_obj.id)
+        self.assertEqual(verification_requests[0]["username"], "managed_student")
+        self.assertEqual(verification_requests[0]["submittedName"], "待认证导师姓名")
+        self.assertEqual(verification_requests[0]["status"], MentorVerificationRequest.STATUS_PENDING)
+
+    def test_admin_user_detail_rejects_bad_method(self):
+        res = self.client.get(
+            f"/management/users/{self.student.id}",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+    def test_admin_can_approve_verification_request_with_public_mentor_binding(self):
+        request_obj = MentorVerificationRequest.objects.create(
+            user=self.student,
+            submitted_name="待认证导师姓名",
+            status=MentorVerificationRequest.STATUS_PENDING,
+        )
+
+        res = self.client.put(
+            f"/management/verification-requests/{request_obj.id}",
+            data=json.dumps({
+                "status": MentorVerificationRequest.STATUS_APPROVED,
+                "mentorId": self.public_mentor.id,
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        request_obj.refresh_from_db()
+        self.student.refresh_from_db()
+        self.assertEqual(request_obj.status, MentorVerificationRequest.STATUS_APPROVED)
+        self.assertEqual(self.student.role, User.ROLE_MENTOR)
+        self.assertEqual(self.student.mentor_profile_id, self.public_mentor.id)
+
+    def test_approving_verification_request_requires_public_mentor_binding(self):
+        request_obj = MentorVerificationRequest.objects.create(
+            user=self.student,
+            submitted_name="待认证导师姓名",
+            status=MentorVerificationRequest.STATUS_PENDING,
+        )
+
+        res = self.client.put(
+            f"/management/verification-requests/{request_obj.id}",
+            data=json.dumps({
+                "status": MentorVerificationRequest.STATUS_APPROVED,
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], 3)
+        self.assertEqual(res.json()["info"], "Mentor binding is required for approval")
+
+    def test_approving_verification_request_rejects_private_mentor_binding(self):
+        private_mentor = Mentor.objects.create(
+            Chinese_name="私有导师",
+            English_name="Private Mentor",
+            research_direction="系统安全",
+            owner=self.student,
+        )
+        request_obj = MentorVerificationRequest.objects.create(
+            user=self.student,
+            submitted_name="待认证导师姓名",
+            status=MentorVerificationRequest.STATUS_PENDING,
+        )
+
+        res = self.client.put(
+            f"/management/verification-requests/{request_obj.id}",
+            data=json.dumps({
+                "status": MentorVerificationRequest.STATUS_APPROVED,
+                "mentorId": private_mentor.id,
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], 2)
+        self.assertEqual(res.json()["info"], "Mentor not found")
+
+    def test_review_verification_request_rejects_invalid_status(self):
+        request_obj = MentorVerificationRequest.objects.create(
+            user=self.student,
+            submitted_name="待认证导师姓名",
+            status=MentorVerificationRequest.STATUS_PENDING,
+        )
+
+        res = self.client.put(
+            f"/management/verification-requests/{request_obj.id}",
+            data=json.dumps({
+                "status": "maybe",
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertEqual(res.json()["info"], "Invalid parameters. [status] is invalid")
+
+    def test_review_verification_request_rejects_bad_method(self):
+        request_obj = MentorVerificationRequest.objects.create(
+            user=self.student,
+            submitted_name="待认证导师姓名",
+            status=MentorVerificationRequest.STATUS_PENDING,
+        )
+
+        res = self.client.get(
+            f"/management/verification-requests/{request_obj.id}",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+    def test_admin_can_reject_verification_request(self):
+        request_obj = MentorVerificationRequest.objects.create(
+            user=self.student,
+            submitted_name="待认证导师姓名",
+            status=MentorVerificationRequest.STATUS_PENDING,
+        )
+
+        res = self.client.put(
+            f"/management/verification-requests/{request_obj.id}",
+            data=json.dumps({
+                "status": MentorVerificationRequest.STATUS_REJECTED,
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        request_obj.refresh_from_db()
+        self.student.refresh_from_db()
+        self.assertEqual(request_obj.status, MentorVerificationRequest.STATUS_REJECTED)
+        self.assertEqual(self.student.role, User.ROLE_STUDENT)
+        self.assertIsNone(self.student.mentor_profile)
+
+    def test_cannot_review_verification_request_twice(self):
+        request_obj = MentorVerificationRequest.objects.create(
+            user=self.student,
+            submitted_name="待认证导师姓名",
+            status=MentorVerificationRequest.STATUS_APPROVED,
+        )
+
+        res = self.client.put(
+            f"/management/verification-requests/{request_obj.id}",
+            data=json.dumps({
+                "status": MentorVerificationRequest.STATUS_REJECTED,
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.json()["code"], 3)
+        self.assertEqual(res.json()["info"], "Verification request has already been reviewed")
+
+    def test_non_admin_cannot_review_verification_request(self):
+        request_obj = MentorVerificationRequest.objects.create(
+            user=self.student,
+            submitted_name="待认证导师姓名",
+            status=MentorVerificationRequest.STATUS_PENDING,
+        )
+
+        res = self.client.put(
+            f"/management/verification-requests/{request_obj.id}",
+            data=json.dumps({
+                "status": MentorVerificationRequest.STATUS_REJECTED,
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.student_token),
+        )
+
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.json()["code"], 3)
+        self.assertEqual(res.json()["info"], "Permission denied")
+
+    def test_admin_review_verification_request_returns_404_for_missing_request(self):
+        res = self.client.put(
+            "/management/verification-requests/999999",
+            data=json.dumps({
+                "status": MentorVerificationRequest.STATUS_REJECTED,
+            }),
+            content_type="application/json",
+            **self.auth_headers(self.admin_token),
+        )
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
+        self.assertEqual(res.json()["info"], "Verification request not found")
+
+
+class WeeklyPushDigestTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="digest_user",
+            email="digest_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.other_user = User.objects.create_user(
+            username="other_digest_user",
+            email="other_digest_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+
+        self.followed_mentor = Mentor.objects.create(
+            Chinese_name="张三",
+            English_name="Zhang San",
+            research_direction="机器学习",
+        )
+        self.private_mentor = Mentor.objects.create(
+            Chinese_name="李四",
+            English_name="Li Si",
+            research_direction="自然语言处理",
+            owner=self.user,
+        )
+        self.unrelated_mentor = Mentor.objects.create(
+            Chinese_name="王五",
+            English_name="Wang Wu",
+            research_direction="数据库",
+            owner=self.other_user,
+        )
+
+        MentorFollow.objects.create(student=self.user, mentor=self.followed_mentor)
+        MentorFollow.objects.create(student=self.user, mentor=self.private_mentor)
+
+        self.followed_paper = Paper.objects.create(
+            title="机器学习方法研究",
+            abstract="第一行摘要\n第二行摘要\n第三行摘要\n第四行摘要",
+            publish_date=date(2026, 4, 16),
+            author_names="张三, Alice",
+            subjects="cs.LG, cs.AI",
+        )
+        self.private_paper = Paper.objects.create(
+            title="大语言模型在问答系统中的应用",
+            abstract="私有导师论文摘要",
+            publish_date=date(2026, 4, 17),
+            author_names="李四, Bob",
+            subjects="cs.CL",
+        )
+        self.unrelated_paper = Paper.objects.create(
+            title="不应推送的论文",
+            abstract="无关摘要",
+            publish_date=date(2026, 4, 18),
+            author_names="王五",
+            subjects="cs.DB",
+        )
+
+        self.followed_mentor.add_paper(self.followed_paper.id)
+        self.private_mentor.add_paper(self.private_paper.id)
+        self.unrelated_mentor.add_paper(self.unrelated_paper.id)
+
+    def test_build_weekly_digest_groups_followed_and_private_mentor_papers(self):
+        digest = build_weekly_push_digest(
+            self.user,
+            [
+                [self.followed_paper],
+                [],
+                [self.private_paper, self.unrelated_paper],
+                [],
+                [self.followed_paper],
+                [],
+                [],
+            ],
+        )
+
+        self.assertEqual(digest["hasUpdates"], True)
+        self.assertEqual(digest["totalPaperCount"], 2)
+        self.assertEqual(
+            digest["title"],
+            "[MentorFinder]你关注的导师或板块本周有 2 篇新论文",
+        )
+
+        mentor_names = {
+            group["mentorName"]
+            for group in digest["mentorGroups"]
+        }
+        self.assertEqual(mentor_names, {"张三", "李四"})
+        self.assertEqual(len(digest["mentorGroups"]), 2)
+
+        all_paper_titles = {
+            paper["title"]
+            for group in digest["mentorGroups"]
+            for paper in group["papers"]
+        }
+        self.assertEqual(
+            all_paper_titles,
+            {"机器学习方法研究", "大语言模型在问答系统中的应用"},
+        )
+
+        followed_group = next(
+            group
+            for group in digest["mentorGroups"]
+            if group["mentorName"] == "张三"
+        )
+        followed_paper = followed_group["papers"][0]
+        self.assertEqual(
+            followed_paper["abstractPreview"],
+            "第一行摘要\n第二行摘要\n第三行摘要",
+        )
+        self.assertEqual(followed_paper["subjects"], ["cs.LG", "cs.AI"])
+
+    def test_build_weekly_digest_deduplicates_private_mentor_follow(self):
+        digest = build_weekly_push_digest(
+            self.user,
+            [
+                [self.private_paper],
+                [self.private_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        private_groups = [
+            group
+            for group in digest["mentorGroups"]
+            if group["mentorName"] == "李四"
+        ]
+        self.assertEqual(len(private_groups), 1)
+        self.assertEqual(private_groups[0]["paperCount"], 1)
+        self.assertEqual(digest["totalPaperCount"], 1)
+
+    def test_build_weekly_digest_counts_subject_distribution(self):
+        digest = build_weekly_push_digest(
+            self.user,
+            [
+                [self.followed_paper, self.private_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        self.assertEqual(
+            digest["subjectDistribution"],
+            [
+                {"subject": "cs.AI", "count": 1},
+                {"subject": "cs.CL", "count": 1},
+                {"subject": "cs.LG", "count": 1},
+            ],
+        )
+
+    def test_build_weekly_digest_returns_empty_summary_without_updates(self):
+        digest = build_weekly_push_digest(
+            self.user,
+            [
+                [self.unrelated_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        self.assertEqual(digest["hasUpdates"], False)
+        self.assertEqual(digest["title"], "[MentorFinder]本周无论文更新")
+        self.assertEqual(digest["summary"], "本周无论文更新")
+        self.assertEqual(digest["totalPaperCount"], 0)
+        self.assertEqual(digest["mentorGroups"], [])
+        self.assertEqual(digest["subjectGroups"], [])
+        self.assertEqual(digest["subjectDistribution"], [])
+
+    def test_build_weekly_digest_groups_followed_subject_papers(self):
+        SubjectFollow.objects.create(user=self.user, subject="cs.DB")
+
+        digest = build_weekly_push_digest(
+            self.user,
+            [
+                [self.unrelated_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        self.assertEqual(digest["hasUpdates"], True)
+        self.assertEqual(digest["totalPaperCount"], 1)
+        self.assertEqual(digest["mentorGroups"], [])
+        self.assertEqual(len(digest["subjectGroups"]), 1)
+        self.assertEqual(digest["subjectGroups"][0]["subject"], "cs.DB")
+        self.assertEqual(digest["subjectGroups"][0]["paperCount"], 1)
+        self.assertEqual(digest["subjectGroups"][0]["papers"][0]["title"], "不应推送的论文")
+
+    def test_build_weekly_digest_deduplicates_mentor_and_subject_matches(self):
+        SubjectFollow.objects.create(user=self.user, subject="cs.AI")
+
+        digest = build_weekly_push_digest(
+            self.user,
+            [
+                [self.followed_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        self.assertEqual(digest["totalPaperCount"], 1)
+        self.assertEqual(len(digest["mentorGroups"]), 1)
+        self.assertEqual(len(digest["subjectGroups"]), 1)
+        self.assertEqual(digest["subjectGroups"][0]["papers"][0]["title"], "机器学习方法研究")
+
+    def test_render_weekly_push_email_includes_digest_sections(self):
+        digest = build_weekly_push_digest(
+            self.user,
+            [
+                [self.followed_paper],
+                [self.private_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        email_content = render_weekly_push_email(digest)
+
+        self.assertEqual(
+            email_content["subject"],
+            "[MentorFinder]你关注的导师或板块本周有 2 篇新论文",
+        )
+        self.assertIn("按导师分组：", email_content["body"])
+        self.assertIn("- 张三：1 篇", email_content["body"])
+        self.assertIn("- 李四（私有导师）：1 篇", email_content["body"])
+        self.assertIn("1. 机器学习方法研究", email_content["body"])
+        self.assertIn("1. 大语言模型在问答系统中的应用", email_content["body"])
+        self.assertIn("分类：cs.LG, cs.AI", email_content["body"])
+        self.assertIn("研究方向分布：", email_content["body"])
+        self.assertIn("- cs.AI：1 篇", email_content["body"])
+        self.assertIn("- cs.CL：1 篇", email_content["body"])
+
+    def test_render_weekly_push_email_without_updates(self):
+        digest = build_weekly_push_digest(
+            self.user,
+            [
+                [self.unrelated_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        email_content = render_weekly_push_email(digest)
+
+        self.assertEqual(email_content["subject"], "[MentorFinder]本周无论文更新")
+        self.assertIn("本周无论文更新", email_content["body"])
+        self.assertIn(
+            "系统当前未检测到你关注的导师或私有导师有新增论文。",
+            email_content["body"],
+        )
+        self.assertIn("你关注的板块本周也暂无新增论文。", email_content["body"])
+
+    def test_render_weekly_push_email_includes_subject_groups(self):
+        SubjectFollow.objects.create(user=self.user, subject="cs.DB")
+        digest = build_weekly_push_digest(
+            self.user,
+            [
+                [self.unrelated_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        email_content = render_weekly_push_email(digest)
+
+        self.assertIn("按关注板块分组：", email_content["body"])
+        self.assertIn("- cs.DB：1 篇", email_content["body"])
+        self.assertIn("1. 不应推送的论文", email_content["body"])
+
+    @patch("account.services.weekly_push.send_mail")
+    def test_send_weekly_push_email_sends_rendered_digest(self, mock_send_mail):
+        mock_send_mail.return_value = 1
+
+        result = send_weekly_push_email(
+            self.user,
+            [
+                [self.followed_paper],
+                [self.private_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        self.assertEqual(result["sent"], True)
+        self.assertEqual(result["sentCount"], 1)
+        self.assertEqual(result["digest"]["totalPaperCount"], 2)
+        self.assertIn("机器学习方法研究", result["email"]["body"])
+
+        mock_send_mail.assert_called_once()
+        send_kwargs = mock_send_mail.call_args.kwargs
+        self.assertEqual(
+            send_kwargs["subject"],
+            "[MentorFinder]你关注的导师或板块本周有 2 篇新论文",
+        )
+        self.assertEqual(send_kwargs["recipient_list"], ["digest_user@example.com"])
+        self.assertEqual(send_kwargs["fail_silently"], False)
+        self.assertIn("大语言模型在问答系统中的应用", send_kwargs["message"])
+
+    @patch("account.services.weekly_push.send_mail")
+    def test_send_weekly_push_email_reports_send_failure(self, mock_send_mail):
+        # hasUpdates 必须为 True 才会真正调用 send_mail，否则会被跳过返回 skipped=True。
+        mock_send_mail.return_value = 0
+
+        result = send_weekly_push_email(
+            self.user,
+            [
+                [self.followed_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        self.assertEqual(result["sent"], False)
+        self.assertEqual(result["sentCount"], 0)
+        self.assertEqual(result["digest"]["hasUpdates"], True)
+        self.assertFalse(result.get("skipped"))
+        self.assertEqual(
+            result["errorMessage"],
+            "Email backend reported zero successful deliveries.",
+        )
+        mock_send_mail.assert_called_once()
+
+    @patch("account.services.weekly_push.send_mail")
+    def test_send_weekly_push_email_skips_when_no_updates(self, mock_send_mail):
+        # 当用户个人周报为空（hasUpdates=False）时，service 层不应触发 SMTP 调用，
+        # 也不应当作失败：返回 skipped=True 以便上游标记 PushRecord 为 sent。
+        result = send_weekly_push_email(
+            self.user,
+            [
+                [self.unrelated_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        self.assertEqual(result["sent"], False)
+        self.assertEqual(result["sentCount"], 0)
+        self.assertEqual(result["digest"]["hasUpdates"], False)
+        self.assertTrue(result.get("skipped"))
+        self.assertEqual(result["skipReason"], "no_personal_updates")
+        self.assertEqual(result["errorMessage"], "")
+        mock_send_mail.assert_not_called()
+
+    @patch("account.services.weekly_push.send_mail")
+    def test_send_weekly_push_email_captures_send_exception_reason(self, mock_send_mail):
+        mock_send_mail.side_effect = RuntimeError("smtp timeout")
+
+        result = send_weekly_push_email(
+            self.user,
+            [
+                [self.followed_paper],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ],
+        )
+
+        self.assertEqual(result["sent"], False)
+        self.assertEqual(result["sentCount"], 0)
+        self.assertEqual(result["digest"]["totalPaperCount"], 1)
+        self.assertEqual(result["errorMessage"], "RuntimeError: smtp timeout")
+        mock_send_mail.assert_called_once()
+
+
+class MockWeeklyPushCommandTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="command_user",
+            email="command_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.other_user = User.objects.create_user(
+            username="other_command_user",
+            email="other_command_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.mentor = Mentor.objects.create(
+            Chinese_name="周报导师",
+            English_name="Weekly Mentor",
+            research_direction="机器学习",
+        )
+        MentorFollow.objects.create(student=self.user, mentor=self.mentor)
+
+        self.paper = Paper.objects.create(
+            title="周报命令测试论文",
+            abstract="命令测试摘要",
+            publish_date=date(2026, 4, 15),
+            author_names="周报导师",
+            subjects="cs.LG",
+        )
+        self.mentor.add_paper(self.paper.id)
+
+    @patch("account.management.commands.send_weekly_push_mock.send_weekly_push_email")
+    def test_mock_weekly_push_command_sends_to_users(self, mock_send_weekly_push_email):
+        mock_send_weekly_push_email.return_value = {
+            "sent": True,
+            "digest": {
+                "totalPaperCount": 1,
+            },
+        }
+        out = StringIO()
+
+        call_command("send_weekly_push_mock", stdout=out)
+
+        self.assertEqual(mock_send_weekly_push_email.call_count, 2)
+        called_users = {
+            call.args[0].username
+            for call in mock_send_weekly_push_email.call_args_list
+        }
+        self.assertEqual(called_users, {"command_user", "other_command_user"})
+        self.assertIn("Prepared 7 mocked daily paper lists with 1 papers.", out.getvalue())
+        self.assertIn("command_user: sent, 1 matched paper(s).", out.getvalue())
+
+    @patch("account.management.commands.send_weekly_push_mock.send_weekly_push_email")
+    def test_mock_weekly_push_command_filters_by_username(self, mock_send_weekly_push_email):
+        mock_send_weekly_push_email.return_value = {
+            "sent": True,
+            "digest": {
+                "totalPaperCount": 1,
+            },
+        }
+
+        call_command("send_weekly_push_mock", "--user", "command_user", stdout=StringIO())
+
+        mock_send_weekly_push_email.assert_called_once()
+        self.assertEqual(mock_send_weekly_push_email.call_args.args[0].username, "command_user")
+
+    @patch("account.management.commands.send_weekly_push_mock.send_weekly_push_email")
+    def test_mock_weekly_push_command_dry_run_does_not_send(self, mock_send_weekly_push_email):
+        out = StringIO()
+
+        call_command("send_weekly_push_mock", "--dry-run", stdout=out)
+
+        mock_send_weekly_push_email.assert_not_called()
+        self.assertIn("[DRY RUN] command_user: 1 matched paper(s).", out.getvalue())
+
+    @patch("account.management.commands.send_weekly_push_mock.send_weekly_push_email")
+    def test_mock_weekly_push_command_loads_papers_from_json_file(self, mock_send_weekly_push_email):
+        mock_send_weekly_push_email.return_value = {
+            "sent": True,
+            "digest": {
+                "totalPaperCount": 1,
+            },
+        }
+
+        with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8", delete=False) as fp:
+            json.dump(
+                {
+                    "thursday": [self.paper.id],
+                    "friday": [],
+                    "saturday": [],
+                    "sunday": [],
+                    "monday": [],
+                    "tuesday": [],
+                    "wednesday": [],
+                },
+                fp,
+            )
+            file_path = fp.name
+
+        call_command(
+            "send_weekly_push_mock",
+            "--user",
+            "command_user",
+            "--paper-file",
+            file_path,
+            stdout=StringIO(),
+        )
+
+        mock_send_weekly_push_email.assert_called_once()
+        passed_lists = mock_send_weekly_push_email.call_args.args[1]
+        self.assertEqual(len(passed_lists), 7)
+        self.assertEqual([paper.id for paper in passed_lists[0]], [self.paper.id])
+        self.assertEqual(passed_lists[1], [])
+
+    def test_mock_weekly_push_command_rejects_missing_paper_file(self):
+        with self.assertRaises(CommandError):
+            call_command(
+                "send_weekly_push_mock",
+                "--paper-file",
+                "/tmp/not-found-weekly-papers.json",
+                stdout=StringIO(),
+            )
+
+
+class PushRecordCommandTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="record_user",
+            email="record_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.failed_user = User.objects.create_user(
+            username="failed_user",
+            email="failed_user@example.com",
+            password="abc12345",
+            role="student",
+        )
+        self.period_key = "20260416_20260422"
+        self.period_start = timezone.datetime(2026, 4, 16, 0, 0, tzinfo=timezone.get_current_timezone())
+        self.period_end = timezone.datetime(2026, 4, 22, 23, 59, 59, tzinfo=timezone.get_current_timezone())
+        PushRecord.objects.create(
+            user=self.user,
+            type=PushRecord.TYPE_WEEKLY,
+            period_key=self.period_key,
+            period_start=self.period_start,
+            period_end=self.period_end,
+            status=PushRecord.STATUS_SENT,
+            sent_at=timezone.now(),
+        )
+        PushRecord.objects.create(
+            user=self.failed_user,
+            type=PushRecord.TYPE_WEEKLY,
+            period_key=self.period_key,
+            period_start=self.period_start,
+            period_end=self.period_end,
+            status=PushRecord.STATUS_FAILED,
+            error_message="smtp timeout",
+        )
+
+    def test_show_weekly_push_records_filters_by_status(self):
+        out = StringIO()
+
+        call_command(
+            "show_weekly_push_records",
+            "--period-key",
+            self.period_key,
+            "--status",
+            PushRecord.STATUS_FAILED,
+            stdout=out,
+        )
+
+        output = out.getvalue()
+        self.assertIn("failed_user | 20260416_20260422 | failed", output)
+        self.assertNotIn("record_user | 20260416_20260422 | sent", output)
+
+
+class RecordWeeklyPushPapersCommandTests(TestCase):
+    def setUp(self):
+        self.paper = Paper.objects.create(
+            title="每日增量论文",
+            abstract="每日增量摘要",
+            publish_date=date(2026, 4, 16),
+            author_names="Crawler",
+            subjects="cs.AI",
+        )
+        self.other_paper = Paper.objects.create(
+            title="另一篇每日增量论文",
+            abstract="另一篇每日增量摘要",
+            publish_date=date(2026, 4, 17),
+            author_names="Crawler",
+            subjects="cs.LG",
+        )
+
+    def test_record_weekly_push_papers_creates_current_cycle_rows(self):
+        out = StringIO()
+
+        call_command(
+            "record_weekly_push_papers",
+            "--day",
+            "monday",
+            "--paper-ids",
+            f"{self.paper.id},{self.other_paper.id}",
+            stdout=out,
+        )
+
+        monday_ids = list(
+            WeeklyPushPaperBucket.objects
+            .filter(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT, day_key="monday")
+            .values_list("paper_id", flat=True)
+        )
+        self.assertEqual(sorted(monday_ids), sorted([self.paper.id, self.other_paper.id]))
+        self.assertIn("Recorded 2 new paper ID(s) for monday in cycle [current]", out.getvalue())
+        self.assertTrue(
+            WeeklyPushPaperBucket.objects.filter(
+                cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+                period_key=build_weekly_push_bucket_period_key(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT),
+                day_key="monday",
+            ).exists()
+        )
+
+    def test_record_weekly_push_papers_appends_unique_ids(self):
+        call_command(
+            "record_weekly_push_papers",
+            "--day",
+            "friday",
+            "--paper-ids",
+            str(self.paper.id),
+            stdout=StringIO(),
+        )
+        call_command(
+            "record_weekly_push_papers",
+            "--day",
+            "friday",
+            "--paper-ids",
+            f"{self.paper.id},{self.other_paper.id}",
+            stdout=StringIO(),
+        )
+
+        friday_ids = list(
+            WeeklyPushPaperBucket.objects
+            .filter(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT, day_key="friday")
+            .values_list("paper_id", flat=True)
+        )
+        self.assertEqual(sorted(friday_ids), sorted([self.paper.id, self.other_paper.id]))
+
+    def test_record_weekly_push_papers_rejects_unknown_paper_id(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(CommandError):
+                call_command(
+                    "record_weekly_push_papers",
+                    "--day",
+                    "tuesday",
+                    "--paper-ids",
+                    "999999",
+                    "--paper-file",
+                    f"{tmpdir}/weekly_papers.json",
+                    stdout=StringIO(),
+                )
+
+
+class ResetWeeklyPushPapersCommandTests(TestCase):
+    def setUp(self):
+        self.paper = Paper.objects.create(
+            title="待清空周报论文",
+            abstract="摘要",
+            publish_date=date(2026, 4, 18),
+            author_names="Crawler",
+            subjects="cs.AI",
+        )
+
+    def test_reset_weekly_push_papers_clears_current_cycle_rows(self):
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key=build_weekly_push_bucket_period_key(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT),
+            day_key="thursday",
+            paper=self.paper,
+        )
+        out = StringIO()
+
+        call_command(
+            "reset_weekly_push_papers",
+            stdout=out,
+        )
+
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT).count(),
+            0,
+        )
+        self.assertIn("Reset weekly push paper records in cycle [current].", out.getvalue())
+
+    def test_reset_weekly_push_papers_only_clears_selected_cycle(self):
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key=build_weekly_push_bucket_period_key(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT),
+            day_key="thursday",
+            paper=self.paper,
+        )
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_NEXT,
+            period_key=build_weekly_push_bucket_period_key(cycle=WeeklyPushPaperBucket.CYCLE_NEXT),
+            day_key="friday",
+            paper=self.paper,
+        )
+
+        call_command(
+            "reset_weekly_push_papers",
+            "--cycle",
+            WeeklyPushPaperBucket.CYCLE_NEXT,
+            stdout=StringIO(),
+        )
+
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT).count(),
+            1,
+        )
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_NEXT).count(),
+            0,
+        )
+
+
+class StartupConfigTests(TestCase):
+    def test_load_startup_config_returns_defaults_for_missing_file(self):
+        missing_path = Path(tempfile.gettempdir()) / "missing-backend-config.yaml"
+        if missing_path.exists():
+            missing_path.unlink()
+
+        config = load_startup_config(missing_path)
+
+        self.assertEqual(
+            config,
+            {
+                "startup": {
+                    "run_initial_sync": True,
+                    "run_daily_sync_scheduler": True,
+                    "run_weekly_push_scheduler": True,
+                }
+            },
+        )
+
+    def test_load_startup_config_reads_startup_switches(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", encoding="utf-8", delete=False) as fp:
+            fp.write(
+                "\n".join(
+                    [
+                        "startup:",
+                        "  run_initial_sync: false",
+                        "  run_daily_sync_scheduler: true",
+                        "  run_weekly_push_scheduler: false",
+                    ]
+                )
+            )
+            config_path = Path(fp.name)
+
+        try:
+            config = load_startup_config(config_path)
+        finally:
+            config_path.unlink(missing_ok=True)
+
+        self.assertEqual(
+            config,
+            {
+                "startup": {
+                    "run_initial_sync": False,
+                    "run_daily_sync_scheduler": True,
+                    "run_weekly_push_scheduler": False,
+                }
+            },
+        )
+
+
+class JwtUtilityTests(TestCase):
+    def test_b64url_encode_decode_round_trips_text(self):
+        encoded = b64url_encode("mentor finder")
+
+        self.assertEqual(b64url_decode(encoded), "mentor finder")
+
+    def test_b64url_encode_decode_round_trips_bytes(self):
+        raw_bytes = b"\xfb\xffmentor"
+        encoded = b64url_encode(raw_bytes)
+
+        self.assertIn("-", encoded)
+        self.assertEqual(b64url_decode(encoded, decode_to_str=False), raw_bytes)
+
+    def test_generate_jwt_token_returns_signed_token(self):
+        token = generate_jwt_token("jwt-user")
+
+        self.assertIsInstance(token, str)
+        self.assertTrue(token)
+
+    def test_check_jwt_token_returns_username_payload(self):
+        token = generate_jwt_token("jwt-user")
+
+        self.assertEqual(check_jwt_token(token), {"username": "jwt-user"})
+
+    def test_check_jwt_token_rejects_tampered_signature(self):
+        token = generate_jwt_token("jwt-user")
+        tampered_signature = token[:-1] + ("A" if token[-1] != "A" else "B")
+
+        self.assertIsNone(check_jwt_token(tampered_signature))
+
+    def test_check_jwt_token_rejects_tampered_payload(self):
+        token = generate_jwt_token("jwt-user")
+        tampered_payload = token.replace("jwt-user", "attacker", 1)
+
+        self.assertIsNone(check_jwt_token(tampered_payload))
+
+    def test_check_jwt_token_rejects_expired_token(self):
+        with patch("utils.utils_jwt.time.time", return_value=1000):
+            token = generate_jwt_token("expired-user")
+
+        with patch("utils.utils_jwt.time.time", return_value=1000 + EXPIRE_IN_SECONDS + 1):
+            self.assertIsNone(check_jwt_token(token))
+
+    def test_check_jwt_token_rejects_token_signed_with_rotated_secret(self):
+        with patch.dict(os.environ, {"JWT_SIGNING_KEY": "rotated-jwt-signing-key-abcdefghijklmnopqrstuvwxyz"}):
+            token = generate_jwt_token("rotated-user")
+
+        self.assertIsNone(check_jwt_token(token))
+
+    def test_check_jwt_token_accepts_token_before_expiry(self):
+        with patch("utils.utils_jwt.time.time", return_value=1000):
+            token = generate_jwt_token("fresh-user")
+
+        with patch("utils.utils_jwt.time.time", return_value=1000 + EXPIRE_IN_SECONDS - 1):
+            self.assertEqual(check_jwt_token(token), {"username": "fresh-user"})
+
+    def test_check_jwt_token_rejects_wrong_segment_count(self):
+        self.assertIsNone(check_jwt_token("only.two"))
+
+    def test_check_jwt_token_rejects_empty_token(self):
+        self.assertIsNone(check_jwt_token(""))
+
+
+class RequireUtilityTests(TestCase):
+    def test_require_returns_string_value(self):
+        self.assertEqual(require({"name": "Alice"}, "name"), "Alice")
+
+    def test_require_converts_int_value(self):
+        self.assertEqual(require({"page": "3"}, "page", "int"), 3)
+
+    def test_require_converts_float_value(self):
+        self.assertEqual(require({"score": "3.5"}, "score", "float"), 3.5)
+
+    def test_require_returns_list_value(self):
+        value = ["cs.AI", "cs.LG"]
+
+        self.assertEqual(require({"subjects": value}, "subjects", "list"), value)
+
+    def test_require_missing_key_raises_key_error_with_default_message(self):
+        with self.assertRaises(KeyError) as ctx:
+            require({}, "keyword")
+
+        self.assertEqual(ctx.exception.args[0], "Invalid parameters. Expected `keyword`, but not found.")
+        self.assertEqual(ctx.exception.args[1], -2)
+
+    def test_require_missing_key_uses_custom_message_and_code(self):
+        with self.assertRaises(KeyError) as ctx:
+            require({}, "id", err_msg="Missing id", err_code=-1)
+
+        self.assertEqual(ctx.exception.args, ("Missing id", -1))
+
+    def test_require_invalid_int_raises_key_error(self):
+        with self.assertRaises(KeyError) as ctx:
+            require({"page": "abc"}, "page", "int")
+
+        self.assertEqual(ctx.exception.args[0], "Invalid parameters. Expected `page` to be `int` type.")
+        self.assertEqual(ctx.exception.args[1], -2)
+
+    def test_require_invalid_float_raises_key_error(self):
+        with self.assertRaises(KeyError) as ctx:
+            require({"score": "abc"}, "score", "float")
+
+        self.assertEqual(ctx.exception.args[0], "Invalid parameters. Expected `score` to be `float` type.")
+        self.assertEqual(ctx.exception.args[1], -2)
+
+    def test_require_invalid_list_raises_key_error(self):
+        with self.assertRaises(KeyError) as ctx:
+            require({"items": "not-list"}, "items", "list")
+
+        self.assertEqual(ctx.exception.args[0], "Invalid parameters. Expected `items` to be `list` type.")
+        self.assertEqual(ctx.exception.args[1], -2)
+
+    def test_require_unknown_type_raises_not_implemented_error(self):
+        with self.assertRaises(NotImplementedError) as ctx:
+            require({"enabled": True}, "enabled", "bool", err_code=9)
+
+        self.assertEqual(ctx.exception.args, ("Type `bool` not implemented.", 9))
+
+    def test_check_require_returns_wrapped_view_response(self):
+        @CheckRequire
+        def wrapped_view():
+            return require({"name": "Alice"}, "name")
+
+        self.assertEqual(wrapped_view(), "Alice")
+
+    def test_check_require_serializes_key_error(self):
+        @CheckRequire
+        def wrapped_view():
+            require({}, "name", err_msg="Missing name", err_code=7)
+
+        response = wrapped_view()
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(json.loads(response.content), {"code": 7, "info": "Missing name"})
+
+
+class WeeklyPushFilesServiceTests(TestCase):
+    def setUp(self):
+        self.paper1 = Paper.objects.create(
+            title="周报论文1",
+            abstract="摘要1",
+            publish_date=date(2026, 4, 20),
+            author_names="Author One",
+            subjects="cs.AI",
+        )
+        self.paper2 = Paper.objects.create(
+            title="周报论文2",
+            abstract="摘要2",
+            publish_date=date(2026, 4, 21),
+            author_names="Author Two",
+            subjects="cs.LG",
+        )
+        self.paper3 = Paper.objects.create(
+            title="周报论文3",
+            abstract="摘要3",
+            publish_date=date(2026, 4, 22),
+            author_names="Author Three",
+            subjects="cs.CL",
+        )
+
+    def test_create_empty_weekly_push_payload_contains_all_day_keys(self):
+        payload = weekly_push_files.create_empty_weekly_push_payload()
+
+        self.assertEqual(list(payload.keys()), weekly_push_files.DAY_KEYS)
+        self.assertTrue(all(paper_ids == [] for paper_ids in payload.values()))
+
+    def test_append_unique_paper_ids_preserves_existing_order(self):
+        result = weekly_push_files.append_unique_paper_ids([3, 1], [1, 2, 3, 4])
+
+        self.assertEqual(result, [3, 1, 2, 4])
+
+    def test_get_weekly_push_day_key_maps_each_weekday(self):
+        day_by_date = {
+            datetime(2026, 4, 23, 13, 0, 0): "thursday",
+            datetime(2026, 4, 24, 13, 0, 0): "friday",
+            datetime(2026, 4, 25, 13, 0, 0): "saturday",
+            datetime(2026, 4, 26, 13, 0, 0): "sunday",
+            datetime(2026, 4, 27, 13, 0, 0): "monday",
+            datetime(2026, 4, 28, 13, 0, 0): "tuesday",
+            datetime(2026, 4, 29, 13, 0, 0): "wednesday",
+        }
+
+        for current_time, expected_day_key in day_by_date.items():
+            with self.subTest(current_time=current_time):
+                self.assertEqual(weekly_push_files.get_weekly_push_day_key(current_time), expected_day_key)
+
+    def test_should_stage_next_cycle_payload_only_before_thursday_cutoff(self):
+        self.assertTrue(weekly_push_files.should_stage_next_cycle_payload(datetime(2026, 4, 23, 11, 59, 0)))
+        self.assertFalse(weekly_push_files.should_stage_next_cycle_payload(datetime(2026, 4, 23, 12, 0, 0)))
+        self.assertFalse(weekly_push_files.should_stage_next_cycle_payload(datetime(2026, 4, 24, 11, 0, 0)))
+
+    def test_resolve_weekly_push_record_target_cycle(self):
+        self.assertEqual(
+            weekly_push_files.resolve_weekly_push_record_target_cycle(datetime(2026, 4, 23, 11, 0, 0)),
+            WeeklyPushPaperBucket.CYCLE_NEXT,
+        )
+        self.assertEqual(
+            weekly_push_files.resolve_weekly_push_record_target_cycle(datetime(2026, 4, 23, 12, 0, 0)),
+            WeeklyPushPaperBucket.CYCLE_CURRENT,
+        )
+
+    def test_build_weekly_push_bucket_period_key_for_thursday_morning(self):
+        current_key = weekly_push_files.build_weekly_push_bucket_period_key(
+            now=datetime(2026, 4, 23, 11, 0, 0),
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+        )
+        next_key = weekly_push_files.build_weekly_push_bucket_period_key(
+            now=datetime(2026, 4, 23, 11, 0, 0),
+            cycle=WeeklyPushPaperBucket.CYCLE_NEXT,
+        )
+
+        self.assertEqual(current_key, "20260416_20260422")
+        self.assertEqual(next_key, "20260423_20260429")
+
+    def test_build_weekly_push_bucket_period_key_after_cutoff(self):
+        current_key = weekly_push_files.build_weekly_push_bucket_period_key(
+            now=datetime(2026, 4, 23, 12, 0, 0),
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+        )
+        next_key = weekly_push_files.build_weekly_push_bucket_period_key(
+            now=datetime(2026, 4, 23, 12, 0, 0),
+            cycle=WeeklyPushPaperBucket.CYCLE_NEXT,
+        )
+
+        self.assertEqual(current_key, "20260423_20260429")
+        self.assertEqual(next_key, "20260430_20260506")
+
+    def test_build_weekly_push_delivery_period_key_always_targets_previous_cycle(self):
+        period_key = weekly_push_files.build_weekly_push_delivery_period_key(datetime(2026, 4, 23, 12, 0, 0))
+
+        self.assertEqual(period_key, "20260416_20260422")
+
+    def test_append_weekly_push_paper_ids_creates_only_missing_rows(self):
+        period_key = "20260423_20260429"
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key=period_key,
+            day_key="monday",
+            paper=self.paper1,
+        )
+
+        created_count = weekly_push_files.append_weekly_push_paper_ids(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key=period_key,
+            day_key="monday",
+            paper_ids=[self.paper1.id, self.paper2.id, self.paper3.id],
+        )
+
+        self.assertEqual(created_count, 2)
+        self.assertEqual(
+            list(
+                WeeklyPushPaperBucket.objects
+                .filter(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT, period_key=period_key, day_key="monday")
+                .order_by("paper_id")
+                .values_list("paper_id", flat=True)
+            ),
+            [self.paper1.id, self.paper2.id, self.paper3.id],
+        )
+
+    def test_load_weekly_push_payload_filters_by_cycle_and_period(self):
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key="target",
+            day_key="monday",
+            paper=self.paper1,
+        )
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key="other",
+            day_key="monday",
+            paper=self.paper2,
+        )
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_NEXT,
+            period_key="target",
+            day_key="monday",
+            paper=self.paper3,
+        )
+
+        payload = weekly_push_files.load_weekly_push_payload(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key="target",
+        )
+
+        self.assertEqual(payload["monday"], [self.paper1.id])
+        self.assertEqual(payload["tuesday"], [])
+
+    def test_load_daily_paper_lists_from_cycle_preserves_bucket_order(self):
+        period_key = "20260423_20260429"
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key=period_key,
+            day_key="friday",
+            paper=self.paper2,
+        )
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key=period_key,
+            day_key="friday",
+            paper=self.paper1,
+        )
+
+        daily_lists = weekly_push_files.load_daily_paper_lists_from_cycle(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key=period_key,
+        )
+
+        friday_index = weekly_push_files.DAY_KEYS.index("friday")
+        self.assertEqual([paper.id for paper in daily_lists[friday_index]], [self.paper2.id, self.paper1.id])
+
+    def test_archive_weekly_push_payload_moves_current_rows_to_archive(self):
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key="20260423_20260429",
+            day_key="monday",
+            paper=self.paper1,
+        )
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key="20260423_20260429",
+            day_key="tuesday",
+            paper=self.paper2,
+        )
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key="other",
+            day_key="wednesday",
+            paper=self.paper3,
+        )
+
+        archived_count = weekly_push_files.archive_weekly_push_payload(
+            archive_batch="batch-1",
+            period_key="20260423_20260429",
+        )
+
+        self.assertEqual(archived_count, 2)
+        self.assertFalse(
+            WeeklyPushPaperBucket.objects.filter(
+                cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+                period_key="20260423_20260429",
+            ).exists()
+        )
+        self.assertEqual(
+            WeeklyPushPaperBucket.objects.filter(
+                cycle=WeeklyPushPaperBucket.CYCLE_ARCHIVED,
+                archive_batch="batch-1",
+            ).count(),
+            2,
+        )
+        self.assertTrue(
+            WeeklyPushPaperBucket.objects.filter(
+                cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+                period_key="other",
+            ).exists()
+        )
+
+    def test_promote_staged_weekly_push_payload_returns_false_without_next_rows(self):
+        self.assertFalse(weekly_push_files.promote_staged_weekly_push_payload())
+
+    def test_promote_staged_weekly_push_payload_moves_next_rows_to_current(self):
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_NEXT,
+            period_key="20260430_20260506",
+            day_key="thursday",
+            paper=self.paper1,
+        )
+
+        promoted = weekly_push_files.promote_staged_weekly_push_payload()
+
+        self.assertTrue(promoted)
+        self.assertFalse(WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_NEXT).exists())
+        self.assertTrue(
+            WeeklyPushPaperBucket.objects.filter(
+                cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+                period_key="20260430_20260506",
+                day_key="thursday",
+                paper=self.paper1,
+            ).exists()
+        )
+
+    def test_clear_weekly_push_cycle_only_removes_selected_cycle(self):
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_CURRENT,
+            period_key="current",
+            day_key="monday",
+            paper=self.paper1,
+        )
+        WeeklyPushPaperBucket.objects.create(
+            cycle=WeeklyPushPaperBucket.CYCLE_NEXT,
+            period_key="next",
+            day_key="monday",
+            paper=self.paper2,
+        )
+
+        weekly_push_files.clear_weekly_push_cycle(WeeklyPushPaperBucket.CYCLE_CURRENT)
+
+        self.assertFalse(WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_CURRENT).exists())
+        self.assertTrue(WeeklyPushPaperBucket.objects.filter(cycle=WeeklyPushPaperBucket.CYCLE_NEXT).exists())
+
+
+class EmailVerificationViewExtraTest(TestCase):
+    """覆盖 account/views.py 中邮件验证码与密码重置剩余分支"""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="reset_user",
+            email="reset_user@example.com",
+            password="abc12345",
+        )
+        self.banned_user = User.objects.create_user(
+            username="reset_banned",
+            email="reset_banned@example.com",
+            password="abc12345",
+            role=User.ROLE_BANNED,
+        )
+
+    def post_json(self, path: str, payload: dict):
+        return self.client.post(path, data=json.dumps(payload), content_type="application/json")
+
+    def test_password_reset_verification_code_cooldown(self):
+        first = self.post_json(
+            "/password-reset/verification-code",
+            {"email": "reset_user@example.com"},
+        )
+        self.assertEqual(first.status_code, 200)
+
+        second = self.post_json(
+            "/password-reset/verification-code",
+            {"email": "reset_user@example.com"},
+        )
+        self.assertEqual(second.status_code, 429)
+        self.assertEqual(second.json()["code"], 6)
+
+    def test_password_reset_verification_code_rejects_banned_user(self):
+        res = self.post_json(
+            "/password-reset/verification-code",
+            {"email": "reset_banned@example.com"},
+        )
+
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(res.json()["code"], 3)
+
+    def test_password_reset_verification_code_rejects_empty_email(self):
+        res = self.post_json(
+            "/password-reset/verification-code",
+            {"email": "   "},
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    @patch("account.views.send_password_reset_email")
+    def test_password_reset_verification_code_reports_smtp_failure(self, mock_send):
+        mock_send.side_effect = RuntimeError("smtp boom")
+
+        res = self.post_json(
+            "/password-reset/verification-code",
+            {"email": "reset_user@example.com"},
+        )
+
+        self.assertEqual(res.status_code, 502)
+        self.assertEqual(res.json()["code"], 7)
+        self.assertIn("smtp boom", res.json()["info"])
+
+    @patch("account.views.send_verification_email")
+    def test_register_verification_code_reports_smtp_failure(self, mock_send):
+        mock_send.side_effect = RuntimeError("send mail failed")
+
+        res = self.post_json(
+            "/register/verification-code",
+            {"email": "new-smtp-fail@example.com"},
+        )
+
+        self.assertEqual(res.status_code, 502)
+        self.assertEqual(res.json()["code"], 7)
+        self.assertIn("send mail failed", res.json()["info"])
+
+    def test_register_rejects_non_string_verification_code(self):
+        res = self.post_json(
+            "/register",
+            {
+                "username": "BadTypeUser",
+                "password": "abc12345",
+                "email": "bad-type-code@example.com",
+                "verificationCode": 123456,
+            },
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertFalse(User.objects.filter(username="BadTypeUser").exists())
+
+    def test_reset_password_rejects_non_string_verification_code(self):
+        res = self.post_json(
+            "/password-reset",
+            {
+                "email": "reset_user@example.com",
+                "password": "newpass123",
+                "verificationCode": ["bad", "type"],
+            },
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+
+class UserSocialEndpointsTest(TestCase):
+    """覆盖 search_users / follow_user / followed_users 等用户社交接口"""
+
+    def setUp(self):
+        self.alice = User.objects.create_user(
+            username="alice_social",
+            email="alice@example.com",
+            password="abc12345",
+            real_name="爱丽丝",
+        )
+        self.bob = User.objects.create_user(
+            username="bob_social",
+            email="bob@example.com",
+            password="abc12345",
+        )
+        self.banned = User.objects.create_user(
+            username="banned_social",
+            email="banned-social@example.com",
+            password="abc12345",
+            role=User.ROLE_BANNED,
+        )
+        self.alice_token = generate_jwt_token("alice_social")
+        self.bob_token = generate_jwt_token("bob_social")
+
+    def auth(self, token: str):
+        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    def test_search_users_requires_login(self):
+        res = self.client.get("/search/users")
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_search_users_excludes_self_and_banned_users(self):
+        res = self.client.get("/search/users", **self.auth(self.alice_token))
+
+        self.assertEqual(res.status_code, 200)
+        usernames = {user["username"] for user in res.json()["users"]}
+        self.assertEqual(usernames, {"bob_social"})
+
+    def test_search_users_filters_by_keyword(self):
+        res = self.client.get(
+            "/search/users",
+            {"keyword": "爱丽丝"},
+            **self.auth(self.bob_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        usernames = {user["username"] for user in res.json()["users"]}
+        self.assertEqual(usernames, {"alice_social"})
+
+    def test_search_users_rejects_keyword_too_long(self):
+        res = self.client.get(
+            "/search/users",
+            {"keyword": "x" * 256},
+            **self.auth(self.alice_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_search_users_bad_method(self):
+        res = self.client.post("/search/users", **self.auth(self.alice_token))
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+    def test_follow_user_requires_login(self):
+        res = self.client.post(f"/follow/users/{self.bob.id}")
+
+        self.assertEqual(res.status_code, 401)
+
+    def test_follow_user_rejects_self_follow(self):
+        res = self.client.post(
+            f"/follow/users/{self.alice.id}",
+            **self.auth(self.alice_token),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], 3)
+
+    def test_follow_user_returns_404_for_unknown_user(self):
+        res = self.client.post(
+            "/follow/users/999999",
+            **self.auth(self.alice_token),
+        )
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_follow_user_returns_404_for_banned_target(self):
+        res = self.client.post(
+            f"/follow/users/{self.banned.id}",
+            **self.auth(self.alice_token),
+        )
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_follow_user_succeeds_and_is_idempotent(self):
+        first = self.client.post(
+            f"/follow/users/{self.bob.id}",
+            **self.auth(self.alice_token),
+        )
+        second = self.client.post(
+            f"/follow/users/{self.bob.id}",
+            **self.auth(self.alice_token),
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertTrue(first.json()["followed"])
+        self.assertEqual(
+            UserFollow.objects.filter(follower=self.alice, following=self.bob).count(),
+            1,
+        )
+
+    def test_unfollow_user_clears_relation(self):
+        UserFollow.objects.create(follower=self.alice, following=self.bob)
+
+        res = self.client.delete(
+            f"/follow/users/{self.bob.id}",
+            **self.auth(self.alice_token),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertFalse(res.json()["followed"])
+        self.assertFalse(
+            UserFollow.objects.filter(follower=self.alice, following=self.bob).exists()
+        )
+
+    def test_follow_user_rejects_bad_method(self):
+        res = self.client.get(
+            f"/follow/users/{self.bob.id}",
+            **self.auth(self.alice_token),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+    def test_followed_users_requires_login(self):
+        res = self.client.get("/follow/users")
+
+        self.assertEqual(res.status_code, 401)
+
+    def test_followed_users_excludes_banned_users(self):
+        UserFollow.objects.create(follower=self.alice, following=self.bob)
+        UserFollow.objects.create(follower=self.alice, following=self.banned)
+
+        res = self.client.get("/follow/users", **self.auth(self.alice_token))
+
+        self.assertEqual(res.status_code, 200)
+        usernames = {user["username"] for user in res.json()["users"]}
+        self.assertEqual(usernames, {"bob_social"})
+
+    def test_followed_users_rejects_bad_method(self):
+        res = self.client.post("/follow/users", **self.auth(self.alice_token))
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+
+class PublicUserProfileViewTest(TestCase):
+    """覆盖 /users/<id>/profile 公共资料视图与隐私开关"""
+
+    def setUp(self):
+        self.viewer = User.objects.create_user(
+            username="profile_viewer",
+            email="profile_viewer@example.com",
+            password="abc12345",
+        )
+        self.target = User.objects.create_user(
+            username="profile_target",
+            email="profile_target@example.com",
+            password="abc12345",
+        )
+        self.banned = User.objects.create_user(
+            username="profile_banned",
+            email="profile_banned@example.com",
+            password="abc12345",
+            role=User.ROLE_BANNED,
+        )
+        self.viewer_token = generate_jwt_token("profile_viewer")
+        UserProfile.objects.create(
+            user=self.target,
+            avatar_url="https://example.com/avatar.png",
+            signature="签名",
+            personal_intro="个人简介",
+            research_experience="科研经历",
+            honors="荣誉",
+            project_experience="项目经历",
+            show_personal_intro=True,
+            show_research_experience=False,
+            show_honors=False,
+            show_project_experience=True,
+        )
+
+    def auth(self, token: str):
+        return {"HTTP_AUTHORIZATION": f"Bearer {token}"}
+
+    def test_public_profile_requires_login(self):
+        res = self.client.get(f"/users/{self.target.id}/profile")
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_public_profile_returns_404_for_missing_user(self):
+        res = self.client.get(
+            "/users/999999/profile",
+            **self.auth(self.viewer_token),
+        )
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_public_profile_returns_404_for_banned_user(self):
+        res = self.client.get(
+            f"/users/{self.banned.id}/profile",
+            **self.auth(self.viewer_token),
+        )
+
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_public_profile_rejects_bad_method(self):
+        res = self.client.post(
+            f"/users/{self.target.id}/profile",
+            **self.auth(self.viewer_token),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+
+class EmailVerificationServiceTest(TestCase):
+    """单元测试 account/services/email_verification.py 中的纯函数"""
+
+    def test_generate_verification_code_returns_six_digit_numeric(self):
+        from account.services.email_verification import (
+            CODE_LENGTH,
+            generate_verification_code,
+        )
+
+        code = generate_verification_code()
+
+        self.assertEqual(len(code), CODE_LENGTH)
+        self.assertTrue(code.isdigit())
+
+    def test_issue_verification_code_writes_and_refreshes_record(self):
+        from account.services.email_verification import issue_verification_code
+
+        code1, record1 = issue_verification_code("issue@example.com")
+        code2, record2 = issue_verification_code("issue@example.com")
+
+        # 二次签发应当复写同一条记录而不是新建
+        self.assertEqual(record1.pk, record2.pk)
+        self.assertEqual(record2.code, code2)
+        self.assertGreaterEqual(
+            (record2.expires_at - timezone.now()).total_seconds(),
+            60,
+        )
+
+    def test_get_remaining_cooldown_returns_zero_when_no_record(self):
+        from account.services.email_verification import get_remaining_cooldown
+
+        self.assertEqual(get_remaining_cooldown("missing@example.com"), 0)
+
+    def test_get_remaining_cooldown_returns_positive_for_recent_record(self):
+        from account.services.email_verification import (
+            get_remaining_cooldown,
+            issue_verification_code,
+        )
+
+        issue_verification_code("recent@example.com")
+
+        self.assertGreater(get_remaining_cooldown("recent@example.com"), 0)
+
+    def test_verify_code_consumes_correct_code(self):
+        from account.services.email_verification import (
+            issue_verification_code,
+            verify_code,
+        )
+
+        code, _record = issue_verification_code("consume@example.com")
+
+        self.assertTrue(verify_code("consume@example.com", code))
+        # 验证后记录应被删除，下一次校验会返回 False
+        self.assertFalse(EmailVerificationCode.objects.filter(email="consume@example.com").exists())
+        self.assertFalse(verify_code("consume@example.com", code))
+
+    def test_verify_code_rejects_wrong_code_without_deleting_record(self):
+        from account.services.email_verification import (
+            issue_verification_code,
+            verify_code,
+        )
+
+        code, _record = issue_verification_code("wrong@example.com")
+
+        self.assertFalse(verify_code("wrong@example.com", "000000" if code != "000000" else "111111"))
+        # 错误验证码不应消费记录
+        self.assertTrue(EmailVerificationCode.objects.filter(email="wrong@example.com").exists())
+
+    def test_verify_code_purges_expired_record(self):
+        from account.services.email_verification import verify_code
+
+        EmailVerificationCode.objects.create(
+            email="expired@example.com",
+            code="123456",
+            expires_at=timezone.now() - timedelta(seconds=1),
+        )
+
+        self.assertFalse(verify_code("expired@example.com", "123456"))
+        self.assertFalse(EmailVerificationCode.objects.filter(email="expired@example.com").exists())
+
+    @patch("account.services.email_verification.send_mail")
+    def test_send_verification_email_passes_subject_body_and_recipient(self, mock_send_mail):
+        from account.services.email_verification import send_verification_email
+
+        send_verification_email("notify@example.com", "234567")
+
+        mock_send_mail.assert_called_once()
+        kwargs = mock_send_mail.call_args.kwargs
+        self.assertIn("234567", kwargs["message"])
+        self.assertEqual(kwargs["recipient_list"], ["notify@example.com"])
+        self.assertIn("注册邮箱验证码", kwargs["subject"])
+
+    @patch("account.services.email_verification.send_mail")
+    def test_send_password_reset_email_uses_reset_subject(self, mock_send_mail):
+        from account.services.email_verification import send_password_reset_email
+
+        send_password_reset_email("reset-recipient@example.com", "345678")
+
+        mock_send_mail.assert_called_once()
+        kwargs = mock_send_mail.call_args.kwargs
+        self.assertIn("345678", kwargs["message"])
+        self.assertIn("修改密码邮箱验证码", kwargs["subject"])
+        self.assertEqual(kwargs["recipient_list"], ["reset-recipient@example.com"])
+
+
+class MentorVerificationRequestEdgeTest(TestCase):
+    """覆盖 /profile/mentor-verification-request 剩余分支"""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="verify_edge_user",
+            email="verify_edge@example.com",
+            password="abc12345",
+        )
+        self.token = generate_jwt_token("verify_edge_user")
+
+    def auth(self):
+        return {"HTTP_AUTHORIZATION": f"Bearer {self.token}"}
+
+    def test_mentor_verification_request_requires_login(self):
+        res = self.client.post(
+            "/profile/mentor-verification-request",
+            data=json.dumps({"submittedName": "张三"}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_mentor_verification_request_rejects_non_object_body(self):
+        res = self.client.post(
+            "/profile/mentor-verification-request",
+            data=json.dumps(["not", "an", "object"]),
+            content_type="application/json",
+            **self.auth(),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+
+    def test_mentor_verification_request_rejects_submitted_name_too_long(self):
+        res = self.client.post(
+            "/profile/mentor-verification-request",
+            data=json.dumps({"submittedName": "x" * 101}),
+            content_type="application/json",
+            **self.auth(),
+        )
+
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.json()["code"], -2)
+        self.assertIn("too long", res.json()["info"])
+
+    def test_mentor_verification_request_rejects_bad_method(self):
+        res = self.client.get(
+            "/profile/mentor-verification-request",
+            **self.auth(),
+        )
+
+        self.assertEqual(res.status_code, 405)
+        self.assertEqual(res.json()["code"], -3)
+
+
+class RunWeeklyPushSchedulerWrapperTest(TestCase):
+    """覆盖 account/management/commands/run_weekly_push_scheduler.run_weekly_push_job"""
+
+    def test_run_weekly_push_job_generates_reports_before_send_weekly_push(self):
+        from account.management.commands import run_weekly_push_scheduler
+
+        with patch.object(run_weekly_push_scheduler, "call_command") as mock_call_command:
+            run_weekly_push_scheduler.run_weekly_push_job()
+
+        self.assertEqual(
+            [call.args for call in mock_call_command.call_args_list],
+            [("generate_user_weekly_reports",), ("send_weekly_push",)],
+        )
+
+    def test_run_weekly_push_job_swallows_exceptions(self):
+        from account.management.commands import run_weekly_push_scheduler
+
+        with patch.object(run_weekly_push_scheduler, "call_command") as mock_call_command:
+            mock_call_command.side_effect = RuntimeError("scheduler boom")
+
+            # 调度器循环依赖此函数不抛异常
+            run_weekly_push_scheduler.run_weekly_push_job()
+        mock_call_command.assert_called_once_with("generate_user_weekly_reports")
+
+
+class AuthorizationHeaderParsingTest(TestCase):
+    """覆盖 _extract_token / _require_user 对 Authorization 头的解析分支"""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="auth_parsing_user",
+            email="auth_parsing@example.com",
+            password="abc12345",
+        )
+        self.token = generate_jwt_token("auth_parsing_user")
+
+    def test_authorization_header_supports_bare_token_without_bearer_prefix(self):
+        # 视图允许直接传 token，不强制 Bearer 前缀
+        res = self.client.get("/profile/me", HTTP_AUTHORIZATION=self.token)
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+        self.assertEqual(res.json()["userId"], self.user.id)
+
+    def test_authorization_header_supports_bearer_prefix_case_insensitive(self):
+        res = self.client.get(
+            "/profile/me",
+            HTTP_AUTHORIZATION=f"bEaReR {self.token}",
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["code"], 0)
+
+    def test_authorization_header_blank_treated_as_unauthorized(self):
+        res = self.client.get("/profile/me", HTTP_AUTHORIZATION="   ")
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_authorization_header_invalid_token_returns_unauthorized(self):
+        res = self.client.get(
+            "/profile/me",
+            HTTP_AUTHORIZATION="Bearer not-a-real-token",
+        )
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+    def test_authorization_header_with_missing_user_returns_unauthorized(self):
+        # token 合法但用户记录已被删除
+        token = generate_jwt_token("ghost_user")
+
+        res = self.client.get("/profile/me", HTTP_AUTHORIZATION=f"Bearer {token}")
+
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()["code"], 2)
+
+
+class AdminUsersDoubleFilterTest(TestCase):
+    """覆盖 /management/users 同时使用 keyword + role 过滤的分支"""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="double_filter_admin",
+            email="double_filter_admin@example.com",
+            password="abc12345",
+            role=User.ROLE_ADMIN,
+        )
+        self.admin_token = generate_jwt_token("double_filter_admin")
+        self.public_mentor = Mentor.objects.create(
+            Chinese_name="过滤导师",
+            English_name="Filter Mentor",
+            research_direction="可信人工智能",
+        )
+        # 三个 mentor 角色用户，keyword 只命中一个
+        self.match_user = User.objects.create_user(
+            username="mentor_alice",
+            email="mentor_alice@example.com",
+            password="abc12345",
+            role=User.ROLE_MENTOR,
+            mentor_profile=self.public_mentor,
+        )
+        self.other_mentor_profile = Mentor.objects.create(
+            Chinese_name="另一导师",
+            English_name="Another Mentor",
+            research_direction="机器学习",
+        )
+        self.other_mentor_user = User.objects.create_user(
+            username="mentor_bob",
+            email="mentor_bob@example.com",
+            password="abc12345",
+            role=User.ROLE_MENTOR,
+            mentor_profile=self.other_mentor_profile,
+        )
+        # 用 keyword "alice" 但角色为 student，不应被命中
+        User.objects.create_user(
+            username="student_alice",
+            email="student_alice@example.com",
+            password="abc12345",
+            role=User.ROLE_STUDENT,
+        )
+
+    def auth(self):
+        return {"HTTP_AUTHORIZATION": f"Bearer {self.admin_token}"}
+
+    def test_admin_users_filters_by_keyword_and_role_together(self):
+        res = self.client.get(
+            "/management/users",
+            {"keyword": "alice", "role": User.ROLE_MENTOR},
+            **self.auth(),
+        )
+
+        self.assertEqual(res.status_code, 200)
+        usernames = [user["username"] for user in res.json()["users"]]
+        self.assertEqual(usernames, ["mentor_alice"])
+        self.assertEqual(res.json()["roleFilter"], User.ROLE_MENTOR)

@@ -1,0 +1,15 @@
+__pycache__/
+**/migrations/__pycache__/
+db.sqlite3
+
+.coverage
+coverage-reports/
+xunit-reports/
+
+.DS_Store
+.pytest_cache
+
+.env
+media/
+
+htmlcov/

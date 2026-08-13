@@ -1,0 +1,56 @@
+image: registry.spring26a.secoder.net/tool/deployer
+
+stages:
+  - build
+  - test
+  - deploy
+
+build:
+  stage: build
+  script:
+    - export BUILD_IMAGE_NAME=$CI_REGISTRY_IMAGE
+    - export BUILD_IMAGE_TAG=$CI_COMMIT_REF_SLUG
+    - export BUILD_IMAGE_USERNAME=$CI_REGISTRY_USER
+    - export BUILD_IMAGE_PASSWORD=$CI_REGISTRY_PASSWORD
+    - test -n "$JWT_SIGNING_KEY" || (echo "JWT_SIGNING_KEY is required" && exit 1)
+    - test -n "$DJANGO_SECRET_KEY" || (echo "DJANGO_SECRET_KEY is required" && exit 1)
+    # 把 GitLab CI/CD Variables 中的 163 SMTP 凭据写成 .env，
+    # 然后由 Dockerfile 的 COPY . . 随镜像带入，容器启动时由 load_dotenv 读取。
+    - echo "EMAIL_HOST_USER=$EMAIL_HOST_USER" > .env
+    - echo "EMAIL_HOST_PASSWORD=$EMAIL_HOST_PASSWORD" >> .env
+    - echo "DJANGO_SUPERUSER_USERNAME=$DJANGO_SUPERUSER_USERNAME" >> .env
+    - echo "DJANGO_SUPERUSER_EMAIL=$DJANGO_SUPERUSER_EMAIL" >> .env
+    - echo "DJANGO_SUPERUSER_PASSWORD=$DJANGO_SUPERUSER_PASSWORD" >> .env
+    - echo "JWT_SIGNING_KEY=$JWT_SIGNING_KEY" >> .env
+    - echo "DJANGO_SECRET_KEY=$DJANGO_SECRET_KEY" >> .env
+    - echo "THUCS_API_BASE_URL=$THUCS_API_BASE_URL" >> .env
+    - echo "THUCS_API_KEY=$THUCS_API_KEY" >> .env
+    - deployer build
+
+# 临时跳过测试：job 名以 . 开头会被 GitLab 当作隐藏模板，不进入流水线。
+# 恢复测试：把下面的 ".unit-test" 改回 "unit-test"（去掉开头的点）即可。
+unit-test:
+  image: python:3.11
+  stage: test
+  before_script:
+    - pip install -r requirements.txt
+    - test -n "$JWT_SIGNING_KEY" || (echo "JWT_SIGNING_KEY is required" && exit 1)
+  script:
+    - mkdir -p data
+    - python manage.py makemigrations account
+    - python manage.py makemigrations dataset
+    - python manage.py migrate
+    - bash test.sh
+  after_script:
+    - SUFFIX=$RANDOM
+    - curl "http://api.spring26a.secoder.net/static/sonar-scanner.tar.gz" -s -o "/tmp/sonar-$SUFFIX.tar.gz"
+    - tar -xf "/tmp/sonar-$SUFFIX.tar.gz"  -C /opt
+    - sed -i 's/sonarqube.secoder.net/sonarqube.spring26a.secoder.net/g' /opt/sonar-scanner/conf/sonar-scanner.properties
+    - sed -i 's/api.secoder.net/api.spring26a.secoder.net/g' /opt/sonar-scanner/bin/sonar-scanner
+    - /opt/sonar-scanner/bin/sonar-scanner
+
+deploy:
+  stage: deploy
+  script:
+    - export API_SERVER=https://deployer.spring26a.secoder.net/api
+    - deployer dyno replace "$CI_PROJECT_NAME" "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG" "$REGISTRY_USER" "$REGISTRY_PWD"
