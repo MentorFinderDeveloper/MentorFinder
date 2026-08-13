@@ -1,0 +1,2 @@
+# Normalize text files to LF so Windows and Linux checkouts behave consistently.
+* text=auto eol=lf

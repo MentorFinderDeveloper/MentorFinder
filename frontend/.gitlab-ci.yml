@@ -1,0 +1,48 @@
+image: registry.spring26a.secoder.net/tool/deployer
+
+# Build, validate, then publish the frontend image.
+stages:
+  - build
+  - test
+  - deploy
+
+build:
+  stage: build
+  script: 
+    - export BUILD_IMAGE_NAME=$CI_REGISTRY_IMAGE
+    - export BUILD_IMAGE_TAG=$CI_COMMIT_REF_SLUG
+    - export BUILD_IMAGE_USERNAME=$CI_REGISTRY_USER
+    - export BUILD_IMAGE_PASSWORD=$CI_REGISTRY_PASSWORD
+    - deployer build
+
+# Reuse the same Node.js-based setup for linting and unit tests.
+.test:
+  image: node:22
+  stage: test
+
+  before_script:
+    - npm install -g pnpm
+    - pnpm config set registry https://registry.npmmirror.com
+    - pnpm install
+
+unit-test:
+  extends: .test
+  script:
+    - pnpm test
+  after_script:
+    # Sonar needs both the coverage file and a test execution report after the test run.
+    - SUFFIX=$RANDOM
+    - curl "http://api.spring26a.secoder.net/static/sonar-scanner.tar.gz" -s -o "/tmp/sonar-$SUFFIX.tar.gz"
+    - tar -xf "/tmp/sonar-$SUFFIX.tar.gz" -C /opt
+    - /opt/sonar-scanner/bin/sonar-scanner
+
+style-test:
+  extends: .test
+  script:
+    - pnpm lint
+
+deploy:
+  stage: deploy
+  script:
+    - export API_SERVER=https://deployer.spring26a.secoder.net/api
+    - deployer dyno replace "$CI_PROJECT_NAME" "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG" "$REGISTRY_USER" "$REGISTRY_PWD"

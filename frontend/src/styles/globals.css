@@ -1,0 +1,2193 @@
+/* Global design tokens shared across pages, components, and page-level CSS-in-JS blocks. */
+:root {
+  --surface-page: #f6f8fa;
+  --surface-panel: #ffffff;
+  --surface-subtle: #eef2f7;
+  --border-soft: #d0d7de;
+  --border-strong: #8c959f;
+  --ink-strong: #1f2328;
+  --ink-muted: #59636e;
+  --accent: #2f81f7;
+  --accent-strong: #1f6feb;
+  --danger: #cf222e;
+  --nav-bg: #f6f8fa;
+  --nav-surface: #ffffff;
+  --nav-ink: #1f2328;
+  --nav-muted: #57606a;
+  --shadow-soft: 0 18px 40px rgba(15, 23, 42, 0.08);
+}
+
+/* Base document reset and typography defaults for the whole app. */
+html,
+body {
+  padding: 0;
+  margin: 0;
+  min-height: 100%;
+  background: #ffffff;
+  color: var(--ink-strong);
+  font-family: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+
+body {
+  min-height: 100vh;
+}
+
+/* Keep links visually neutral by default; feature pages opt into their own link styling. */
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Make form controls inherit the surrounding typography so page styles stay consistent. */
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+/* Shared base input styling used across forms and page-level inline controls. */
+input,
+textarea,
+select {
+  width: 100%;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--surface-panel);
+  color: var(--ink-strong);
+  padding: 10px 12px;
+}
+
+textarea {
+  resize: vertical;
+}
+
+/* Disabled controls share a common dimmed treatment throughout the app. */
+button:disabled,
+input:disabled,
+textarea:disabled,
+select:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+/* Default button styling for ordinary buttons.
+   Components with bespoke button systems are explicitly excluded from this broad selector. */
+button:not(.topNavLink):not(.topNavAuthLink):not(.topNavAuthPrimary):not(.topNavAvatarButton):not(.topNavMenuItem):not(.topNavMobileToggle):not(.topNavMobileLink):not(.topNavBrand):not(.loginAuthBrand):not(.registerAuthFormLogoRow):not(.searchTimelineMentorButton):not(.searchMentorPaperLinkButton):not(.mentorPaperLink):not(.searchSegmentButton):not(.searchMentorInlineLinkButton):not(.searchMentorFollowButton):not(.timelineDirectionButton):not(.timelineCalendarDayButton):not(.timelineCalendarPickerTrigger):not(.timelineCalendarPickerOption):not(.homeSubjectCarouselCard):not(.homeSubjectModalCloseButton):not(.homePublicHistoryButton) {
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--surface-panel);
+  color: var(--ink-strong);
+  padding: 10px 14px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+/* Shared hover treatment for the default button family above. */
+button:not(.topNavLink):not(.topNavAuthLink):not(.topNavAuthPrimary):not(.topNavAvatarButton):not(.topNavMenuItem):not(.topNavMobileToggle):not(.topNavMobileLink):not(.topNavBrand):not(.loginAuthBrand):not(.registerAuthFormLogoRow):not(.searchTimelineMentorButton):not(.searchMentorPaperLinkButton):not(.mentorPaperLink):not(.searchSegmentButton):not(.searchMentorInlineLinkButton):not(.searchMentorFollowButton):not(.timelineDirectionButton):not(.timelineCalendarDayButton):not(.timelineCalendarPickerTrigger):not(.timelineCalendarPickerOption):not(.homeSubjectCarouselCard):not(.homeSubjectModalCloseButton):not(.homePublicHistoryButton):hover:not(:disabled) {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-soft);
+  transform: translateY(-1px);
+}
+
+/* Search mentor follow buttons opt out of the generic raised-hover motion. */
+button.searchMentorFollowButton:hover:not(:disabled),
+button.searchMentorFollowButton:focus-visible {
+  transform: none;
+  box-shadow: none;
+}
+
+button.searchMentorFollowButton:focus-visible {
+  outline: 2px solid rgba(8, 109, 177, 0.35);
+  outline-offset: 2px;
+}
+
+button.searchMentorFollowButton:disabled {
+  opacity: 1;
+  cursor: not-allowed;
+}
+
+/* Shared paper-link layout used by mentor and search result cards. */
+.mentorPaperLink,
+.searchMentorPaperLinkButton {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: rgb(8, 109, 177);
+  transition: color 0.16s ease;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  white-space: normal;
+}
+
+/* Hover state for clickable paper links without changing their layout. */
+button.mentorPaperLink:hover,
+button.mentorPaperLink:focus-visible,
+button.searchMentorPaperLinkButton:hover,
+button.searchMentorPaperLinkButton:focus-visible,
+a.mentorPaperLink:hover,
+a.mentorPaperLink:focus-visible {
+  color: rgb(45, 45, 45);
+  outline: none;
+}
+
+/* Underline only the text portion of paper links on hover/focus. */
+.mentorPaperLinkText,
+.searchMentorPaperLinkText {
+  color: inherit;
+  text-decoration: none;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  text-decoration-color: transparent;
+  transition: text-decoration-color 0.16s ease;
+}
+
+/* Reveal the dashed underline on hover/focus for paper links. */
+button.mentorPaperLink:hover .mentorPaperLinkText,
+button.mentorPaperLink:focus-visible .mentorPaperLinkText,
+button.searchMentorPaperLinkButton:hover .searchMentorPaperLinkText,
+button.searchMentorPaperLinkButton:focus-visible .searchMentorPaperLinkText,
+a.mentorPaperLink:hover .mentorPaperLinkText,
+a.mentorPaperLink:focus-visible .mentorPaperLinkText {
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-color: currentColor;
+}
+
+/* Shared paper-link icon sizing for mentor and search result cards. */
+.mentorPaperLinkIcon,
+.searchMentorPaperLinkIcon {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  display: block;
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+/* Generic loading overlay used by follow/unfollow buttons. */
+.followToggleButtonOverlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+/* Shared focus ring for keyboard navigation across the app. */
+*:focus-visible {
+  outline: 3px solid rgba(47, 129, 247, 0.3);
+  outline-offset: 2px;
+}
+
+/* Use border-box sizing globally to keep layout math predictable. */
+* {
+  box-sizing: border-box;
+}
+
+/* Outer app shell sizing shared by normal pages and auth pages. */
+.appChrome {
+  min-height: 100vh;
+}
+
+/* Auth pages intentionally keep a plain white background and no top navigation. */
+.appChromeAuth {
+  background: #ffffff;
+}
+
+/* Default content container for most pages beneath the fixed top navigation. */
+.appMain {
+  width: min(1120px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 110px 0 48px;
+}
+
+/* Auth pages take full viewport height and opt out of the normal content container width/padding. */
+.appMainAuth {
+  width: 100%;
+  max-width: none;
+  min-height: 100vh;
+  padding: 0;
+}
+
+/* Fixed global top navigation shell shared by all non-auth pages. */
+.topNav {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 1000;
+  background: rgba(246, 248, 250, 0.96);
+  border-bottom: 1px solid #d8dee4;
+  backdrop-filter: blur(14px);
+}
+
+/* Inner top-nav layout container. */
+.topNavInner {
+  width: min(1280px, calc(100% - 32px));
+  min-height: 64px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+/* Shared flex groups used on the left and right sides of the top nav. */
+.topNavLeft,
+.topNavRight {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.topNavLeft {
+  min-width: 0;
+}
+
+/* Brand button that wraps the MentorFinder logo. */
+.topNavBrand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  border: none;
+  background: transparent;
+  color: var(--nav-ink);
+  padding: 0;
+  min-height: 32px;
+}
+
+/* Keep the SVG logo aligned and sized consistently in the nav bar. */
+.topNavBrandLogoFrame {
+  width: 216px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.topNavBrandLogo {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Horizontal navigation and desktop auth action groups. */
+.topNavLinks,
+.topNavDesktopAuth {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* These nav-specific buttons deliberately bypass the generic button chrome defined above. */
+.topNavLink,
+.topNavAuthLink,
+.topNavAuthPrimary,
+.topNavAvatarButton,
+.topNavMenuItem,
+.topNavMobileToggle,
+.topNavMobileLink {
+  border: none;
+  background: transparent;
+}
+
+.topNavLink,
+.topNavAuthLink {
+  color: var(--nav-muted);
+}
+
+/* Shared sizing and hover transitions for top-nav text buttons. */
+.topNavLink,
+.topNavAuthLink,
+.topNavAuthPrimary {
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 10px;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+/* Active/hover state for top-nav links and lightweight auth actions. */
+.topNavLink:hover,
+.topNavLinkActive,
+.topNavAuthLink:hover {
+  background: #eaeef2;
+  color: var(--nav-ink);
+}
+
+/* Primary auth action in the nav keeps a bordered pill style distinct from plain links. */
+.topNavAuthPrimary {
+  border: 1px solid #d0d7de;
+  color: var(--nav-ink);
+  background: #ffffff;
+}
+
+.topNavAuthPrimary:hover {
+  background: #f3f4f6;
+}
+
+/* Compact search field embedded in the top nav. */
+.topNavSearchShell {
+  width: 260px;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+/* Fixed-size search icon slot inside the nav search field. */
+.topNavSearchIcon {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #656d76;
+  flex: 0 0 auto;
+}
+
+.topNavSearch {
+  width: 100%;
+  min-height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--nav-ink);
+  padding: 0 12px 0 0;
+  border-radius: 10px;
+}
+
+.topNavSearch::placeholder {
+  color: #656d76;
+}
+
+.topNavSearch:focus {
+  outline: none;
+}
+
+.topNavAvatarArea {
+  position: relative;
+}
+
+.topNavAvatarButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  padding: 0 8px 0 0;
+  border-radius: 999px;
+  color: var(--nav-ink);
+  background: transparent;
+}
+
+.topNavAvatarCircle {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #8b949e, #57606a);
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.topNavAvatarImage {
+  object-fit: cover;
+  background: #f6f8fa;
+}
+
+.topNavAvatarName {
+  max-width: 132px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.topNavAvatarMenu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  min-width: 200px;
+  padding: 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
+}
+
+.topNavMenuItem {
+  width: 100%;
+  text-align: left;
+  color: var(--nav-ink);
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 10px;
+}
+
+.topNavMenuItem:hover {
+  background: #f6f8fa;
+}
+
+.topNavMenuItemDanger {
+  color: #cf222e;
+}
+
+.topNavMobileToggle {
+  display: none;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+  border-radius: 10px;
+  color: var(--nav-ink);
+  background: #ffffff;
+  border: 1px solid #d0d7de;
+}
+
+.topNavMobileToggle span {
+  width: 18px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.topNavMobilePanel {
+  display: none;
+}
+
+.timelineMetaRow {
+  margin: 0;
+  line-height: 1.6;
+  white-space: normal;
+}
+
+.timelineMetaLabel {
+  display: inline;
+  font-weight: 400;
+}
+
+.timelineMetaContent {
+  display: inline-block;
+  vertical-align: top;
+  max-width: calc(100% - 3em);
+}
+
+.timelineAbstractContent {
+  white-space: normal;
+}
+
+.timelineAbstractContent .latexTextInline {
+  display: inline-block;
+  vertical-align: baseline;
+}
+
+.timelineAbstractContent .latexTextDisplay {
+  display: block;
+  margin: 12px 0;
+  text-align: center;
+}
+
+.searchPaperAbstractRow {
+  margin: 4px 0;
+  line-height: 1.6;
+  white-space: normal;
+}
+
+.searchPaperAbstractLabel {
+  display: inline;
+}
+
+.searchPaperAbstractContent {
+  display: inline-block;
+  vertical-align: top;
+  max-width: calc(100% - 3em);
+  white-space: normal;
+}
+
+.searchPaperAbstractContent .latexTextInline {
+  display: inline-block;
+  vertical-align: baseline;
+}
+
+.searchPaperAbstractContent .latexTextDisplay {
+  display: block;
+  margin: 12px 0;
+  text-align: center;
+}
+
+.homeWeeklyPaperAbstractRow {
+  margin-top: 6px;
+  line-height: 1.5;
+  white-space: normal;
+}
+
+.homeWeeklyPaperAbstractClamp {
+  line-height: 1.5;
+  white-space: normal;
+}
+
+.homeWeeklyPaperAbstractClampTruncated {
+  max-height: calc(1.5em * 26);
+  overflow: hidden;
+}
+
+.homeWeeklyPaperAbstractEllipsis {
+  line-height: 1.5;
+  color: #3f4650;
+}
+
+.homeWeeklyPaperAbstractContent {
+  white-space: normal;
+}
+
+.homeWeeklyPaperAbstractContent .latexTextInline {
+  display: inline-block;
+  vertical-align: baseline;
+}
+
+.homeWeeklyPaperAbstractContent .latexTextDisplay {
+  display: block;
+  margin: 12px 0;
+  text-align: center;
+}
+
+.homeWeeklyPaperMeta {
+  margin-top: 4px;
+  color: #666;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.homeWeeklyPaperAuthors {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.homeWeeklyPaperDate {
+  margin-top: 2px;
+}
+
+.homeWeeklyPaperCarouselShell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.homeWeeklyPaperCarouselControls {
+  display: flex;
+  order: 2;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.homeWeeklyPaperCarouselButton {
+  min-width: 74px;
+}
+
+.homeWeeklyPaperCarouselViewport {
+  order: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.homeWeeklyPaperCarouselViewport::-webkit-scrollbar {
+  height: 8px;
+}
+
+.homeWeeklyPaperCarouselViewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.homeWeeklyPaperCarouselViewport::-webkit-scrollbar-thumb {
+  background: transparent;
+  border: none;
+}
+
+.homeWeeklyPaperCarouselTrack {
+  display: flex;
+  gap: 12px;
+}
+
+.homeWeeklyPaperCarouselCard {
+  flex: 0 0 calc((100% - 12px) / 2);
+  min-width: 0;
+  scroll-snap-align: start;
+}
+
+.homeWeeklyPaperHoverTooltip {
+  position: fixed;
+  z-index: 1000;
+  pointer-events: none;
+  max-width: 220px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(31, 35, 40, 0.92);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.4;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
+  white-space: nowrap;
+}
+
+.homeSkeletonStack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+}
+
+.homeSkeletonBlock {
+  display: block;
+  position: relative;
+  overflow: hidden;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #e3e9f0 0%, #edf2f7 40%, #ffffff 50%, #edf2f7 60%, #e3e9f0 100%);
+  background-size: 200% 100%;
+  animation: homeSkeletonShimmer 1.15s ease-in-out infinite;
+}
+
+.homeSkeletonHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.homeSkeletonTitle {
+  width: min(360px, 72%);
+  height: 22px;
+}
+
+.homeSkeletonMeta {
+  width: min(520px, 84%);
+  height: 13px;
+}
+
+.homeSkeletonParagraph {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.homeSkeletonLine {
+  width: 100%;
+  height: 13px;
+}
+
+.homeSkeletonLineMedium {
+  width: 78%;
+}
+
+.homeSkeletonLineShort {
+  width: 58%;
+}
+
+.homeSkeletonSectionTitle {
+  width: 86px;
+  height: 18px;
+  margin-top: 4px;
+}
+
+.homeSkeletonPaperGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.homeSkeletonPaperCard,
+.homeSkeletonSummaryBlock,
+.homeSkeletonHistoryItem {
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.homeSkeletonPaperCard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 160px;
+  padding: 12px;
+}
+
+.homeSkeletonPaperTitle {
+  width: 76%;
+  height: 18px;
+}
+
+.homeSkeletonPaperMeta {
+  width: 68%;
+  height: 12px;
+}
+
+.homeSkeletonPaperMetaShort {
+  width: 42%;
+}
+
+.homeSkeletonStats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px;
+}
+
+.homeSkeletonStatCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 66px;
+  padding: 10px;
+  border: 1px solid #d9e6f7;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.homeSkeletonStatLabel {
+  width: 52px;
+  height: 12px;
+}
+
+.homeSkeletonStatValue {
+  width: 34px;
+  height: 20px;
+}
+
+.homeSkeletonSummaryGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.homeSkeletonSummaryBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 118px;
+  padding: 12px;
+  background: #f6f8fa;
+}
+
+.homeSkeletonSummaryLabel {
+  width: 64px;
+  height: 12px;
+  margin-bottom: 2px;
+}
+
+.homeSkeletonSubjectGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.homeSkeletonSubjectCard {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 220px;
+  padding: 28px;
+  border: 1px solid #d9e6f7;
+  border-radius: 28px;
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 56%);
+}
+
+.homeSkeletonSubjectCode {
+  width: 44%;
+  height: 42px;
+}
+
+.homeSkeletonSubjectName {
+  width: 72%;
+  height: 24px;
+}
+
+.homeSkeletonSubjectCount {
+  width: 48px;
+  height: 14px;
+  margin-top: auto;
+}
+
+.homeSkeletonHistoryList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.homeSkeletonHistoryItem {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 58px;
+  padding: 10px;
+}
+
+.homeSkeletonHistoryTitle {
+  width: min(320px, 68%);
+  height: 16px;
+}
+
+.homeSkeletonHistoryMeta {
+  width: min(460px, 86%);
+  height: 12px;
+}
+
+@keyframes homeSkeletonShimmer {
+  from {
+    background-position: 200% 0;
+  }
+
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.homePageShell {
+  width: 100%;
+  max-width: 1400px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.homePageLayout {
+  display: block;
+}
+
+.homePageTitle {
+  margin: 0;
+  font-size: 30px;
+  line-height: 1.1;
+  font-weight: 500;
+  color: #1f2328;
+}
+
+.homePanelTitle {
+  margin: 0;
+  font-size: 80px;
+  line-height: 1.1;
+  font-weight: 70;
+  color: #1f2328;
+}
+
+.homeWeeklyPushCardTitle {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.35;
+  font-weight: 60;
+  color: #1f2328;
+}
+
+.homeWeeklyPushCardTitleLarge {
+  font-size: 30px;
+}
+
+.homeWeeklyPushSectionTitle {
+  margin: 12px 0 18px;
+  font-size: 35px;
+  line-height: 1.25;
+  font-weight: 300;
+  color: #1f2328;
+}
+
+.homePersonalizedHistoryTitle {
+  margin: 8px 0 12px;
+  font-size: 35px;
+  line-height: 1.25;
+  font-weight: 300;
+  color: #1f2328;
+}
+
+.homePersonalizedPanel {
+  margin-top: 12px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 30px;
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 42%);
+  display: flex;
+  flex-direction: column;
+  gap: 40px;
+}
+
+.homeWeeklyPanel {
+  margin-top: 12px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 30px;
+  background-color: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 45px;
+}
+
+.homeWeeklyPanelHeader {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.homeWeeklyPanelDateRange {
+  font-size: 25px;
+  line-height: 1.1;
+  font-weight: 300;
+  color: #1f2328;
+}
+
+.homeWeeklyPanelEmpty {
+  color: #666;
+}
+
+.homeWeeklyPanelHistorySection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.homePublicHistoryTitle {
+  margin: 8px 0 12px;
+  font-size: 35px;
+  line-height: 1.25;
+  font-weight: 300;
+  color: #1f2328;
+}
+
+.homeWeeklyHistoryList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.homePublicHistoryButton {
+  text-align: left;
+  padding: 10px;
+  border-radius: 6px;
+  border: 1px solid #ccc;
+  background-color: #fff;
+  color: var(--ink-strong);
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.homePublicHistoryButton:hover:not(:disabled),
+.homePublicHistoryButton:focus-visible {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-soft);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.homePublicHistoryButtonActive {
+  border-color: #0d6efd;
+  background-color: #e7f1ff;
+}
+
+.homePublicHistoryButtonActive:hover:not(:disabled),
+.homePublicHistoryButtonActive:focus-visible {
+  border-color: #0d6efd;
+  background-color: #e7f1ff;
+}
+
+.homeWeeklyHistoryButtonTitle {
+  font-weight: 600;
+}
+
+.homeWeeklyHistoryButtonMeta {
+  font-size: 13px;
+  color: #666;
+}
+
+.homePersonalizedPanelHeader {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1px;
+}
+
+.homePersonalizedPanelHeaderMain {
+  min-width: 0;
+}
+
+.homePersonalizedPanelHeaderActions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: space-between;
+  align-self: stretch;
+  gap: 10px;
+}
+
+.homePersonalizedDateRange {
+  font-size: 25px;
+  line-height: 1.1;
+  font-weight: 300;
+  color: #1f2328;
+}
+
+.homePersonalizedButton {
+  background: linear-gradient(135deg, #0d6efd 0%, #3b82f6 100%);
+  color: #fff;
+  border-color: #0d6efd;
+}
+
+.homePersonalizedButton:hover:not(:disabled) {
+  border-color: #0b5ed7;
+}
+
+.homePersonalizedPlaceholder,
+.homePersonalizedStatusCard,
+.homePersonalizedErrorCard {
+  border-radius: 8px;
+  padding: 12px;
+  line-height: 1.6;
+  background: #f6f8fa;
+  color: #59636e;
+}
+
+.homePersonalizedStatusCard {
+  background: #eef6ff;
+  color: #0b5394;
+}
+
+.homePersonalizedErrorCard {
+  background: #fff3f3;
+  color: #b42318;
+}
+
+.homePersonalizedStats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 8px;
+}
+
+.homePersonalizedStatItem {
+  border: 1px solid #d9e6f7;
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.92);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.homePersonalizedStatItem span {
+  font-size: 12px;
+  color: #59636e;
+}
+
+.homePersonalizedStatItem strong {
+  font-size: 18px;
+  color: #1f2328;
+}
+
+.homePersonalizedSummaryStack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.homeWeeklySummaryStack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.homeWeeklySummaryBlock {
+  border-radius: 8px;
+  padding: 12px;
+  background: #ffffff;
+  border: 1px solid transparent;
+}
+
+.homeWeeklySummaryBlockAccent {
+  background: #ffffff;
+  border-color: transparent;
+}
+
+.homeWeeklySummaryLabel {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #59636e;
+  margin-bottom: 6px;
+}
+
+.homeWeeklySummaryText {
+  white-space: normal;
+  line-height: 1.6;
+}
+
+.homeWeeklySummaryText .latexTextInline {
+  display: inline-block;
+  vertical-align: baseline;
+}
+
+.homeWeeklySummaryText .latexTextDisplay {
+  display: block;
+  margin: 12px 0;
+}
+
+.homePersonalizedSummaryBlock {
+  border-radius: 8px;
+  padding: 12px;
+  background: #f6f8fa;
+}
+
+.homePersonalizedSummaryBlockAccent {
+  background: linear-gradient(135deg, rgba(13, 110, 253, 0.1) 0%, rgba(15, 92, 77, 0.1) 100%);
+}
+
+.homePersonalizedSummaryLabel {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #59636e;
+  margin-bottom: 6px;
+}
+
+.homePersonalizedLatexText {
+  white-space: normal;
+  line-height: 1.6;
+}
+
+.homePersonalizedLatexText .latexTextInline {
+  display: inline-block;
+  vertical-align: baseline;
+}
+
+.homePersonalizedLatexText .latexTextDisplay {
+  display: block;
+  margin: 12px 0;
+  text-align: center;
+}
+
+.homeSubjectCarouselShell {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.homeSubjectCarouselControls {
+  display: flex;
+  order: 2;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.homeSubjectCarouselViewport {
+  order: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  scrollbar-color: transparent transparent;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 2px 0;
+  background: transparent;
+}
+
+.homeSubjectCarouselViewport::-webkit-scrollbar {
+  height: 0;
+}
+
+.homeSubjectCarouselViewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.homeSubjectCarouselViewport::-webkit-scrollbar-thumb {
+  background: transparent;
+  border: none;
+}
+
+.homeSubjectCarouselTrack {
+  display: flex;
+  gap: 12px;
+}
+
+.homeSubjectCarouselCard {
+  flex: 0 0 min(calc((100% - 24px) / 3), 440px);
+  min-width: 0;
+  max-width: 440px;
+  scroll-snap-align: start;
+  border: 1px solid #d9e6f7;
+  border-radius: 28px;
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 56%);
+  padding: 32px 28px 28px;
+  height: clamp(320px, 28vw, 440px);
+  max-height: 440px;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: none;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.homeSubjectCarouselCard:hover,
+.homeSubjectCarouselCard:focus-visible {
+  border-color: #a9c6f6;
+  background: linear-gradient(180deg, #f4f8ff 0%, #ffffff 62%);
+  outline: none;
+}
+
+.homeSubjectCarouselCardContent {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.homeSubjectCarouselHeader {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.homeSubjectCarouselCode {
+  margin: 0;
+  color: #1f2328;
+  font-size: clamp(28px, 4.2vw, 40px);
+  font-weight: 700;
+  line-height: 1.02;
+  letter-spacing: -0.03em;
+}
+
+.homeSubjectCarouselDisplayName {
+  color: #48525d;
+  font-size: clamp(16px, 2.2vw, 20px);
+  font-weight: 500;
+  line-height: 1.18;
+  text-align: left;
+}
+
+.homeSubjectCarouselCount {
+  color: #59636e;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.homeSubjectModalOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 28px 20px;
+  background: rgba(31, 35, 40, 0.32);
+  backdrop-filter: blur(14px);
+}
+
+.homeSubjectModalDialog {
+  position: relative;
+  width: min(980px, 100%);
+  max-height: calc(100vh - 56px);
+  border-radius: 32px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 32px 80px rgba(15, 23, 42, 0.24);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.homeSubjectModalCloseButton {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 2;
+  width: 42px;
+  height: 42px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(31, 35, 40, 0.92);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+
+.homeSubjectModalCloseIcon {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+.homeSubjectModalCloseIcon::before,
+.homeSubjectModalCloseIcon::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 18px;
+  height: 2.5px;
+  border-radius: 999px;
+  background: currentColor;
+  transform-origin: center;
+}
+
+.homeSubjectModalCloseIcon::before {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.homeSubjectModalCloseIcon::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+.homeSubjectModalCloseButton:hover,
+.homeSubjectModalCloseButton:focus-visible {
+  transform: scale(1.05);
+  opacity: 0.92;
+  outline: none;
+}
+
+.homeSubjectModalHeader {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 48px 64px 24px;
+}
+
+.homeSubjectModalEyebrow {
+  color: #59636e;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.homeSubjectModalTitle {
+  margin: 0;
+  color: #1f2328;
+  font-size: clamp(30px, 5.4vw, 54px);
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+}
+
+.homeSubjectModalTitle .latexTextInline {
+  display: inline-block;
+  vertical-align: baseline;
+}
+
+.homeSubjectModalCode {
+  color: #1f2328;
+  font-size: clamp(34px, 5.8vw, 60px);
+  font-weight: 700;
+  line-height: 1.02;
+  letter-spacing: -0.03em;
+}
+
+.homeSubjectModalDisplayName {
+  color: #48525d;
+  font-size: clamp(20px, 3.1vw, 30px);
+  font-weight: 500;
+  line-height: 1.18;
+  text-align: left;
+}
+
+.homeSubjectModalDisplayNameHeading {
+  margin: 0;
+}
+
+.homeSubjectModalCount {
+  color: #59636e;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.homeSubjectModalBody {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 0 64px 56px;
+  overflow-y: auto;
+}
+
+.homeSubjectModalPaperCard {
+  border-radius: 24px;
+  background: #f6f8fb;
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.homeSubjectPaperTitle {
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.homeSubjectPaperMeta {
+  margin-top: 4px;
+  color: #59636e;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.homeSubjectModalPaperCard p {
+  margin: 6px 0 0;
+  color: #3f4650;
+  line-height: 1.55;
+}
+
+.loginAuthPage {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 16px;
+  padding: 96px 20px 56px;
+}
+
+.loginAuthBrand {
+  border: none;
+  background: transparent;
+  padding: 0;
+  display: flex;
+  justify-content: center;
+  box-shadow: none;
+  transform: none;
+  cursor: pointer;
+}
+
+.loginAuthBrand:hover {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
+.loginAuthBrandLogo {
+  height: 48px;
+  width: auto;
+}
+
+.loginAuthTitle {
+  margin: 0;
+  color: #1f2328;
+  font-size: 24px;
+  font-weight: 300;
+  letter-spacing: -0.01em;
+  text-align: center;
+}
+
+.loginAuthForm {
+  width: min(100%, 340px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.loginAuthField {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.loginAuthLabel {
+  color: #1f2328;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.loginAuthPasswordRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.loginAuthField input {
+  border-radius: 8px;
+  border: 1px solid #d0d7de;
+  padding: 9px 12px;
+  background: #ffffff;
+  box-shadow: inset 0 1px 0 rgba(208, 215, 222, 0.2);
+}
+
+.loginAuthField input:focus-visible {
+  outline: 3px solid rgba(9, 105, 218, 0.2);
+  outline-offset: 0;
+  border-color: #0969da;
+}
+
+.loginAuthSubmit {
+  width: 100%;
+  border: 1px solid rgba(31, 35, 40, 0.15);
+  border-radius: 8px;
+  background: #1f883d;
+  color: #ffffff;
+  font-weight: 600;
+  padding: 10px 14px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.loginAuthSubmit:hover:not(:disabled) {
+  background: #1a7f37;
+  border-color: rgba(31, 35, 40, 0.15);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  transform: none;
+}
+
+.loginAuthError {
+  width: 100%;
+  margin: 0;
+  color: #cf222e;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.loginAuthSignup {
+  margin: 0;
+  color: #59636e;
+  font-size: 14px;
+  text-align: center;
+}
+
+.loginAuthInlineLink {
+  border: none;
+  background: transparent;
+  color: #0969da;
+  padding: 0;
+  font-weight: 400;
+  box-shadow: none;
+  transform: none;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.loginAuthInlineLink:hover:not(:disabled) {
+  color: #0969da;
+  text-decoration: underline;
+  border-color: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
+.registerAuthPage {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(420px, 1.08fr) minmax(540px, 1fr);
+  background: #ffffff;
+}
+
+.registerAuthMarketing {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  overflow: hidden;
+  background: #000000;
+  color: #ffffff;
+}
+
+.registerAuthMarketingContent {
+  position: relative;
+  z-index: 2;
+  width: fit-content;
+  max-width: none;
+  margin: 0 auto;
+  padding: 92px 40px 24px;
+}
+
+.registerAuthMarketingTitle {
+  margin: 0;
+  max-width: none;
+  white-space: nowrap;
+  font-size: 38px;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-weight: 700;
+}
+
+.registerAuthMarketingCopy {
+  margin: 14px 0 0;
+  max-width: none;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.84);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.registerAuthDetails {
+  margin-top: 12px;
+}
+
+.registerAuthDetailsOpen,
+.registerAuthDetailsClosing {
+  overflow: hidden;
+}
+
+.registerAuthMarketingToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  color: #ffffff;
+  padding: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.5;
+  box-shadow: none;
+  transform: none;
+  outline-offset: 4px;
+  text-align: left;
+  list-style: none;
+  appearance: none;
+  cursor: pointer;
+}
+
+.registerAuthMarketingToggle::-webkit-details-marker {
+  display: none;
+}
+
+.registerAuthMarketingToggle::marker {
+  display: none;
+  content: "";
+}
+
+.registerAuthMarketingToggle:hover {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
+.registerAuthChevron {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  transform: rotate(0deg);
+  transition: transform 0.25s ease;
+  transform-origin: center;
+}
+
+.registerAuthChevron svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+.registerAuthChevronOpen {
+  transform: rotate(180deg);
+}
+
+.registerAuthDetailsContent {
+  padding-top: 12px;
+  overflow: hidden;
+}
+
+.registerAuthDetailsOpen .registerAuthDetailsContent {
+  animation: registerAuthDetailsOpen 0.7s ease-out;
+}
+
+.registerAuthDetailsClosing .registerAuthDetailsContent {
+  animation: registerAuthDetailsClose 0.5s ease-out;
+}
+
+.registerAuthFeatureList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 400px;
+}
+
+.registerAuthFeatureItem {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.registerAuthFeatureCheck {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+
+.registerAuthFeatureCheck svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+.registerAuthFeatureTitle {
+  margin: 0;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 21px;
+  margin-bottom: 4px;
+}
+
+.registerAuthFeatureDescription {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 21px;
+}
+
+@keyframes registerAuthDetailsOpen {
+  0% {
+    opacity: 0;
+    max-height: 0;
+  }
+
+  100% {
+    opacity: 1;
+    max-height: 1000px;
+  }
+}
+
+@keyframes registerAuthDetailsClose {
+  0% {
+    opacity: 1;
+    max-height: 1000px;
+  }
+
+  100% {
+    opacity: 0;
+    max-height: 0;
+  }
+}
+
+.registerAuthVisual {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  flex: 1;
+  min-height: clamp(420px, 52vh, 680px);
+  margin: auto 0 0;
+  overflow: hidden;
+  pointer-events: none;
+  display: flex;
+  align-items: flex-end;
+  justify-content: stretch;
+}
+
+.registerAuthVisualImage {
+  display: block;
+  width: 100%;
+  max-width: none;
+  height: auto;
+  object-fit: cover;
+  object-position: center bottom;
+}
+
+.registerAuthPanel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: #ffffff;
+}
+
+.registerAuthTopLink {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 28px 0;
+  color: #59636e;
+  font-size: 14px;
+}
+
+.registerAuthTopLinkAnchor {
+  color: #1f2328;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.registerAuthFormWrap {
+  width: min(100%, 420px);
+  margin: 54px auto 64px;
+  display: flex;
+  flex-direction: column;
+}
+
+.registerAuthFormTitle {
+  margin: 0 0 28px;
+  color: #1f2328;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  font-size: 38px;
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.03em;
+}
+
+.registerAuthFormLead {
+  display: block;
+  margin: 0;
+  color: #1f2328;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 30px;
+  letter-spacing: 0;
+}
+
+.registerAuthFormLogoRow {
+  display: inline-flex;
+  align-items: center;
+  min-height: 42px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+  transform: none;
+  cursor: pointer;
+}
+
+.registerAuthFormLogoRow:hover {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
+.registerAuthFormLogo {
+  display: block;
+  width: auto;
+  height: 38px;
+  max-width: 100%;
+}
+
+.registerAuthField {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.registerAuthLabel {
+  color: #1f2328;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.registerAuthField input {
+  border-radius: 8px;
+  border: 1px solid #d0d7de;
+  padding: 10px 12px;
+  background: #ffffff;
+  box-shadow: inset 0 1px 0 rgba(208, 215, 222, 0.2);
+}
+
+.registerAuthEmailRow {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.registerAuthEmailRow input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.registerAuthSendCodeButton {
+  flex: 0 0 auto;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  background: #f6f8fa;
+  color: #1f2328;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0 14px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.registerAuthSendCodeButton:hover:not(:disabled) {
+  background: #eaeef2;
+  border-color: #afb8c1;
+}
+
+.registerAuthSendCodeButton:disabled {
+  color: #8c959f;
+  background: #f6f8fa;
+  cursor: not-allowed;
+}
+
+.registerAuthField input:focus-visible {
+  outline: 3px solid rgba(9, 105, 218, 0.2);
+  outline-offset: 0;
+  border-color: #0969da;
+}
+
+.registerAuthHelper {
+  margin: 8px 0 0;
+  color: #656d76;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.registerAuthError {
+  margin: 8px 0 0;
+  color: #cf222e;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.registerAuthSubmit {
+  width: 100%;
+  margin-top: 18px;
+  border: 1px solid #1f2328;
+  border-radius: 8px;
+  background: #1f2328;
+  color: #ffffff;
+  font-weight: 600;
+  padding: 12px 16px;
+  box-shadow: none;
+}
+
+.registerAuthSubmit:hover:not(:disabled) {
+  background: #11161b;
+  border-color: #11161b;
+  box-shadow: none;
+  transform: none;
+}
+
+@media (max-width: 920px) {
+  .topNavInner {
+    min-height: 64px;
+  }
+
+  .topNavLinks,
+  .topNavDesktopAuth,
+  .topNavAvatarName {
+    display: none;
+  }
+
+  .topNavSearchShell {
+    width: min(220px, 44vw);
+  }
+
+  .topNavMobileToggle,
+  .topNavMobilePanel {
+    display: flex;
+  }
+
+  .topNavMobilePanel {
+    width: min(100% - 24px, 420px);
+    margin: 0 auto 14px;
+    padding: 12px;
+    flex-direction: column;
+    gap: 10px;
+    border: 1px solid #d0d7de;
+    border-radius: 18px;
+    background: #ffffff;
+    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
+  }
+
+  .topNavMobileLinks,
+  .topNavMobileAuth,
+  .topNavMobileAccount {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .topNavMobileLink {
+    width: 100%;
+    text-align: left;
+    min-height: 32px;
+    padding: 0 14px;
+    border-radius: 12px;
+    color: var(--nav-ink);
+    background: #f6f8fa;
+  }
+
+  .topNavMobileLinkActive,
+  .topNavMobileLink:hover {
+    background: #eaeef2;
+  }
+
+  .topNavMobileLinkPrimary {
+    background: #ffffff;
+    border: 1px solid #d0d7de;
+  }
+
+  .topNavMobileLinkDanger {
+    color: #cf222e;
+  }
+
+  .topNavMobileAccountLabel {
+    color: var(--nav-muted);
+    padding: 4px 2px 0;
+  }
+
+  .registerAuthPage {
+    display: block;
+    background: #ffffff;
+  }
+
+  .registerAuthMarketing {
+    display: none;
+  }
+
+  .registerAuthPanel {
+    min-height: 100vh;
+  }
+
+  .registerAuthTopLink {
+    justify-content: center;
+    padding: 20px 20px 0;
+  }
+
+  .registerAuthFormWrap {
+    width: min(100%, 420px);
+    padding: 0 20px;
+    margin-top: 44px;
+  }
+}
+
+.paginationJumpInput {
+  width: 60px;
+}
+
+.paginationJumpInput::-webkit-outer-spin-button,
+.paginationJumpInput::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.paginationJumpInput[type="number"] {
+  -moz-appearance: textfield;
+}
+
+@media (max-width: 720px) {
+  .appMain {
+    width: calc(100% - 24px);
+    padding-top: 96px;
+  }
+
+  .appMainAuth {
+    width: 100%;
+    padding-top: 0;
+  }
+
+  .topNavInner {
+    width: calc(100% - 24px);
+    gap: 12px;
+  }
+
+  .topNavBrandLogoFrame {
+    width: 188px;
+    height: 28px;
+  }
+
+  .topNavSearchShell {
+    width: min(180px, 42vw);
+  }
+
+  .loginAuthPage {
+    justify-content: flex-start;
+    padding-top: 72px;
+  }
+
+  .loginAuthTitle {
+    font-size: 22px;
+  }
+
+  .registerAuthFormTitle {
+    font-size: 30px;
+  }
+
+  .homePageLayout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .homePersonalizedStats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .homePersonalizedPanelHeader {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .homePersonalizedPanelHeaderActions {
+    align-self: auto;
+  }
+
+  .homeWeeklyPanelHeader {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .homeWeeklyPaperCarouselCard {
+    flex-basis: 100%;
+  }
+
+  .homeSubjectCarouselCard {
+    flex-basis: 100%;
+    padding: 24px 20px 20px;
+    border-radius: 24px;
+  }
+
+  .homeSubjectModalOverlay {
+    padding: 16px 12px;
+  }
+
+  .homeSubjectModalDialog {
+    max-height: calc(100vh - 32px);
+    border-radius: 24px;
+  }
+
+  .homeSubjectModalHeader {
+    padding: 32px 20px 18px;
+  }
+
+  .homeSubjectModalBody {
+    padding: 0 20px 28px;
+  }
+
+  .homeSubjectModalPaperCard {
+    border-radius: 18px;
+    padding: 18px;
+  }
+}
+
+@media (min-width: 900px) {
+  .homePersonalizedPanelHeader {
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: space-between;
+  }
+}

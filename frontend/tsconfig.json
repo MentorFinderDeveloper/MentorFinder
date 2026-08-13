@@ -1,0 +1,25 @@
+{
+  // Base TypeScript configuration for the Next.js frontend.
+  "compilerOptions": {
+    // Target browser-compatible output while letting Next.js handle the final build transform.
+    "target": "es5",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    // Preserve JSX so the Next.js compiler can transform it.
+    "jsx": "preserve",
+    // Reuse incremental metadata between local runs to speed up type checking.
+    "incremental": true
+  },
+  // Include framework-generated typings plus every TS/TSX source file in the project.
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx"],
+  "exclude": ["node_modules"]
+}
