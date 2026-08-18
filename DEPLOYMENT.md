@@ -8,129 +8,100 @@
 - 公网入口：`https://lab.cs.tsinghua.edu.cn`
 - 公网项目路径：`/se-projects/mentorfinder`
 
-### 项目标识
+### 开发者按规则填写并提交
 
 - 项目名称：MentorFinder
 - `PROJECT_ID`：`mentorfinder`
 - 容器运行 `UID:GID`：`10001:10001`
-- 代码仓库：`https://github.com/MentorFinderDeveloper/MentorFinder.git`
 
 ## 2. 镜像与入口
 
-- 本地固定版本镜像：`mentorfinder:2026.08.17`
-- 构建文件：仓库根目录 `Dockerfile`
-- 支持 CPU 架构：基础镜像支持的 `linux/amd64`、`linux/arm64`
+- 完整固定版本镜像：`mentorfinder:2026.08.17`（服务器本地构建）
+- 支持 CPU 架构：`linux/amd64`（目标服务器架构；其他架构尚未验证）
 - 容器内部 HTTP 端口：`8080`
 - 应用启动命令：`/app/deploy/start.sh`
 - 健康路径：`/health`
 - 镜像内健康检查工具：`wget`
 
-如果后续由镜像仓库发布，请把 `.env` 中的 `APP_IMAGE` 改为仓库内存在的完整固定标签；禁止使用 `latest`。
+## 3. 环境变量与敏感配置
 
-## 3. 运行结构和公开路径
-
-容器内由 Nginx 监听 `8080`，并转发到：
-
-- Next.js：`127.0.0.1:3000`；
-- Django/Gunicorn：`127.0.0.1:8000`；
-- `/api/...`：去掉 `/api` 后转给 Django；
-- `/media/...`：转给 Django；
-- `/static/...`：由 Nginx 从 `/app/static` 提供；
-- `/admin/...`：转给 Django Admin；
-- `/health`：转给 Django 的无需认证健康接口。
-
-外层网关剥离 `/se-projects/mentorfinder` 后转发。Next.js 构建时使用同一路径作为 `basePath` 和 `assetPrefix`，内部 Nginx 在前端这一跳补回该路径。修改 `PUBLIC_SITE_PATH` 时必须同步修改 `deploy/nginx.conf`，然后重新构建镜像。
-
-## 4. 环境变量与敏感配置
-
-服务器执行 `cp .env.project.example .env` 后填写敏感项，并执行 `chmod 600 .env`。
+敏感值只保存在服务器项目目录的 `.env` 中，不填写到本文件，也不提交到 Git。
 
 | 变量 | 必填 | 敏感 | 说明 |
 |---|---|---|---|
-| `JWT_SIGNING_KEY` | 是 | 是 | 至少 32 字符，不能使用已知开发值 |
-| `DJANGO_SECRET_KEY` | 是 | 是 | Django 生产签名密钥 |
-| `DJANGO_SUPERUSER_USERNAME` | 否 | 否 | 与下面两项同时填写时创建管理员 |
+| `APP_ENTRY_ALIAS` | 是 | 否 | 固定为 `mentorfinder-entry` |
+| `PUBLIC_ORIGIN` | 是 | 否 | 固定为 `https://lab.cs.tsinghua.edu.cn` |
+| `PUBLIC_SITE_PATH` | 是 | 否 | 固定为 `/se-projects/mentorfinder` |
+| `PROJECT_NAME` | 是 | 否 | 固定为 `MentorFinder` |
+| `PROJECT_ID` | 是 | 否 | 固定为 `mentorfinder` |
+| `APP_UID_GID` | 是 | 否 | 固定为 `10001:10001` |
+| `APP_IMAGE` | 是 | 否 | 固定版本镜像名，禁止使用 `latest` |
+| `APP_PORT` | 是 | 否 | 固定为 `8080` |
+| `APP_HEALTH_PATH` | 是 | 否 | 固定为 `/health` |
+| `DJANGO_SECRET_KEY` | 是 | 是 | 在服务器 `.env` 中注入 |
+| `JWT_SIGNING_KEY` | 是 | 是 | 在服务器 `.env` 中注入，至少 32 字符 |
+| `DJANGO_SUPERUSER_USERNAME` | 否 | 否 | 与邮箱、密码同时填写时创建初始管理员 |
 | `DJANGO_SUPERUSER_EMAIL` | 否 | 否 | 初始管理员邮箱 |
-| `DJANGO_SUPERUSER_PASSWORD` | 否 | 是 | 初始管理员密码 |
+| `DJANGO_SUPERUSER_PASSWORD` | 否 | 是 | 在服务器 `.env` 中注入 |
+| `EMAIL_HOST` | 否 | 否 | SMTP 主机，默认 `smtp.163.com` |
+| `EMAIL_PORT` | 否 | 否 | SMTP 端口，默认 `465` |
+| `EMAIL_USE_SSL` | 否 | 否 | 默认 `true` |
+| `EMAIL_USE_TLS` | 否 | 否 | 默认 `false` |
 | `EMAIL_HOST_USER` | 否 | 否 | SMTP 账号；留空时使用 console backend |
-| `EMAIL_HOST_PASSWORD` | 否 | 是 | SMTP 密码或授权码 |
-| `THUCS_API_BASE_URL` | 否 | 否 | 周报总结服务地址 |
-| `THUCS_API_KEY` | 否 | 是 | 周报总结服务密钥 |
+| `EMAIL_HOST_PASSWORD` | 否 | 是 | 在服务器 `.env` 中注入 |
+| `DEFAULT_FROM_EMAIL` | 否 | 否 | 邮件发件人显示值 |
+| `THUCS_API_BASE_URL` | 否 | 否 | AI 周报服务地址 |
+| `THUCS_API_KEY` | 否 | 是 | 在服务器 `.env` 中注入 |
+| `THUCS_MODEL_NAME` | 否 | 否 | 默认 `deepseek-v4-flash` |
+| `APP_CPU_LIMIT` | 否 | 否 | 默认 `1.0` |
+| `APP_MEMORY_LIMIT` | 否 | 否 | 默认 `1g` |
+| `APP_PIDS_LIMIT` | 否 | 否 | 默认 `256` |
 
-敏感值只保存在服务器 `.env` 或受控 secrets 中，不写入仓库和镜像。
+## 4. 持久化与备份
 
-## 5. 持久化与备份
+- 是否需要持久化：是
+- 宿主机相对目录或命名卷：`./data`
+- 容器内路径：`/app/data`
+- 数据类型：SQLite 数据库 `/app/data/db.sqlite3`、上传头像 `/app/data/media`
+- 备份命令或方法：停止入口容器后备份绑定目录，例如 `sudo tar -czf mentorfinder-data.tar.gz data`
+- 恢复命令或方法：停止入口容器，恢复备份到 `./data`，执行 `sudo chown -R 10001:10001 data` 后重新启动
 
-- 是否需要持久化：是；
-- 宿主机目录：`./data`；
-- 容器内目录：`/app/data`；
-- SQLite：`/app/data/db.sqlite3`；
-- 上传头像：`/app/data/media`。
+不要删除 `data`，也不要执行 `docker compose down -v`。
 
-首次部署：
+## 5. 初始化和迁移
+
+- 首次启动前操作：从 `.env.project.example` 创建服务器 `.env`，填写两个必填密钥并执行 `chmod 600 .env`；创建 `data` 并设置为 `10001:10001`；确认共享网络 `web_gateway` 已存在
+- 数据库初始化/迁移命令：容器启动脚本自动执行 `python manage.py migrate --noinput`；同时收集 Django 静态文件，并在三个管理员变量均已填写时创建初始管理员
+- 初始化失败的处理方式：执行 `docker compose --env-file .env logs --tail=200` 查看错误；修正 `.env`、目录权限或迁移问题后重新执行 `docker compose --env-file .env up -d`，不要删除现有数据
+
+## 6. 更新
+
+- 获取新镜像或构建命令：`git pull --ff-only origin main && sudo docker compose --env-file .env build --pull`
+- Compose 更新命令：`sudo docker compose --env-file .env up -d`
+- 是否需要停机迁移：通常不需要预先停机；容器替换和数据库迁移期间会有短暂不可用
+- 预计停机时间：不含镜像构建时间通常小于 1 分钟；大型迁移需另行评估
+
+更新后执行：
 
 ```bash
-sudo mkdir -p data
-sudo chown 10001:10001 data
-```
-
-备份（在项目目录执行）：
-
-```bash
-sudo tar -czf "mentorfinder-data-$(date +%Y%m%d-%H%M%S).tar.gz" data
-```
-
-恢复时先停止入口服务，把现有 `data` 另行备份，再将备份内容恢复到 `./data` 并重新设置 `10001:10001` 所有权。不要执行 `docker compose down -v` 或删除 `data`。
-
-## 6. 初始化与首次部署
-
-```bash
-cd <服务器分配的部署父目录>
-git clone https://github.com/MentorFinderDeveloper/MentorFinder.git mentorfinder
-cd mentorfinder
-cp .env.project.example .env
-sudo vi .env
-sudo chmod 600 .env
-sudo mkdir -p data
-sudo chown 10001:10001 data
-sudo docker network inspect web_gateway
-sudo docker compose --env-file .env config --quiet
-sudo docker compose --env-file .env build --pull
-sudo docker compose --env-file .env up -d
 sudo docker compose --env-file .env ps
 sudo docker compose --env-file .env logs --tail=100
+sudo docker compose --env-file .env exec -T web \
+  wget -qO- http://127.0.0.1:8080/health
 ```
 
-启动脚本会校验 JWT 密钥、应用已提交的数据库迁移、收集 Django 静态文件，并在三个初始管理员变量均已填写时尝试创建管理员。启动过程不会立即抓取外部数据。
+## 7. 回滚
 
-## 7. 更新
+- 上一可用镜像版本：部署前记录的上一固定镜像标签或镜像 ID；首次部署时无
+- 镜像回滚步骤：检出上一已验证 Git 提交，使用原固定镜像标签重新构建，执行 `sudo docker compose --env-file .env up -d`
+- 数据回滚步骤：停止入口容器，将对应时间点的备份恢复到 `./data`，重新设置 `10001:10001` 权限后启动
+- 无法自动回滚的变更：不可逆 Django 数据迁移，以及部署后新增或修改的 SQLite 数据
 
-```bash
-cd <服务器分配的 MentorFinder 部署目录>
-git pull --ff-only
-sudo docker compose --env-file .env config --quiet
-sudo docker compose --env-file .env build --pull
-sudo docker compose --env-file .env up -d
-sudo docker compose --env-file .env ps
-sudo docker compose --env-file .env logs --tail=100
-```
+## 8. 资源与特殊运行要求
 
-数据库迁移由新容器启动时自动执行。涉及不可逆迁移时，更新前必须先备份 `./data`。
-
-## 8. 回滚
-
-1. 更新前记录当前 Git 提交和镜像 ID，并备份 `./data`。
-2. 检出上一已验证提交，或把 `.env` 中 `APP_IMAGE` 改为上一固定版本镜像。
-3. 执行 `sudo docker compose --env-file .env up -d --build`。
-4. 只有在数据库迁移与旧代码不兼容时，才停止服务并从对应时间点的数据备份恢复 `./data`。
-
-数据回滚会覆盖部署后的新增数据，必须由项目负责人确认后执行。
-
-## 9. 资源与特殊要求
-
-- 默认 CPU 限制：`1.0`；
-- 默认内存限制：`1 GiB`；
-- 默认进程数限制：`256`；
-- 外部服务：SMTP、arXiv/学术数据源、可选 THUCS AI API；
-- 特殊权限：宿主机 `./data` 必须可由 `10001:10001` 写入；
-- 共享网络：只使用管理员预建的 `web_gateway`，不发布宿主机端口。
+- CPU 建议：`1.0 CPU`
+- 内存建议：`1 GiB`
+- 磁盘增长预估：尚未实测；主要由 SQLite 论文数据和上传头像增长，应持续监控 `./data`
+- 外部数据库或第三方服务：无外部数据库；使用 SQLite；按功能访问 SMTP、arXiv/学术数据源和可选 THUCS AI API
+- 特殊目录权限：宿主机 `./data` 必须允许 `10001:10001` 读写
+- 其他运行要求：服务器需安装 Docker Compose；使用管理员预建的 `web_gateway`；不发布宿主机端口；时区为 `Asia/Shanghai`
