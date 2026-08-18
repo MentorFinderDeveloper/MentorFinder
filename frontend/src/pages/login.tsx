@@ -6,6 +6,7 @@ import { setName, setRole, setToken, setUserId } from "../redux/auth";
 import { useDispatch } from "react-redux";
 import { buildRedirectHref, resolveRedirectTarget } from "../utils/authRedirect";
 import { describeRequestError } from "../utils/errorMessage";
+import { withPublicSitePath } from "../utils/publicPath";
 
 // Some backend endpoints return empty bodies or non-JSON text, so the login page parses them defensively.
 const parseJsonSafely = async (response: Response) => {
@@ -80,7 +81,7 @@ const LoginScreen = () => {
         setLoginErrorMessage("");
         setSubmitting(true);
         // Login is handled directly here because the form needs to hydrate Redux auth state from the response.
-        fetch("/api/login", {
+        fetch(withPublicSitePath("/api/login"), {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
@@ -119,7 +120,7 @@ const LoginScreen = () => {
                 onClick={() => void router.push("/")}
             >
                 <img
-                    src="/mentorfinder-logo-1.svg"
+                    src={withPublicSitePath("/mentorfinder-logo-1.svg")}
                     alt=""
                     className="loginAuthBrandLogo"
                 />
@@ -144,7 +145,7 @@ const LoginScreen = () => {
                     <div className="loginAuthPasswordRow">
                         <span className="loginAuthLabel">Password</span>
                         <a
-                            href="/reset-password"
+                            href={withPublicSitePath("/reset-password")}
                             className="loginAuthInlineLink"
                             onClick={(event) => {
                                 event.preventDefault();
@@ -183,7 +184,7 @@ const LoginScreen = () => {
             <p className="loginAuthSignup">
                 New to MentorFinder?{" "}
                 <a
-                    href={buildRedirectHref("/register", router.query.redirect)}
+                    href={withPublicSitePath(buildRedirectHref("/register", router.query.redirect))}
                     className="loginAuthInlineLink"
                     onClick={(event) => {
                         event.preventDefault();

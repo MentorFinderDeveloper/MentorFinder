@@ -47,13 +47,29 @@ SECRET_KEY = os.environ.get(
 
 # SECURITY WARNING: don't run with debug turned on in production!
 # TODO Start: [Student] Disable debug mode in production
-DEBUG = False
+DEBUG = os.environ.get('DJANGO_DEBUG', 'false').lower() in ('1', 'true', 'yes')
 # TODO End: [Student] Disable debug mode in production
 
 
 ALLOWED_HOSTS = [
-    '*'  # Insecure
+    host.strip()
+    for host in os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+    if host.strip()
 ]
+
+PUBLIC_ORIGIN = os.environ.get('PUBLIC_ORIGIN', '').rstrip('/')
+PUBLIC_SITE_PATH = os.environ.get('PUBLIC_SITE_PATH', '').strip().rstrip('/')
+if PUBLIC_SITE_PATH and not PUBLIC_SITE_PATH.startswith('/'):
+    PUBLIC_SITE_PATH = '/' + PUBLIC_SITE_PATH
+
+FORCE_SCRIPT_NAME = PUBLIC_SITE_PATH or None
+USE_X_FORWARDED_HOST = True
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+CSRF_TRUSTED_ORIGINS = [PUBLIC_ORIGIN] if PUBLIC_ORIGIN else []
+SESSION_COOKIE_PATH = PUBLIC_SITE_PATH or '/'
+CSRF_COOKIE_PATH = PUBLIC_SITE_PATH or '/'
+SESSION_COOKIE_SECURE = PUBLIC_ORIGIN.startswith('https://')
+CSRF_COOKIE_SECURE = PUBLIC_ORIGIN.startswith('https://')
 
 
 # Application definition
@@ -108,7 +124,7 @@ WSGI_APPLICATION = 'MFBackend.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'data' / 'db.sqlite3',
+        'NAME': Path(os.environ.get('SQLITE_PATH', BASE_DIR / 'data' / 'db.sqlite3')),
     }  # Change to MySQL or other databases for your FINAL project
 }
 
@@ -147,10 +163,11 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/4.1/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = f'{PUBLIC_SITE_PATH}/static/' if PUBLIC_SITE_PATH else '/static/'
+STATIC_ROOT = Path(os.environ.get('STATIC_ROOT', BASE_DIR / 'staticfiles'))
 
-MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+MEDIA_URL = f'{PUBLIC_SITE_PATH}/media/' if PUBLIC_SITE_PATH else '/media/'
+MEDIA_ROOT = Path(os.environ.get('MEDIA_ROOT', BASE_DIR / 'media'))
 
 
 # Email

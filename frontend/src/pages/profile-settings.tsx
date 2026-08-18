@@ -8,6 +8,7 @@ import { INPUT_LIMITS } from "../constants/inputLimits";
 import { describeRequestError } from "../utils/errorMessage";
 import { NetworkError, NetworkErrorType, request } from "../utils/network";
 import { MentorVerificationRequestResult } from "../utils/types";
+import { withPublicSitePath } from "../utils/publicPath";
 
 interface ProfileSettings {
     avatarUrl: string;
@@ -127,7 +128,7 @@ const ProfileSettingsPage = () => {
         setUsernameMessage(undefined);
 
         try {
-            const response = await fetch("/api/profile/username", {
+            const response = await fetch(withPublicSitePath("/api/profile/username"), {
                 method: "PUT",
                 headers: {
                     "Content-Type": "application/json",
@@ -209,7 +210,7 @@ const ProfileSettingsPage = () => {
 
         try {
             // Avatar upload uses raw fetch because it needs multipart/form-data rather than the JSON helper.
-            const response = await fetch("/api/profile/avatar", {
+            const response = await fetch(withPublicSitePath("/api/profile/avatar"), {
                 method: "POST",
                 headers: {
                     Authorization: `Bearer ${token}`,
@@ -328,7 +329,7 @@ const ProfileSettingsPage = () => {
                             {settings.avatarUrl.trim() === "" ? (
                                 <div className="defaultAvatar" aria-label="默认头像" />
                             ) : (
-                                <img src={settings.avatarUrl} alt="头像预览" />
+                                <img src={withPublicSitePath(settings.avatarUrl)} alt="头像预览" />
                             )}
                         </div>
 

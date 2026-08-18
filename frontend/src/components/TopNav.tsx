@@ -8,6 +8,7 @@ import { request } from "../utils/network";
 import { buildRedirectHref, isSafeRelativeRedirect } from "../utils/authRedirect";
 import { buildGlobalPaperSearchUrl, normalizeSearchKeywordForUrl } from "../utils/searchQuery";
 import { INPUT_LIMITS } from "../constants/inputLimits";
+import { withPublicSitePath } from "../utils/publicPath";
 
 interface NavItem {
     label: string;
@@ -189,7 +190,7 @@ const TopNav = () => {
                     >
                         <span className="topNavBrandLogoFrame" aria-hidden="true">
                             <img
-                                src="/mentorfinder-logo-1.svg"
+                                src={withPublicSitePath("/mentorfinder-logo-1.svg")}
                                 alt=""
                                 className="topNavBrandLogo"
                             />
@@ -269,7 +270,7 @@ const TopNav = () => {
                                 ) : (
                                     <img
                                         className="topNavAvatarCircle topNavAvatarImage"
-                                        src={avatarUrl}
+                                        src={withPublicSitePath(avatarUrl)}
                                         alt=""
                                         aria-hidden="true"
                                     />

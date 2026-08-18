@@ -12,7 +12,7 @@
 from django.contrib import admin
 from django.conf import settings
 from django.urls import path, include, re_path
-from django.http import HttpResponseNotFound
+from django.http import HttpResponse, HttpResponseNotFound
 from django.http import Http404
 from django.views.static import serve
 
@@ -34,7 +34,16 @@ def serve_media(req, path):
         return HttpResponseNotFound()
 
 
+def health(req):
+    """Return a lightweight unauthenticated liveness response for Compose."""
+
+    if req.method != 'GET':
+        return HttpResponse(status=405)
+    return HttpResponse('ok\n', content_type='text/plain')
+
+
 urlpatterns = [
+    path('health', health),
     path('admin/', admin.site.urls), 
     path('', include("account.urls")),
     path('', include("search.urls")),

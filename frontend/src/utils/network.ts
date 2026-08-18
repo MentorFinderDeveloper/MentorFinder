@@ -6,6 +6,7 @@
 
 import store from "../redux/store";
 import { resetAuth } from "../redux/auth";
+import { withPublicSitePath } from "./publicPath";
 
 export enum NetworkErrorType {
     // Authentication is missing or expired and the user should re-authenticate.
@@ -69,7 +70,7 @@ export const request = async <T extends object = Record<string, unknown>>(
         }
     }
 
-    const response = await fetch(url, {
+    const response = await fetch(withPublicSitePath(url), {
         method,
         body: body && JSON.stringify(body),
         headers,

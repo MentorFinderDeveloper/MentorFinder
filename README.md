@@ -70,6 +70,10 @@ MentorFinder 希望成为连接学生、导师与学术成果的实用工具，�
 
 项目正在持续开发与完善中。欢迎通过 Issues 提交建议、反馈问题或参与讨论。
 
+## `/se-projects` 部署
+
+仓库根目录已提供单容器部署配置：内部 Nginx 在 `8080` 统一转发 Next.js 与 Django，并适配公开路径 `/se-projects/mentorfinder`。服务器部署、环境变量、持久化、更新和回滚步骤见 [DEPLOYMENT.md](./DEPLOYMENT.md)，网关管理员所需字段见 [网关接入信息表.md](./网关接入信息表.md)。生产 `.env`、密钥和 `data/` 不得提交到 Git。
+
 ---
 
 <div align="center">

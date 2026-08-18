@@ -99,7 +99,7 @@ The frontend proxies backend traffic through `next.config.js` rewrites so client
 Environment behavior:
 
 - In development, the default backend base URL is `http://127.0.0.1:8000`
-- In production, the fallback backend URL is `https://backend-mentorfinder.app.spring26a.secoder.net`
+- In the unified production container, the backend URL is `http://127.0.0.1:8000`
 - In production, `BACKEND_URL` can be used to override the default backend target
 
 ## Auth and State Conventions
@@ -131,7 +131,7 @@ Coverage output is written to `.coverage/`.
 
 ## Docker
 
-A `Dockerfile` is included for containerized build and deployment workflows.
+The repository-root `Dockerfile`, `docker-compose.yaml`, and `deploy/` directory are the source of truth for `/se-projects/mentorfinder` deployment. They build this frontend together with Django and an internal Nginx entrypoint. The `frontend/Dockerfile` remains available for the legacy standalone frontend pipeline.
 
 ## Notes
 

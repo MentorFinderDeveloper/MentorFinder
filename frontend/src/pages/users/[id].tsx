@@ -7,6 +7,7 @@ import { RootState } from "../../redux/store";
 import { describeRequestError } from "../../utils/errorMessage";
 import { NetworkError, NetworkErrorType, request } from "../../utils/network";
 import { PublicUserProfileResult } from "../../utils/types";
+import { withPublicSitePath } from "../../utils/publicPath";
 
 const DEFAULT_SIGNATURE = "这个人很懒，什么也没有留下";
 const EMPTY_TEXT = "暂无填写";
@@ -141,7 +142,7 @@ const UserPublicProfilePage = () => {
                     <section className="profileHero" aria-label="用户主页信息">
                         <div className="profileInfo">
                             {user.avatarUrl ? (
-                                <img className="avatarImage" src={user.avatarUrl} alt="用户头像" />
+                                <img className="avatarImage" src={withPublicSitePath(user.avatarUrl)} alt="用户头像" />
                             ) : (
                                 <div className="defaultAvatar" aria-hidden="true">
                                     {user.username.slice(0, 1).toUpperCase()}
