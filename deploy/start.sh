@@ -6,8 +6,11 @@ mkdir -p /app/data /app/data/media
 cd /app/backend
 /app/.venv/bin/python -c "from utils.utils_jwt import validate_jwt_signing_key; validate_jwt_signing_key()"
 
-# Align the historical forked migration before applying committed migrations.
-if /app/.venv/bin/python manage.py showmigrations account | grep -q "\[ \] 0002_mentorfollow"; then
+# Align the historical fork only when a database has already applied later
+# account migrations. A fresh database must run this migration normally.
+account_migrations=$(/app/.venv/bin/python manage.py showmigrations account)
+if printf '%s\n' "$account_migrations" | grep -q "\[ \] 0002_mentorfollow" \
+    && printf '%s\n' "$account_migrations" | grep -Eq "\[X\] (0002_alter_user_managers|00(0[3-9]|1[0-9])_)"; then
     /app/.venv/bin/python manage.py migrate account 0002_mentorfollow --fake --noinput
 fi
 
