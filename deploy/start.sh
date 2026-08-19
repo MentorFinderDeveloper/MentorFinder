@@ -1,5 +1,5 @@
-#!/bin/sh
-set -eu
+#!/bin/bash
+set -euo pipefail
 
 mkdir -p /app/data /app/data/media
 
@@ -30,8 +30,35 @@ fi
     --timeout 120 \
     --access-logfile - \
     --error-logfile - &
+backend_pid=$!
 
 cd /app/frontend
 HOSTNAME=127.0.0.1 PORT=3000 node server.js &
+frontend_pid=$!
 
-exec nginx -g "daemon off;"
+nginx -g "daemon off;" &
+nginx_pid=$!
+
+shutdown() {
+    trap - TERM INT EXIT
+    kill -TERM "$backend_pid" "$frontend_pid" "$nginx_pid" 2>/dev/null || true
+    wait "$backend_pid" "$frontend_pid" "$nginx_pid" 2>/dev/null || true
+}
+
+trap shutdown TERM INT EXIT
+
+set +e
+wait -n "$backend_pid" "$frontend_pid" "$nginx_pid"
+exit_status=$?
+set -e
+
+if ! kill -0 "$backend_pid" 2>/dev/null; then
+    echo "Gunicorn exited; stopping container" >&2
+elif ! kill -0 "$frontend_pid" 2>/dev/null; then
+    echo "Next.js exited; stopping container" >&2
+else
+    echo "Nginx exited; stopping container" >&2
+fi
+
+shutdown
+exit "$exit_status"

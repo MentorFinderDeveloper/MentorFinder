@@ -77,7 +77,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Validate startup script
-        run: sh -n deploy/start.sh
+        run: bash -n deploy/start.sh
 
       - name: Validate Compose configuration
         env:

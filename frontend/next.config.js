@@ -3,7 +3,12 @@
 const backendBaseUrl = process.env.NODE_ENV !== "production"
     ? "http://127.0.0.1:8000"
     : (process.env.BACKEND_URL || "http://127.0.0.1:8000");
-const publicSitePath = (process.env.NEXT_PUBLIC_SITE_PATH || "").trim().replace(/\/+$/, "");
+const configuredPublicSitePath = (process.env.NEXT_PUBLIC_SITE_PATH || "").trim().replace(/\/+$/, "");
+const publicSitePath = configuredPublicSitePath === "" || configuredPublicSitePath === "/"
+    ? ""
+    : (configuredPublicSitePath.startsWith("/")
+        ? configuredPublicSitePath
+        : `/${configuredPublicSitePath}`);
 
 const nextConfig = {
     // Emit a self-contained server bundle that can be copied into the runtime image.
