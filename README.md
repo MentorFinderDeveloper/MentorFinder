@@ -72,7 +72,21 @@ MentorFinder 希望成为连接学生、导师与学术成果的实用工具，�
 
 ## `/se-projects` 部署
 
-仓库根目录已提供单容器部署配置：内部 Nginx 在 `8080` 统一转发 Next.js 与 Django，并适配公开路径 `/se-projects/mentorfinder`。服务器部署、环境变量、持久化、更新和回滚步骤见 [DEPLOYMENT.md](./DEPLOYMENT.md)，网关管理员所需字段见 [网关接入信息表.md](./网关接入信息表.md)。生产 `.env`、密钥和 `data/` 不得提交到 Git。
+仓库根目录已提供单容器部署配置：内部 Nginx 在 `8080` 统一转发 Next.js 与 Django，并适配公开路径 `/se-projects/mentorfinder`。服务器部署、环境变量、持久化、更新和回滚步骤见 [DEPLOYMENT.md](./DEPLOYMENT.md)。生产 `.env`、密钥和 `data/` 不得提交到 Git。
+
+## CI/CD
+
+`.github/workflows/ci-cd.yml` 会在任意分支 push 以及指向 `main` 的 Pull Request 上运行前端测试与生产构建、后端测试和部署配置检查。只有 `main` 的 push（包括 PR 合并）且全部检查通过后，才会连接 `mfs` 更新并部署生产容器。
+
+GitHub `production` Environment 需要配置以下 secrets：
+
+- `MFS_SSH_HOST`
+- `MFS_SSH_PORT`
+- `MFS_SSH_USER`
+- `MFS_SSH_PRIVATE_KEY`
+- `MFS_SSH_KNOWN_HOSTS`
+
+生产 `.env` 和持久化数据始终保留在服务器，不注入 GitHub Actions。
 
 ---
 

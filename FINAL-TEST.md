@@ -12,9 +12,9 @@
 | 场景 | 结果 | 说明 |
 |---|---|---|
 | Next.js 子路径生产构建 | 通过 | 使用 `NEXT_PUBLIC_SITE_PATH=/se-projects/mentorfinder npm run build` |
-| 前端自动化测试 | 通过 | 19 个测试套件、364 个测试全部通过 |
+| 前端自动化测试 | 通过 | 20 个测试套件、369 个测试全部通过 |
 | Python 配置与 URL 文件语法 | 通过 | `py_compile` 通过 |
-| Shell 启动脚本语法 | 通过 | `sh -n deploy/start.sh` |
+| Shell 启动脚本语法 | 通过 | `bash -n deploy/start.sh` |
 | Compose YAML 基础语法 | 通过 | YAML 解析通过 |
 | Git 补丁空白检查 | 通过 | `git diff --check` |
 | Docker Compose 解析 | 待服务器验证 | 当前开发环境未安装 Docker CLI |

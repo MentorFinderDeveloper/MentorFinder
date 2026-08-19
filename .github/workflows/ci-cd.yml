@@ -1,0 +1,177 @@
+name: CI/CD
+
+on:
+  push:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend tests and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.14.0
+          package-manager-cache: false
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Run frontend tests
+        working-directory: frontend
+        run: pnpm test --runInBand
+
+      - name: Build frontend for the public subpath
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_SITE_PATH: /se-projects/mentorfinder
+        run: pnpm build
+
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      - name: Run backend tests
+        working-directory: backend
+        env:
+          JWT_SIGNING_KEY: github-actions-test-jwt-signing-key-0123456789abcdef
+          DJANGO_SECRET_KEY: github-actions-test-django-secret-key
+          SQLITE_PATH: /tmp/mentorfinder-ci.sqlite3
+        run: pytest
+
+  deployment-config:
+    name: Deployment configuration
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Validate startup script
+        run: bash -n deploy/start.sh
+
+      - name: Validate Compose configuration
+        env:
+          JWT_SIGNING_KEY: github-actions-test-jwt-signing-key-0123456789abcdef
+          DJANGO_SECRET_KEY: github-actions-test-django-secret-key
+        run: docker compose --env-file .env.project.example config --quiet
+
+  deploy:
+    name: Deploy production
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - frontend
+      - backend
+      - deployment-config
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: https://lab.cs.tsinghua.edu.cn/se-projects/mentorfinder/
+    concurrency:
+      group: mentorfinder-production
+      cancel-in-progress: false
+
+    steps:
+      - name: Check deployment secrets
+        env:
+          SSH_HOST: ${{ secrets.MFS_SSH_HOST }}
+          SSH_PORT: ${{ secrets.MFS_SSH_PORT }}
+          SSH_USER: ${{ secrets.MFS_SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.MFS_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.MFS_SSH_KNOWN_HOSTS }}
+        run: |
+          test -n "$SSH_HOST"
+          test -n "$SSH_PORT"
+          test -n "$SSH_USER"
+          test -n "$SSH_PRIVATE_KEY"
+          test -n "$SSH_KNOWN_HOSTS"
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.MFS_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.MFS_SSH_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/mentorfinder-deploy"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/mentorfinder-deploy" "$HOME/.ssh/known_hosts"
+
+      - name: Update and deploy main on mfs
+        env:
+          SSH_HOST: ${{ secrets.MFS_SSH_HOST }}
+          SSH_PORT: ${{ secrets.MFS_SSH_PORT }}
+          SSH_USER: ${{ secrets.MFS_SSH_USER }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          ssh \
+            -i "$HOME/.ssh/mentorfinder-deploy" \
+            -p "$SSH_PORT" \
+            -o BatchMode=yes \
+            "$SSH_USER@$SSH_HOST" \
+            "bash -s -- '$COMMIT_SHA'" <<'REMOTE'
+          set -eu
+
+          expected_commit="$1"
+          cd /home/sunyujie/mentorfinder
+
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$expected_commit"
+          test -z "$(git status --porcelain)"
+          git switch main
+          git merge --ff-only origin/main
+
+          docker compose --env-file .env config --quiet
+          docker compose --env-file .env build
+          docker compose --env-file .env up -d
+
+          healthy=false
+          attempt=1
+          while [ "$attempt" -le 36 ]; do
+              if docker compose --env-file .env exec -T web \
+                  wget -qO- http://127.0.0.1:8080/health >/dev/null 2>&1; then
+                  healthy=true
+                  break
+              fi
+              sleep 5
+              attempt=$((attempt + 1))
+          done
+
+          if [ "$healthy" != true ]; then
+              docker compose --env-file .env logs --tail=200
+              exit 1
+          fi
+
+          docker compose --env-file .env ps
+          test "$(git branch --show-current)" = main
+          test "$(git rev-parse HEAD)" = "$expected_commit"
+          REMOTE

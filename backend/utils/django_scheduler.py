@@ -127,6 +127,9 @@ def start_django_scheduler() -> bool:
 
 # 判断当前进程是否适合启动调度器。
 def _should_start_scheduler() -> bool:
+    if "pytest" in sys.modules:
+        return False
+
     argv = set(sys.argv[1:])
     management_commands_without_scheduler = {
         "check",
