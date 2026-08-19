@@ -3,7 +3,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 // Route frontend timeline requests to the local backend in development and the deployed backend elsewhere.
 const BACKEND_BASE_URL = process.env.NODE_ENV !== "production"
     ? "http://127.0.0.1:8000"
-    : process.env.BACKEND_URL || "http://backend.MentorFinder.secoder.local"; // 修改默认值为内部域名
+    : process.env.BACKEND_URL || "http://127.0.0.1:8000";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
     // Forward every incoming query parameter so pagination and filters stay transparent to the proxy.
@@ -24,8 +24,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const query = searchParams.toString();
     const targetUrl = `${BACKEND_BASE_URL}/timeline/${query === "" ? "" : `?${query}`}`;
 
-    // 加上这一行调试信息，在 Secoder 日志里就能看到它到底在请求谁
-    console.log(`[Proxy] Requesting backend: ${targetUrl}`);
     if (req.method !== "GET") {
         res.setHeader("Allow", "GET");
         return res.status(405).json({ code: -3, info: "Method Not Allowed" });

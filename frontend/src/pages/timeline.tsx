@@ -11,6 +11,7 @@ import {
 import LatexText from "../components/LatexText";
 import { describeRequestError } from "../utils/errorMessage";
 import { request } from "../utils/network";
+import { withPublicSitePath } from "../utils/publicPath";
 import {
     TimelineCalendarResponse,
     TimelineDirectionSummary,
@@ -350,13 +351,13 @@ const TimelinePage = () => {
                 return (
                     <span key={`${paper.id}-${name}-${idx}`}>
                         <a
-                            href={`/mentors/${mentorId}`}
+                            href={withPublicSitePath(`/mentors/${mentorId}`)}
                             target="_blank"
                             rel="noreferrer"
                             className="timelineMentorLink"
                         >
                             <img
-                                src="/favicon_tsinghua.ico"
+                                src={withPublicSitePath("/favicon_tsinghua.ico")}
                                 alt="清华导师"
                                 className="timelineMentorIcon"
                             />

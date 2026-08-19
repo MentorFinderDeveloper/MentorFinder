@@ -13,6 +13,7 @@ import {
     MentorRecentDirectionAnalysisResponse,
     SearchMentorResult,
 } from "../../utils/types";
+import { withPublicSitePath } from "../../utils/publicPath";
 
 // Next.js stores an internal key in history.state, which lets the page detect whether "back" returns to the same search entry.
 const getCurrentHistoryEntryKey = () => {
@@ -330,7 +331,7 @@ const MentorDetailPage = () => {
 
                         <div className="mentorDetailSidebarItem" style={{ margin: "4px 0" }}>
                             <div className="mentorDetailSidebarLabel">
-                                <img src="/Mentor_Profile.ico" alt="" aria-hidden="true" className="mentorDetailSidebarIcon" />
+                                <img src={withPublicSitePath("/Mentor_Profile.ico")} alt="" aria-hidden="true" className="mentorDetailSidebarIcon" />
                                 <span>导师画像</span>
                             </div>
                             <div className="mentorDetailSidebarValue mentorDetailProfileValue">
@@ -366,7 +367,7 @@ const MentorDetailPage = () => {
                                                 className="mentorPaperLink"
                                             >
                                                 <img
-                                                    src="/arxiv.ico"
+                                                    src={withPublicSitePath("/arxiv.ico")}
                                                     alt=""
                                                     aria-hidden="true"
                                                     className="mentorPaperLinkIcon"
@@ -381,7 +382,7 @@ const MentorDetailPage = () => {
                                                 style={{ color: "#1f2328", cursor: "default" }}
                                             >
                                                 <img
-                                                    src="/arxiv.ico"
+                                                    src={withPublicSitePath("/arxiv.ico")}
                                                     alt=""
                                                     aria-hidden="true"
                                                     className="mentorPaperLinkIcon"
@@ -409,7 +410,7 @@ const MentorDetailPage = () => {
 
                         <section className="mentorDetailSidebarItem">
                             <div className="mentorDetailSidebarLabel">
-                                <img src="/English_Name.ico" alt="" aria-hidden="true" className="mentorDetailSidebarIcon" />
+                                <img src={withPublicSitePath("/English_Name.ico")} alt="" aria-hidden="true" className="mentorDetailSidebarIcon" />
                                 <span>英文名</span>
                             </div>
                             <p className="mentorDetailSidebarValue">{mentor.English_name?.trim() || "暂无英文名"}</p>
@@ -417,7 +418,7 @@ const MentorDetailPage = () => {
 
                         <section className="mentorDetailSidebarItem">
                             <div className="mentorDetailSidebarLabel">
-                                <img src="/Reseach_Direction.ico" alt="" aria-hidden="true" className="mentorDetailSidebarIcon" />
+                                <img src={withPublicSitePath("/Reseach_Direction.ico")} alt="" aria-hidden="true" className="mentorDetailSidebarIcon" />
                                 <span>研究方向</span>
                             </div>
                             <p className="mentorDetailSidebarValue">{mentor.research_direction || "暂无研究方向"}</p>
@@ -425,7 +426,7 @@ const MentorDetailPage = () => {
 
                         <section className="mentorDetailSidebarItem">
                             <div className="mentorDetailSidebarLabel">
-                                <img src="/Email.ico" alt="" aria-hidden="true" className="mentorDetailSidebarIcon" />
+                                <img src={withPublicSitePath("/Email.ico")} alt="" aria-hidden="true" className="mentorDetailSidebarIcon" />
                                 <span>邮箱</span>
                             </div>
                             <p className="mentorDetailSidebarValue">{mentor.email || "暂无邮箱"}</p>
@@ -438,7 +439,7 @@ const MentorDetailPage = () => {
                         className="mentorDetailReturnButton"
                     >
                         <img
-                            src="/return_back_arrow.ico"
+                            src={withPublicSitePath("/return_back_arrow.ico")}
                             alt=""
                             aria-hidden="true"
                             className="mentorDetailReturnButtonIcon"

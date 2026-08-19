@@ -9,6 +9,7 @@ import { Provider, useDispatch } from "react-redux";
 import TopNav from "../components/TopNav";
 import { hydrateAuth, loadAuthFromStorage } from "../redux/auth";
 import store from "../redux/store";
+import { withPublicSitePath } from "../utils/publicPath";
 
 // Render the global app shell, hydrate auth once, and decide whether to show the shared top navigation.
 // eslint-disable-next-line @typescript-eslint/naming-convention
@@ -27,6 +28,7 @@ const App = ({ Component, pageProps }: AppProps) => {
         <>
             <Head>
                 <title>找导师</title>
+                <link rel="icon" href={withPublicSitePath("/favicon.ico")} />
             </Head>
             <div className={isAuthPage ? "appChrome appChromeAuth" : "appChrome"}>
                 {!isAuthPage && <TopNav />}

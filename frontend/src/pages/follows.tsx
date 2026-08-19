@@ -10,6 +10,7 @@ import { describeRequestError } from "../utils/errorMessage";
 import { request } from "../utils/network";
 import { buildSearchUrl, normalizeSearchKeywordForUrl } from "../utils/searchQuery";
 import { FollowUserResult, SearchMentorResult, TimelinePaper } from "../utils/types";
+import { withPublicSitePath } from "../utils/publicPath";
 
 interface FollowedMentorsResponse {
     mentors?: SearchMentorResult[];
@@ -693,7 +694,7 @@ const FollowsPage = () => {
             <div className="userCardProfile">
                 <div className="userAvatar" aria-hidden="true">
                     {user.avatarUrl ? (
-                        <img src={user.avatarUrl} alt="" />
+                        <img src={withPublicSitePath(user.avatarUrl)} alt="" />
                     ) : (
                         <span>{user.username.slice(0, 1).toUpperCase()}</span>
                     )}

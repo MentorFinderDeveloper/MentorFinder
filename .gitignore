@@ -1,0 +1,16 @@
+# Server-only deployment environment and local overrides
+.env
+.env.*
+!.env.project.example
+
+# Persistent runtime data
+data/*
+uploads/*
+media/*
+staticfiles/*
+
+# Secrets
+*.pem
+*.key
+*.p12
+*-data-*.tar.gz

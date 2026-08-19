@@ -8,6 +8,7 @@ import LatexText from "../components/LatexText";
 import Pagination from "../components/Pagination";
 import { describeRequestError } from "../utils/errorMessage";
 import { NetworkError, NetworkErrorType, request } from "../utils/network";
+import { withPublicSitePath } from "../utils/publicPath";
 import { RootState } from "../redux/store";
 import { INPUT_LIMITS } from "../constants/inputLimits";
 import {
@@ -2545,7 +2546,7 @@ const SearchScreen = () => {
                             {mentor.English_name && (
                                 <p className="searchMentorMetaRow">
                                     <img
-                                        src="/English_Name.ico"
+                                        src={withPublicSitePath("/English_Name.ico")}
                                         alt=""
                                         aria-hidden="true"
                                         className="searchMentorMetaIcon"
@@ -2556,7 +2557,7 @@ const SearchScreen = () => {
                             )}
                             <p className="searchMentorMetaRow">
                                 <img
-                                    src="/Reseach_Direction.ico"
+                                    src={withPublicSitePath("/Reseach_Direction.ico")}
                                     alt=""
                                     aria-hidden="true"
                                     className="searchMentorMetaIcon"
@@ -2566,7 +2567,7 @@ const SearchScreen = () => {
                             </p>
                             <p className="searchMentorMetaRow">
                                 <img
-                                    src="/Email.ico"
+                                    src={withPublicSitePath("/Email.ico")}
                                     alt=""
                                     aria-hidden="true"
                                     className="searchMentorMetaIcon"
@@ -2576,7 +2577,7 @@ const SearchScreen = () => {
                             </p>
                             <p className="searchMentorMetaRow">
                                 <img
-                                    src="/Mentor_Profile.ico"
+                                    src={withPublicSitePath("/Mentor_Profile.ico")}
                                     alt=""
                                     aria-hidden="true"
                                     className="searchMentorMetaIcon"
@@ -2642,7 +2643,7 @@ const SearchScreen = () => {
                                             className="searchMentorPaperLinkButton"
                                         >
                                             <img
-                                                src="/arxiv.ico"
+                                                src={withPublicSitePath("/arxiv.ico")}
                                                 alt=""
                                                 aria-hidden="true"
                                                 className="searchMentorPaperLinkIcon"
@@ -2784,7 +2785,7 @@ const SearchScreen = () => {
                                                                 className="searchTimelineMentorButton"
                                                             >
                                                                 <img
-                                                                    src="/favicon_tsinghua.ico"
+                                                                    src={withPublicSitePath("/favicon_tsinghua.ico")}
                                                                     alt="清华导师"
                                                                     className="searchTimelineMentorIcon"
                                                                 />

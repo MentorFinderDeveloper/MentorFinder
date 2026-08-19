@@ -1,0 +1,81 @@
+name: "${PROJECT_ID:?请在.env中填写PROJECT_ID}"
+
+services:
+  web:
+    build:
+      context: .
+      args:
+        PUBLIC_SITE_PATH: "${PUBLIC_SITE_PATH:?请在.env中填写PUBLIC_SITE_PATH}"
+    image: "${APP_IMAGE:?请在.env中填写固定版本APP_IMAGE}"
+    restart: unless-stopped
+    init: true
+    user: "${APP_UID_GID:?请在.env中填写非root APP_UID_GID}"
+
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    cpus: "${APP_CPU_LIMIT:-1.0}"
+    mem_limit: "${APP_MEMORY_LIMIT:-1g}"
+    pids_limit: "${APP_PIDS_LIMIT:-256}"
+
+    expose:
+      - "${APP_PORT:?请在.env中填写APP_PORT}"
+
+    networks:
+      web_gateway:
+        aliases:
+          - "${APP_ENTRY_ALIAS:?请在.env中填写APP_ENTRY_ALIAS}"
+      internal:
+
+    environment:
+      TZ: Asia/Shanghai
+      PUBLIC_ORIGIN: "${PUBLIC_ORIGIN:?请在.env中填写PUBLIC_ORIGIN}"
+      PUBLIC_SITE_PATH: "${PUBLIC_SITE_PATH:?请在.env中填写PUBLIC_SITE_PATH}"
+      SQLITE_PATH: /app/data/db.sqlite3
+      MEDIA_ROOT: /app/data/media
+      STATIC_ROOT: /app/static
+      DJANGO_ALLOWED_HOSTS: "lab.cs.tsinghua.edu.cn,localhost,127.0.0.1"
+      DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY:?请在服务器.env中填写DJANGO_SECRET_KEY}"
+      JWT_SIGNING_KEY: "${JWT_SIGNING_KEY:?请在服务器.env中填写JWT_SIGNING_KEY}"
+      DJANGO_SUPERUSER_USERNAME: "${DJANGO_SUPERUSER_USERNAME:-}"
+      DJANGO_SUPERUSER_EMAIL: "${DJANGO_SUPERUSER_EMAIL:-}"
+      DJANGO_SUPERUSER_PASSWORD: "${DJANGO_SUPERUSER_PASSWORD:-}"
+      EMAIL_HOST: "${EMAIL_HOST:-smtp.163.com}"
+      EMAIL_PORT: "${EMAIL_PORT:-465}"
+      EMAIL_USE_SSL: "${EMAIL_USE_SSL:-true}"
+      EMAIL_USE_TLS: "${EMAIL_USE_TLS:-false}"
+      EMAIL_HOST_USER: "${EMAIL_HOST_USER:-}"
+      EMAIL_HOST_PASSWORD: "${EMAIL_HOST_PASSWORD:-}"
+      DEFAULT_FROM_EMAIL: "${DEFAULT_FROM_EMAIL:-MentorFinder <no-reply@mentorfinder.local>}"
+      THUCS_API_BASE_URL: "${THUCS_API_BASE_URL:-}"
+      THUCS_API_KEY: "${THUCS_API_KEY:-}"
+      THUCS_MODEL_NAME: "${THUCS_MODEL_NAME:-deepseek-v4-flash}"
+
+    volumes:
+      - ./data:/app/data
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'wget -q -O /dev/null "http://127.0.0.1:${APP_PORT:?请在.env中填写APP_PORT}${APP_HEALTH_PATH:-/health}"'
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    labels:
+      platform.project-name: "${PROJECT_NAME:?请在.env中填写PROJECT_NAME}"
+      platform.project-id: "${PROJECT_ID}"
+      platform.public-origin: "${PUBLIC_ORIGIN}"
+      platform.public-path: "${PUBLIC_SITE_PATH}"
+      platform.entry-alias: "${APP_ENTRY_ALIAS}"
+      platform.entry-port: "${APP_PORT}"
+
+networks:
+  web_gateway:
+    external: true
+    name: web_gateway
+  internal:
+    internal: true
