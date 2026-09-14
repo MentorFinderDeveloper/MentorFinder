@@ -22,6 +22,11 @@ import RegisterScreen from "../pages/register";
 import ResetPasswordScreen from "../pages/reset-password";
 import authReducer, { loadAuthFromStorage, resetAuth, setName, setRole, setToken } from "../redux/auth";
 
+// CSRF transport is covered separately in csrf-fetch.test.ts.
+jest.mock("../utils/csrfFetch", () => ({
+    csrfFetch: (...args) => globalThis.fetch(...args),
+}));
+
 // Mock Next.js routing so the tests can inspect navigation decisions without
 // relying on the real browser/router runtime.
 jest.mock("next/router", () => ({

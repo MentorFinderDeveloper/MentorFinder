@@ -7,6 +7,7 @@ import { useDispatch } from "react-redux";
 import { buildRedirectHref, resolveRedirectTarget } from "../utils/authRedirect";
 import { describeRequestError } from "../utils/errorMessage";
 import { withPublicSitePath } from "../utils/publicPath";
+import { csrfFetch } from "../utils/csrfFetch";
 
 // Some backend endpoints return empty bodies or non-JSON text, so the login page parses them defensively.
 const parseJsonSafely = async (response: Response) => {
@@ -81,7 +82,7 @@ const LoginScreen = () => {
         setLoginErrorMessage("");
         setSubmitting(true);
         // Login is handled directly here because the form needs to hydrate Redux auth state from the response.
-        fetch(withPublicSitePath("/api/login"), {
+        csrfFetch(withPublicSitePath("/api/login"), {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",

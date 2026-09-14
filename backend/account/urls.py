@@ -9,6 +9,7 @@ import account.views as views
 
 
 urlpatterns = [
+    path("csrf", views.csrf_token),
     path('login', views.login),
     path('register', views.register),
     path('register/verification-code', views.send_email_verification_code),

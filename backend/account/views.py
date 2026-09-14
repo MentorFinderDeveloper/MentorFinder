@@ -21,6 +21,8 @@ from django.core.validators import validate_email
 from django.http import HttpRequest
 from django.db.models import Q
 from django.utils.timezone import localtime
+from django.middleware.csrf import get_token
+from django.views.decorators.cache import never_cache
 
 from account.models import MentorVerificationRequest, SubjectFollow, User, UserFollow, UserProfile
 from utils.utils_jwt import generate_jwt_token
@@ -91,6 +93,14 @@ def _validate_password(password: str):
             400,
         )
     return None
+
+
+@never_cache
+def csrf_token(req: HttpRequest):
+    """Bootstrap the CSRF cookie and masked token for the separate frontend."""
+    if req.method != "GET":
+        return BAD_METHOD
+    return request_success({"csrfToken": get_token(req)})
 
 
 @CheckRequire

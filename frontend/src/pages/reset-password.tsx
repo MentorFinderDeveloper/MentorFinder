@@ -18,6 +18,7 @@ import {
 import { INPUT_LIMITS } from "../constants/inputLimits";
 import { describeRequestError } from "../utils/errorMessage";
 import { withPublicSitePath } from "../utils/publicPath";
+import { csrfFetch } from "../utils/csrfFetch";
 
 const EMAIL_REGEX = /^[\w.%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i;
 const DEFAULT_RESEND_COOLDOWN_SECONDS = 60;
@@ -174,7 +175,7 @@ const ResetPasswordScreen = () => {
 
         setSendingCode(true);
         // Request a reset code before the password form is submitted, mirroring the registration flow.
-        fetch(withPublicSitePath("/api/password-reset/verification-code"), {
+        csrfFetch(withPublicSitePath("/api/password-reset/verification-code"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ email: trimmedEmail }),
@@ -244,7 +245,7 @@ const ResetPasswordScreen = () => {
 
         setSubmitting(true);
         // Only submit once all local validity checks pass, then let the backend verify the code.
-        fetch(withPublicSitePath("/api/password-reset"), {
+        csrfFetch(withPublicSitePath("/api/password-reset"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({

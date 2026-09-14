@@ -22,6 +22,7 @@ import { useDispatch } from "react-redux";
 import { buildRedirectHref } from "../utils/authRedirect";
 import { describeRequestError } from "../utils/errorMessage";
 import { withPublicSitePath } from "../utils/publicPath";
+import { csrfFetch } from "../utils/csrfFetch";
 
 // Registration validates usernames locally before asking the backend to avoid unnecessary requests.
 const USERNAME_REGEX = /^[\w-]+$/;
@@ -249,7 +250,7 @@ const RegisterScreen = () => {
 
         setSendingCode(true);
         // Request the verification code separately so the user can finish the rest of the form at their own pace.
-        fetch(withPublicSitePath("/api/register/verification-code"), {
+        csrfFetch(withPublicSitePath("/api/register/verification-code"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ email: trimmedEmail }),
@@ -326,7 +327,7 @@ const RegisterScreen = () => {
 
         setSubmitting(true);
         // Submit only after local validation passes so the backend mainly handles uniqueness and code verification.
-        fetch(withPublicSitePath("/api/register"), {
+        csrfFetch(withPublicSitePath("/api/register"), {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
